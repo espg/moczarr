@@ -38,7 +38,7 @@ from moczarr.fabricate import fabricate_cell_ids as _fabricate_cell_ids
 from moczarr.store import (
     load_root_coverage,
     open_object_store,
-    read_commit,
+    read_commits,
     read_manifest,
     walk_leaves,
 )
@@ -51,7 +51,13 @@ def _aoi_words(aoi) -> np.ndarray:
 
 
 def _candidate_leaves(
-    store_root: str, manifest: dict, aoi, window: str | None, *, store: Any = None
+    store_root: str,
+    manifest: dict,
+    aoi,
+    window: str | None,
+    *,
+    store: Any = None,
+    concurrency: int | None = None,
 ) -> list[str]:
     """Store-relative leaf paths to try, ascending in packed-word order.
 
@@ -82,7 +88,7 @@ def _candidate_leaves(
     # Walk fallback (no usable root MOC), and the windowed-discovery case.
     found: dict[str, int] = {}
     labels: set[str] = set()
-    for rel in walk_leaves(store_root, store=store):
+    for rel in walk_leaves(store_root, store=store, concurrency=concurrency):
         shard, label = split_leaf_name(rel.rsplit("/", 1)[-1])
         labels.add(label if label is not None else "<none>")
         if label != window:
@@ -112,6 +118,7 @@ def open_hive(
     anonymous: bool = False,
     fabricate_cell_ids: bool | str = "auto",
     decode: bool = False,
+    concurrency: int | None = 32,
     xr_kwargs: dict[str, Any] | None = None,
     **store_kwargs: Any,
 ):
@@ -152,6 +159,12 @@ def open_hive(
         returning (``moczarr.dggs.decode``), enabling the ``ds.dggs``
         accessor. Requires the ``moczarr[xdggs]`` extra; the default leaves
         the result index-free and xdggs-free.
+    concurrency : int or None, optional
+        Maximum in-flight metadata requests (the candidate leaves' stamp
+        GETs, and the discovery walk's per-level LISTs), default 32 — the
+        zarr-python knob vocabulary. ``None`` or ``1`` runs the serial path
+        (debugging). Leaf DATA opens stay serial either way (issue #5,
+        measured in the phase-3 bench; revisit with the lazy-index work).
     xr_kwargs : dict, optional
         Extra keyword arguments for each leaf's ``xarray.open_zarr`` (e.g.
         ``chunks={}`` for dask-backed laziness).
@@ -189,8 +202,11 @@ def open_hive(
     aoi_words = _aoi_words(aoi) if aoi is not None else None
     group = str(manifest["cell_order"])
     opened = []
-    for rel in _candidate_leaves(store_root, manifest, aoi_words, window, store=obstore_store):
-        stamp = read_commit(store_root, rel, store=obstore_store)
+    candidates = _candidate_leaves(
+        store_root, manifest, aoi_words, window, store=obstore_store, concurrency=concurrency
+    )
+    stamps = read_commits(store_root, candidates, store=obstore_store, concurrency=concurrency)
+    for rel, stamp in zip(candidates, stamps):
         if stamp is None:
             continue  # debris or a MOC-listed shard whose leaf is gone (D4)
         if aoi_words is not None:
