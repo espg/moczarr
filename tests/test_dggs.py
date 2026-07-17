@@ -151,6 +151,12 @@ class TestMortonInfo:
         with pytest.raises(ValueError, match="level"):
             dggs.MortonInfo(level=6).zoom_to(_golden_family(), 30)
 
+    def test_zoom_to_finer_empty(self):
+        # A zero-cell selection zooms cleanly to (0, 4**diff), not np.stack raising.
+        empty = np.asarray([], dtype=np.uint64)
+        children = dggs.MortonInfo(level=6).zoom_to(empty, 8)
+        assert children.shape == (0, 16) and children.dtype == np.uint64
+
 
 class TestMortonIndex:
     def test_registered_in_public_registry(self):
