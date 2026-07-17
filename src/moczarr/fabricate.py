@@ -26,18 +26,20 @@ import numpy as np
 FLOAT64_EXACT_MAX_ORDER = 24
 
 
-def _warn_above_float64_exact(order: int) -> None:
+def _warn_above_float64_exact(order: int, stacklevel: int) -> None:
     warnings.warn(
         f"fabricating NESTED cell_ids at order {order}: ids above order "
         f"{FLOAT64_EXACT_MAX_ORDER} exceed the float64-exact integer range "
         f"(2**53) and are unsafe as JS Numbers in browser consumers; the "
         f"29->24 clip policy lands with the zagg#262 resolution discriminator",
         UserWarning,
-        stacklevel=3,
+        stacklevel=stacklevel,
     )
 
 
-def fabricate_cell_ids(morton_words, *, level: int | None = None) -> np.ndarray:
+def fabricate_cell_ids(
+    morton_words, *, level: int | None = None, _stacklevel: int = 3
+) -> np.ndarray:
     """Exact NESTED ``uint64`` cell ids of packed morton words.
 
     Pure function (mortie/numpy only): ``mort2healpix`` on the packed words.
@@ -53,6 +55,10 @@ def fabricate_cell_ids(morton_words, *, level: int | None = None) -> np.ndarray:
         Expected HEALPix order of the words. When given it is cross-checked
         against the order mortie derives from the words themselves and a
         mismatch raises ``ValueError``.
+    _stacklevel : int, optional
+        Frame depth for the above-order-24 ``UserWarning`` so it lands on
+        user code. Defaults to ``3`` (a direct call); the ``open_hive`` path
+        passes ``4`` to account for the extra opener frame. Internal.
 
     Returns
     -------
@@ -64,7 +70,7 @@ def fabricate_cell_ids(morton_words, *, level: int | None = None) -> np.ndarray:
     words = np.asarray(morton_words, dtype=np.uint64).ravel()
     if words.size == 0:
         if level is not None and level > FLOAT64_EXACT_MAX_ORDER:
-            _warn_above_float64_exact(level)
+            _warn_above_float64_exact(level, _stacklevel)
         return np.empty(0, dtype=np.uint64)
     from mortie import mort2healpix
 
@@ -72,5 +78,5 @@ def fabricate_cell_ids(morton_words, *, level: int | None = None) -> np.ndarray:
     if level is not None and level != order:
         raise ValueError(f"level={level} does not match the words' order {order}")
     if order > FLOAT64_EXACT_MAX_ORDER:
-        _warn_above_float64_exact(order)
+        _warn_above_float64_exact(order, _stacklevel)
     return np.asarray(ids, dtype=np.uint64)

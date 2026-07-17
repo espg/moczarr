@@ -218,6 +218,9 @@ def open_hive(
         ids = _fabricate_cell_ids(
             np.asarray(result["morton"].values, dtype=np.uint64),
             level=int(manifest["cell_order"]),
+            # +1 frame vs a direct call so the >24 warning lands on the
+            # user's open_hive(...) line, not this internal call site.
+            _stacklevel=4,
         )
         result = result.assign_coords(cell_ids=(result["morton"].dims, ids))
     result.attrs["morton_hive"] = {
