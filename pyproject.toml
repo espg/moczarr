@@ -27,6 +27,9 @@ dependencies = [
     # (moc_and), clip2order/children/parents. The layout convention itself is
     # owned by the mortie spec (espg/mortie#62).
     "mortie>=0.9.0",
+    # mortie's MortonIndexArray (.decimal_repr()/.hive_path()) imports pandas;
+    # a direct runtime dep the reader calls into, not just transitive via xarray.
+    "pandas",
     "xarray",
     "zarr>=3.1.5",
     "obstore>=0.8.2",
