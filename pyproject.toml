@@ -42,7 +42,14 @@ dependencies = [
 # xdggs hard-requires lonboard/matplotlib/h3ronpy/cdshealpix — too heavy for
 # the core reader (see xarray-contrib/xdggs#128).
 xdggs = [
-    "xdggs>=0.4",
+    # Floor 0.6: the surface MortonInfo/MortonIndex ride on
+    # (translate_parameters, DGGSInfo.ellipsoid, the conventions decoder)
+    # is what 0.6.0 ships; developed and verified against 0.6.0.
+    "xdggs>=0.6",
+    # xdggs leaves shapely to the caller (all its shapely paths are lazy
+    # imports); cell_boundaries returns shapely polygons, so the extra
+    # carries it explicitly.
+    "shapely",
 ]
 test = [
     "pytest>=8.0",

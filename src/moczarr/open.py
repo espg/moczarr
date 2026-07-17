@@ -117,6 +117,7 @@ def open_hive(
     aoi=None,
     window: str | None = None,
     anonymous: bool = False,
+    decode: bool = False,
     xr_kwargs: dict[str, Any] | None = None,
     **store_kwargs: Any,
 ):
@@ -135,6 +136,11 @@ def open_hive(
         on such a store, the error lists the labels that exist.
     anonymous : bool, optional
         Unsigned S3 requests (public buckets).
+    decode : bool, optional
+        Assign the xdggs ``MortonIndex`` to the ``morton`` coordinate before
+        returning (``moczarr.dggs.decode``), enabling the ``ds.dggs``
+        accessor. Requires the ``moczarr[xdggs]`` extra; the default leaves
+        the result index-free and xdggs-free.
     xr_kwargs : dict, optional
         Extra keyword arguments for each leaf's ``xarray.open_zarr`` (e.g.
         ``chunks={}`` for dask-backed laziness).
@@ -195,4 +201,8 @@ def open_hive(
     result.attrs["morton_hive"] = {
         k: manifest[k] for k in ("spec", "cell_order", "shard_order", "dataset")
     }
+    if decode:
+        from moczarr import dggs  # lazy: raises the pointed extra hint when absent
+
+        result = dggs.decode(result)
     return result
