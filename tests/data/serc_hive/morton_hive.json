@@ -1,0 +1,22 @@
+{
+ "spec": "morton-hive/1",
+ "dataset": {
+  "short_name": "ATL06",
+  "version": "007"
+ },
+ "cell_order": 8,
+ "shard_order": 6,
+ "split_schedule": [
+  1,
+  1,
+  1,
+  1,
+  1,
+  1
+ ],
+ "pyramid": {
+  "orders": [],
+  "aggregation": {}
+ },
+ "generated_at": "2026-07-17T20:35:37+00:00"
+}
