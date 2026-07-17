@@ -50,16 +50,8 @@ def _aoi_words(aoi) -> np.ndarray:
     return np.asarray([morton_word(v) for v in values], dtype=np.uint64)
 
 
-def _leaf_zarr_store(store_root: str, leaf: str, **store_kwargs: Any):
-    """A read-only zarr store rooted at one leaf (local or S3, one code path)."""
-    from zarr.storage import ObjectStore
-
-    url = f"{store_root.rstrip('/')}/{leaf}"
-    return ObjectStore(open_object_store(url, **store_kwargs), read_only=True)
-
-
 def _candidate_leaves(
-    store_root: str, manifest: dict, aoi, window: str | None, **store_kwargs: Any
+    store_root: str, manifest: dict, aoi, window: str | None, *, store: Any = None
 ) -> list[str]:
     """Store-relative leaf paths to try, ascending in packed-word order.
 
@@ -76,7 +68,7 @@ def _candidate_leaves(
                 f"window={window!r} on a {manifest['spec']} store: unwindowed stores "
                 f"have no window leaves (schedule: none)"
             )
-    envelope = load_root_coverage(store_root, **store_kwargs)
+    envelope = load_root_coverage(store_root, store=store)
     if envelope is not None and not (windowed and window is None):
         words = ranges_words(envelope) if aoi is None else root_coverage_and(envelope, aoi)
         if aoi is not None and words.size:
@@ -90,7 +82,7 @@ def _candidate_leaves(
     # Walk fallback (no usable root MOC), and the windowed-discovery case.
     found: dict[str, int] = {}
     labels: set[str] = set()
-    for rel in walk_leaves(store_root, **store_kwargs):
+    for rel in walk_leaves(store_root, store=store):
         shard, label = split_leaf_name(rel.rsplit("/", 1)[-1])
         labels.add(label if label is not None else "<none>")
         if label != window:
@@ -176,6 +168,7 @@ def open_hive(
         intersects the query.
     """
     import xarray as xr
+    from zarr.storage import ObjectStore
 
     if fabricate_cell_ids not in ("auto", True, False):
         raise ValueError(
@@ -185,14 +178,19 @@ def open_hive(
         fabricate_cell_ids = bool(fabricate_cell_ids)
     if anonymous:
         store_kwargs.setdefault("anonymous", True)
-    manifest = read_manifest(store_root, **store_kwargs)
+    # ONE store construction pair for the whole open (issue #5): the obstore
+    # handle serves every JSON/sidecar read; the zarr wrapper serves every
+    # leaf open via deep paths through the parentless digit tree.
+    obstore_store = open_object_store(store_root, **store_kwargs)
+    zarr_store = ObjectStore(obstore_store, read_only=True)
+    manifest = read_manifest(store_root, store=obstore_store)
     if manifest is None:
         raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
     aoi_words = _aoi_words(aoi) if aoi is not None else None
     group = str(manifest["cell_order"])
     opened = []
-    for rel in _candidate_leaves(store_root, manifest, aoi_words, window, **store_kwargs):
-        stamp = read_commit(store_root, rel, **store_kwargs)
+    for rel in _candidate_leaves(store_root, manifest, aoi_words, window, store=obstore_store):
+        stamp = read_commit(store_root, rel, store=obstore_store)
         if stamp is None:
             continue  # debris or a MOC-listed shard whose leaf is gone (D4)
         if aoi_words is not None:
@@ -201,8 +199,8 @@ def open_hive(
                 if box_and(coverage, aoi_words).size == 0:
                     continue  # conservative reject: false positives only
         ds = xr.open_zarr(
-            _leaf_zarr_store(store_root, rel, **store_kwargs),
-            group=group,
+            zarr_store,
+            group=f"{rel}/{group}",
             consolidated=False,
             zarr_format=3,
             **(xr_kwargs or {}),

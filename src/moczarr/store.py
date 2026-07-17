@@ -80,6 +80,16 @@ def open_object_store(path: str, *, anonymous: bool = False, **kwargs: Any):
     return LocalStore(local)
 
 
+def _resolve_store(store_root: str, store: Any, store_kwargs: dict[str, Any]):
+    """The shared handle when given, else a fresh per-call store (issue #5).
+
+    Every read function takes an optional ``store=`` so ``open_hive`` can
+    thread ONE root-rooted handle through the whole open; the ``None``
+    default preserves the construct-per-call behavior for direct callers.
+    """
+    return store if store is not None else open_object_store(store_root, **store_kwargs)
+
+
 def read_json(store, key: str):
     """GET+parse one small JSON object; ``None`` when it does not exist.
 
@@ -96,18 +106,18 @@ def read_json(store, key: str):
     return json.loads(bytes(data))
 
 
-def read_manifest(store_root: str, **store_kwargs: Any) -> dict | None:
+def read_manifest(store_root: str, *, store: Any = None, **store_kwargs: Any) -> dict | None:
     """The store's validated ``morton_hive.json``; ``None`` when absent.
 
     Loud on malformed content (bad JSON or a failed :func:`parse_manifest`):
     the manifest is the reader's bootstrap, so garbage here is an error, not
     a degradable cache.
     """
-    payload = read_json(open_object_store(store_root, **store_kwargs), MANIFEST_NAME)
+    payload = read_json(_resolve_store(store_root, store, store_kwargs), MANIFEST_NAME)
     return None if payload is None else parse_manifest(payload)
 
 
-def load_root_coverage(store_root: str, **store_kwargs: Any) -> dict | None:
+def load_root_coverage(store_root: str, *, store: Any = None, **store_kwargs: Any) -> dict | None:
     """The store-root coverage envelope, or ``None`` when unusable.
 
     Tolerant (the root MOC is a regenerable cache): a missing object,
@@ -115,9 +125,9 @@ def load_root_coverage(store_root: str, **store_kwargs: Any) -> dict | None:
     debug log so the degradation is discoverable — and the caller falls back
     to :func:`walk_leaves`.
     """
-    store = open_object_store(store_root, **store_kwargs)
+    handle = _resolve_store(store_root, store, store_kwargs)
     try:
-        payload = read_json(store, ROOT_COVERAGE_NAME)
+        payload = read_json(handle, ROOT_COVERAGE_NAME)
     except ValueError as e:
         logger.debug(f"unparsable {ROOT_COVERAGE_NAME} at {store_root} ({e}); ignoring")
         return None
@@ -127,7 +137,9 @@ def load_root_coverage(store_root: str, **store_kwargs: Any) -> dict | None:
     return envelope
 
 
-def read_commit(store_root: str, leaf: str, **store_kwargs: Any) -> dict | None:
+def read_commit(
+    store_root: str, leaf: str, *, store: Any = None, **store_kwargs: Any
+) -> dict | None:
     """A leaf's commit stamp, or ``None`` for debris / absent leaves.
 
     One GET of the leaf's root ``zarr.json`` (the leaf is vanilla zarr v3 by
@@ -137,8 +149,13 @@ def read_commit(store_root: str, leaf: str, **store_kwargs: Any) -> dict | None:
     complete. A present-but-unparsable ``zarr.json`` raises — that leaf
     claims to exist and cannot be half-trusted.
     """
-    store = open_object_store(store_root, **store_kwargs)
-    meta = read_json(store, f"{leaf.strip('/')}/zarr.json")
+    handle = _resolve_store(store_root, store, store_kwargs)
+    meta = read_json(handle, f"{leaf.strip('/')}/zarr.json")
+    return _stamp_from_meta(meta)
+
+
+def _stamp_from_meta(meta) -> dict | None:
+    """The commit stamp out of a leaf's root ``zarr.json`` payload, or ``None``."""
     if not isinstance(meta, dict):
         return None
     attrs = meta.get("attributes")
@@ -146,13 +163,20 @@ def read_commit(store_root: str, leaf: str, **store_kwargs: Any) -> dict | None:
     return dict(stamp) if isinstance(stamp, dict) else None
 
 
-def read_leaf_coverage(store_root: str, leaf: str, **store_kwargs: Any) -> dict | None:
+def read_leaf_coverage(
+    store_root: str, leaf: str, *, store: Any = None, **store_kwargs: Any
+) -> dict | None:
     """A leaf's coverage envelope off its commit stamp, or ``None``."""
-    return parse_leaf_coverage(read_commit(store_root, leaf, **store_kwargs))
+    return parse_leaf_coverage(read_commit(store_root, leaf, store=store, **store_kwargs))
 
 
 def read_coverage_bitmap(
-    store_root: str, leaf: str, *, coverage: dict | None = None, **store_kwargs: Any
+    store_root: str,
+    leaf: str,
+    *,
+    coverage: dict | None = None,
+    store: Any = None,
+    **store_kwargs: Any,
 ) -> np.ndarray | None:
     """A leaf's exact occupied cell words from its bitmap sidecar, or ``None``.
 
@@ -168,19 +192,21 @@ def read_coverage_bitmap(
     from obstore.exceptions import NotFoundError
 
     if coverage is None:
-        coverage = read_leaf_coverage(store_root, leaf, **store_kwargs)
+        coverage = read_leaf_coverage(store_root, leaf, store=store, **store_kwargs)
     if not coverage or coverage.get("encoding") != "bitmap" or not coverage.get("sidecar"):
         return None
     shard, _window = split_leaf_name(leaf.rstrip("/").rsplit("/", 1)[-1])
-    store = open_object_store(store_root, **store_kwargs)
+    handle = _resolve_store(store_root, store, store_kwargs)
     try:
-        data = obstore.get(store, f"{leaf.strip('/')}/{coverage['sidecar']}").bytes()
+        data = obstore.get(handle, f"{leaf.strip('/')}/{coverage['sidecar']}").bytes()
     except (FileNotFoundError, NotFoundError):
         return None
     return decode_bitmap(bytes(data), shard, int(coverage["cell_order"]))
 
 
-def bitmap_and(store_root: str, leaf: str, aoi, **store_kwargs: Any) -> np.ndarray | None:
+def bitmap_and(
+    store_root: str, leaf: str, aoi, *, store: Any = None, **store_kwargs: Any
+) -> np.ndarray | None:
     """Exact cell-level intersection via a leaf's coverage (bitmap or full).
 
     Reads the stamp once. ``encoding: "full"`` short-circuits to MOC
@@ -192,19 +218,21 @@ def bitmap_and(store_root: str, leaf: str, aoi, **store_kwargs: Any) -> np.ndarr
     """
     from mortie import moc_and
 
-    coverage = read_leaf_coverage(store_root, leaf, **store_kwargs)
+    coverage = read_leaf_coverage(store_root, leaf, store=store, **store_kwargs)
     if not coverage:
         return None
     if coverage.get("encoding") == "full":
         word = morton_word(split_leaf_name(leaf.rstrip("/").rsplit("/", 1)[-1])[0])
         return moc_and(np.asarray([word], dtype=np.uint64), np.asarray(aoi, dtype=np.uint64))
-    occupied = read_coverage_bitmap(store_root, leaf, coverage=coverage, **store_kwargs)
+    occupied = read_coverage_bitmap(
+        store_root, leaf, coverage=coverage, store=store, **store_kwargs
+    )
     if occupied is None:
         return None
     return moc_and(occupied, np.asarray(aoi, dtype=np.uint64))
 
 
-def walk_leaves(store_root: str, **store_kwargs: Any) -> Iterator[str]:
+def walk_leaves(store_root: str, *, store: Any = None, **store_kwargs: Any) -> Iterator[str]:
     """Yield the store-relative path of every leaf zarr — the discovery walk.
 
     The fallback/verification path (never the hot path): one delimiter-LIST
@@ -219,11 +247,11 @@ def walk_leaves(store_root: str, **store_kwargs: Any) -> Iterator[str]:
     """
     import obstore
 
-    store = open_object_store(store_root, **store_kwargs)
+    handle = _resolve_store(store_root, store, store_kwargs)
     stack = [""]
     while stack:
         prefix = stack.pop()
-        listing = obstore.list_with_delimiter(store, prefix or None)
+        listing = obstore.list_with_delimiter(handle, prefix or None)
         for child in listing["common_prefixes"]:
             rel = child.rstrip("/")
             name = rel.split("/")[-1]
