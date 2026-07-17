@@ -122,8 +122,28 @@ class TestMortonInfo:
         assert poly.area < 2.0 * ref.area
 
     def test_cell_boundaries_rejects_unknown_backend(self):
-        with pytest.raises(ValueError, match="backend"):
-            dggs.MortonInfo(level=6).cell_boundaries(_golden_family(), backend="geoarrow")
+        with pytest.raises(ValueError, match="invalid backend"):
+            dggs.MortonInfo(level=6).cell_boundaries(_golden_family(), backend="wkb")
+
+    def test_cell_boundaries_geoarrow(self):
+        # The lonboard-fast path: a geoarrow polygon array with spherical-edge
+        # extension metadata, one geometry per cell (xdggs backend contract).
+        info = dggs.MortonInfo(level=6)
+        words = _golden_family()
+        arr = info.cell_boundaries(words, backend="geoarrow")
+        assert len(arr) == words.size
+        metadata = arr.field.metadata
+        assert metadata[b"ARROW:extension:name"] == b"geoarrow.polygon"
+        assert b'"edges": "spherical"' in metadata[b"ARROW:extension:metadata"]
+
+    def test_cell_boundaries_geoarrow_rejects_empty(self):
+        # arro3 cannot build 0-length list arrays; fail pointedly rather than
+        # letting the backend crash opaquely (shapely returns an empty array).
+        info = dggs.MortonInfo(level=6)
+        empty = np.asarray([], dtype=np.uint64)
+        assert info.cell_boundaries(empty).size == 0
+        with pytest.raises(ValueError, match="zero cells"):
+            info.cell_boundaries(empty, backend="geoarrow")
 
     def test_zoom_to_coarser_is_decimal_truncation(self):
         # The §5 predicate: the parent decimal is the child decimal minus its

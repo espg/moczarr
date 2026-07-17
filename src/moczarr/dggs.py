@@ -95,30 +95,42 @@ class MortonInfo(DGGSInfo):
         )
 
     def cell_boundaries(self, cell_ids, backend="shapely") -> np.ndarray:
-        """Cell boundary polygons (``shapely.Polygon``; the one supported backend).
+        """Cell boundary polygons — ``backend="shapely"`` (default) or ``"geoarrow"``.
 
-        ``mort2polygon`` returns closed ``[lat, lon]`` rings (4 unique vertices
-        plus the repeated first) — and the bare ring (not a one-element list)
-        for a single cell, re-wrapped here. The four vertices are recentered
-        around the prime meridian before ring construction so dateline-crossing
-        and polar cells stay well-formed (mirrors ``xdggs.healpix``'s
-        ``cell_boundaries``, which applies the same ``center_around_prime_meridian``).
+        Mirrors ``xdggs.healpix``'s ``cell_boundaries`` contract by dispatching
+        to its backend builders: ``"shapely"`` returns an array of
+        :py:class:`shapely.Polygon` (what the accessor consumes);
+        ``"geoarrow"`` returns a geoarrow polygon array tagged with spherical
+        edges (the lonboard-fast path). ``mort2polygon`` returns closed
+        ``[lat, lon]`` rings (4 unique vertices plus the repeated first) — and
+        the bare ring (not a one-element list) for a single cell, re-wrapped
+        here. The four vertices are recentered around the prime meridian
+        before ring construction so dateline-crossing and polar cells stay
+        well-formed (same ``center_around_prime_meridian`` xdggs applies).
         """
-        if backend != "shapely":
-            raise ValueError(f"invalid backend: {backend!r} (only 'shapely' is supported)")
-        import shapely
         from mortie import mort2polygon
+        from xdggs.healpix import polygons_geoarrow, polygons_shapely
 
+        backends = {"shapely": polygons_shapely, "geoarrow": polygons_geoarrow}
+        backend_func = backends.get(backend)
+        if backend_func is None:
+            raise ValueError(f"invalid backend: {backend!r} (one of {sorted(backends)})")
         rings = mort2polygon(_words(cell_ids))
         if np.asarray(cell_ids).size == 1:
             rings = [rings]
         if len(rings) == 0:
-            return shapely.polygons([])
+            if backend == "geoarrow":
+                # arro3's list_array rejects 0-length dimensions; upstream
+                # xdggs shares the limitation, so fail pointedly.
+                raise ValueError("backend='geoarrow' does not support zero cells (arro3 limit)")
+            import shapely
+
+            return shapely.polygons(shapely.linearrings(np.empty((0, 4, 2))))
         # Drop the closing vertex -> (n, 4, 2) rings of [lat, lon].
         verts = np.stack([np.asarray(ring, dtype=np.float64)[:-1] for ring in rings])
         lat = verts[..., 0]
         lon = center_around_prime_meridian(verts[..., 1], lat)
-        return shapely.polygons(shapely.linearrings(np.stack((lon, lat), axis=-1)))
+        return backend_func(np.stack((lon, lat), axis=-1))
 
     def zoom_to(self, cell_ids, level: int) -> np.ndarray:
         """Cells at another order — the xdggs zoom semantics.
