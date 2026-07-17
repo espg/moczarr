@@ -135,6 +135,32 @@ def ranges_words(envelope: dict) -> np.ndarray:
     return np.unique(np.asarray(words, dtype=np.uint64))
 
 
+def root_coverage_and(envelope: dict, aoi) -> np.ndarray:
+    """Intersection of the root ranges MOC with an AOI morton cover.
+
+    ``aoi`` is any morton cover (mixed order allowed — mortie's ``moc_and``
+    resolves containment across orders). Returns the covered shards the AOI
+    touches; empty means no covered shard intersects. Expansion is
+    O(covered shards) — see :func:`ranges_words`.
+    """
+    from mortie import moc_and
+
+    return moc_and(ranges_words(envelope), np.asarray(aoi, dtype=np.uint64))
+
+
+def box_and(coverage: dict, aoi) -> np.ndarray:
+    """Intersection of a leaf envelope's tier-0 box with an AOI morton cover.
+
+    One in-memory op on <= 4 members — the cheap AOI reject a reader runs on
+    the stamp it already fetched, before paying for the bitmap sidecar. An
+    empty result rejects the leaf outright (the box is a conservative
+    superset: false positives possible, false negatives impossible).
+    """
+    from mortie import moc_and
+
+    return moc_and(box_words(coverage), np.asarray(aoi, dtype=np.uint64))
+
+
 def ranges_contain(envelope: dict, shard: str | int) -> bool:
     """Whether the envelope's ranges list one shard id — O(ranges), no expansion."""
     from moczarr.convention import morton_decimal
