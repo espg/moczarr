@@ -148,6 +148,12 @@ def open_hive(
         Fabrication runs once post-concat on the final ``morton``
         coordinate — equivalent to per-leaf (the same words, and
         ``mort2healpix`` is elementwise) but a single vectorized call.
+        The fabricated ``cell_ids`` is a Python-side convenience view: the
+        dataset-level ``attrs["dggs"]`` block is left untouched, so on a
+        morton-only store it still advertises the morton scheme while the
+        added coordinate is NESTED. Re-serializing such a result is not
+        internally consistent; the authoritative morton-only ``dggs``
+        discriminator is owned by the zagg#262 convention work.
     xr_kwargs : dict, optional
         Extra keyword arguments for each leaf's ``xarray.open_zarr`` (e.g.
         ``chunks={}`` for dask-backed laziness).
