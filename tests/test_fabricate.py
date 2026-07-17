@@ -77,9 +77,12 @@ class TestFabricateCellIds:
         from mortie import geo2mort
 
         word = np.asarray(geo2mort(-80.0, 120.0, order=29), dtype=np.uint64)
-        with pytest.warns(UserWarning, match="float64"):
+        with pytest.warns(UserWarning, match="float64") as record:
             ids = fabricate_cell_ids(word)
         assert ids.dtype == np.uint64
+        # Default _stacklevel=3 lands the warning on the direct caller (this
+        # test file), not inside moczarr.fabricate.
+        assert record[0].filename == __file__
         # The empty case warns off the caller-declared level (no words to
         # derive an order from).
         with pytest.warns(UserWarning, match="float64"):
