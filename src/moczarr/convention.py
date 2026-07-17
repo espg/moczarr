@@ -153,6 +153,12 @@ def leaf_path(shard: str | int, window: str | None = None) -> str:
     from mortie import MortonIndexArray
 
     word = morton_word(shard)
+    if word < 0:
+        raise ValueError(
+            f"shard {shard!r} is a negative int, not a packed morton word; a "
+            f"packed morton word is required. Parse a decimal id by passing it "
+            f"as a string (e.g. morton_word('-5112333')) instead."
+        )
     rel = MortonIndexArray.from_words(np.asarray([word], dtype=np.uint64)).hive_path()[0]
     if window is not None:
         node, _sep, bare = rel.rpartition("/")

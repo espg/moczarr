@@ -74,6 +74,12 @@ class TestLeafPath:
         with pytest.raises(ValueError, match="frozen grammar"):
             convention.leaf_path(shard, window="20_19")
 
+    def test_negative_int_rejected(self):
+        # A decimal id read as a signed int (the natural user mistake) must
+        # fail with an actionable ValueError, not a bare numpy OverflowError.
+        with pytest.raises(ValueError, match="packed morton word"):
+            convention.leaf_path(-5112333)
+
 
 class TestLeafNames:
     def test_split_round_trip(self):
