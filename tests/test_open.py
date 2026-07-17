@@ -167,6 +167,67 @@ class TestOpenHive:
             open_hive(serc, window="2019")
 
 
+class TestSharedHandle:
+    def test_constructions_are_o1(self, serc, monkeypatch):
+        # Issue #5 acceptance: one open_hive call builds exactly ONE obstore
+        # store plus ONE zarr ObjectStore wrapper (they are different
+        # constructions — the wrapper adapts the shared obstore handle to the
+        # zarr store API). Everything else — manifest, root MOC, stamps, and
+        # all leaf opens — flows through that pair; the acceptance is O(1)
+        # and these are the literals that fall out.
+        import zarr.storage
+
+        import moczarr.open as open_module
+        from moczarr import store as store_module
+
+        counts = {"obstore": 0, "wrapper": 0}
+        real_open = store_module.open_object_store
+
+        def counting_open(path, **kwargs):
+            counts["obstore"] += 1
+            return real_open(path, **kwargs)
+
+        # Both bound names: store.py calls its module global, open.py its import.
+        monkeypatch.setattr(store_module, "open_object_store", counting_open)
+        monkeypatch.setattr(open_module, "open_object_store", counting_open)
+
+        real_wrapper = zarr.storage.ObjectStore
+
+        class CountingWrapper(real_wrapper):
+            def __init__(self, *args, **kwargs):
+                counts["wrapper"] += 1
+                super().__init__(*args, **kwargs)
+
+        monkeypatch.setattr(zarr.storage, "ObjectStore", CountingWrapper)
+        open_hive(serc)
+        assert counts == {"obstore": 1, "wrapper": 1}
+
+    def test_deep_path_leaf_open(self, serc):
+        # Pinned regression for the issue #5 spike: zarr v3 opens a leaf group
+        # through the parentless digit tree by explicit path — it GETs
+        # <path>/zarr.json directly and never consults parent metadata (the
+        # hive tree has none at digit nodes, D5). This is the seam the shared
+        # root-rooted wrapper depends on.
+        import zarr
+        from zarr.storage import ObjectStore
+
+        wrapper = ObjectStore(store.open_object_store(serc), read_only=True)
+        rel = convention.leaf_path(SERC_SHARD)
+        group = zarr.open_group(wrapper, path=f"{rel}/8", mode="r")
+        assert "morton" in group.array_keys()
+        deep = xr.open_zarr(wrapper, group=f"{rel}/8", consolidated=False, zarr_format=3)
+        manual = xr.open_zarr(f"{serc}/{rel}", group="8", consolidated=False, zarr_format=3)
+        np.testing.assert_array_equal(deep["morton"].values, manual["morton"].values)
+        np.testing.assert_array_equal(deep["count"].values, manual["count"].values)
+        # And end to end: open_hive's result carries the same leaf slice
+        # (test_matches_manual_leaf_open pins the values; here pin the route).
+        ds = open_hive(serc, aoi=[SERC_SHARD])
+        np.testing.assert_array_equal(
+            np.asarray(ds["morton"].values, dtype=np.uint64),
+            np.asarray(manual["morton"].values, dtype=np.uint64),
+        )
+
+
 class TestOpenHiveWalkFallback:
     def test_no_root_moc_degrades_to_walk(self, serc, tmp_path):
         # Same result with the root MOC deleted: the walk is the fallback,
