@@ -13,3 +13,4 @@ site/
 coverage.xml
 src/moczarr/_version.py
 .DS_Store
+uv.lock
