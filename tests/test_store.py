@@ -114,6 +114,36 @@ class TestBitmapReads:
         (pathlib.Path(hive_store) / leaf / convention.COVERAGE_SIDECAR).unlink()
         assert store.read_coverage_bitmap(hive_store, leaf) is None
 
+    def test_corrupt_sidecar_raises(self, hive_store):
+        import pathlib
+
+        # Corrupt != missing (D9): a present-but-unreadable sidecar must
+        # surface, not degrade to the box index like an absent one. Garbage
+        # bytes never reach zstd's frame -> RuntimeError from numcodecs.
+        leaf = convention.leaf_path(STAMPED)
+        sidecar = pathlib.Path(hive_store) / leaf / convention.COVERAGE_SIDECAR
+        sidecar.write_bytes(b"not zstd at all")
+        with pytest.raises((RuntimeError, ValueError)):
+            store.read_coverage_bitmap(hive_store, leaf)
+        with pytest.raises((RuntimeError, ValueError)):
+            store.bitmap_and(hive_store, leaf, _words(STAMPED))
+
+    def test_wrong_size_sidecar_raises(self, hive_store):
+        import pathlib
+
+        from numcodecs import Zstd
+
+        # A payload that decompresses cleanly but to the wrong length is the
+        # subtler corruption: moczarr's own size check refuses to zero-pad it
+        # into a plausible-but-false partial cell set (ValueError, not caught).
+        leaf = convention.leaf_path(STAMPED)
+        sidecar = pathlib.Path(hive_store) / leaf / convention.COVERAGE_SIDECAR
+        sidecar.write_bytes(bytes(Zstd(level=3).encode(b"\xff")))
+        with pytest.raises(ValueError, match="refusing to zero-pad"):
+            store.read_coverage_bitmap(hive_store, leaf)
+        with pytest.raises(ValueError, match="refusing to zero-pad"):
+            store.bitmap_and(hive_store, leaf, _words(STAMPED))
+
 
 class TestBitmapAnd:
     def test_bitmap_hit_and_miss(self, hive_store):
