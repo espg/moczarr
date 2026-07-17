@@ -22,6 +22,12 @@ FIXTURE = Path(__file__).parent / "data" / "serc_hive"
 #: its stored NESTED id — literals pin fabrication against mortie drift too.
 GOLDEN_WORD = 5347180132572332040
 GOLDEN_NESTED = 238416
+#: A production-order (19), southern-hemisphere, negative-polar-base word and
+#: its NESTED id — computed once with mortie and hard-coded as a drift guard
+#: for the regime the order-8 northern SERC goldens never touch (deep south,
+#: lat≈-80°, and the negative-base decimal path at the store's real cell order).
+GOLDEN_WORD_O19_SOUTH = 11570383905173274643
+GOLDEN_NESTED_O19_SOUTH = 2483716583387
 
 
 def _morton_only_copy(tmp_path):
@@ -41,6 +47,14 @@ class TestFabricateCellIds:
         ids = fabricate_cell_ids([GOLDEN_WORD])
         assert ids.dtype == np.uint64
         assert ids.tolist() == [GOLDEN_NESTED]
+
+    def test_known_word_order19_south(self):
+        # Production order (19), southern hemisphere, negative polar base — the
+        # regime the order-8 northern SERC goldens never exercise. Literals
+        # (not recomputation) so a mortie change at this regime fails a test.
+        ids = fabricate_cell_ids([GOLDEN_WORD_O19_SOUTH], level=19)
+        assert ids.dtype == np.uint64
+        assert ids.tolist() == [GOLDEN_NESTED_O19_SOUTH]
 
     def test_level_cross_check(self):
         assert fabricate_cell_ids([GOLDEN_WORD], level=8).tolist() == [GOLDEN_NESTED]
