@@ -128,6 +128,26 @@ class TestOpenHive:
         with pytest.raises(ValueError, match="for the given AOI"):
             open_hive(serc, aoi=[empty])
 
+    def test_unknown_leaf_coverage_spec_degrades_to_open(self, serc, tmp_path):
+        # D9: an unknown leaf-coverage spec must NOT be half-parsed. The box
+        # reject routes through parse_leaf_coverage's strict spec gate, so a
+        # future/unknown envelope degrades to "open the leaf" and the tier-2
+        # aoi_mask still subsets exactly — never a silent false leaf reject.
+        copy = tmp_path / "serc"
+        shutil.copytree(FIXTURE, copy)
+        rel = convention.leaf_path(SERC_SHARD)
+        occupied = store.read_coverage_bitmap(str(copy), rel)
+        cell = convention.morton_decimal(int(occupied[0]))  # "433142224"
+        meta_path = copy / rel / "zarr.json"
+        meta = json.loads(meta_path.read_text())
+        meta["attributes"][convention.COMMIT_ATTR]["coverage"]["spec"] = "morton-moc/9"
+        meta_path.write_text(json.dumps(meta))
+        # Sanity: the spec gate now reads this leaf's coverage as absent.
+        assert store.read_leaf_coverage(str(copy), rel) is None
+        ds = open_hive(str(copy), aoi=[cell])
+        assert ds.sizes["cells"] == 1
+        assert convention.morton_decimal(int(ds["morton"].values[0])) == cell
+
     def test_aoi_strings_and_words_agree(self, serc):
         by_str = open_hive(serc, aoi=[SERC_SHARD])
         by_word = open_hive(serc, aoi=np.asarray([convention.morton_word(SERC_SHARD)]))

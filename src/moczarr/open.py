@@ -27,7 +27,13 @@ from moczarr.convention import (
     split_leaf_name,
     validate_label,
 )
-from moczarr.coverage import aoi_mask, box_and, ranges_words, root_coverage_and
+from moczarr.coverage import (
+    aoi_mask,
+    box_and,
+    parse_leaf_coverage,
+    ranges_words,
+    root_coverage_and,
+)
 from moczarr.store import (
     load_root_coverage,
     open_object_store,
@@ -159,8 +165,8 @@ def open_hive(
         if stamp is None:
             continue  # debris or a MOC-listed shard whose leaf is gone (D4)
         if aoi_words is not None:
-            coverage = stamp.get("coverage")
-            if isinstance(coverage, dict) and coverage.get("box"):
+            coverage = parse_leaf_coverage(stamp)
+            if coverage is not None and coverage.get("box"):
                 if box_and(coverage, aoi_words).size == 0:
                     continue  # conservative reject: false positives only
         ds = xr.open_zarr(
