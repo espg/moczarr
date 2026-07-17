@@ -34,6 +34,7 @@ from moczarr.coverage import (
     ranges_words,
     root_coverage_and,
 )
+from moczarr.fabricate import fabricate_cell_ids as _fabricate_cell_ids
 from moczarr.store import (
     load_root_coverage,
     open_object_store,
@@ -117,6 +118,7 @@ def open_hive(
     aoi=None,
     window: str | None = None,
     anonymous: bool = False,
+    fabricate_cell_ids: bool | str = "auto",
     decode: bool = False,
     xr_kwargs: dict[str, Any] | None = None,
     **store_kwargs: Any,
@@ -136,6 +138,23 @@ def open_hive(
         on such a store, the error lists the labels that exist.
     anonymous : bool, optional
         Unsigned S3 requests (public buckets).
+    fabricate_cell_ids : {"auto", True, False}, optional
+        NESTED ``cell_ids`` posture (englacial/zagg#262: "NESTED is
+        fabricated, never stored"). ``"auto"`` (default): a stored
+        ``cell_ids`` coordinate is kept untouched; when absent (morton-only
+        store) an exact NESTED view is fabricated from the ``morton``
+        coordinate via :func:`moczarr.fabricate.fabricate_cell_ids`.
+        ``True`` always fabricates (replacing any stored array — exact, so
+        a no-op on dual-written stores); ``False`` never fabricates.
+        Fabrication runs once post-concat on the final ``morton``
+        coordinate — equivalent to per-leaf (the same words, and
+        ``mort2healpix`` is elementwise) but a single vectorized call.
+        The fabricated ``cell_ids`` is a Python-side convenience view: the
+        dataset-level ``attrs["dggs"]`` block is left untouched, so on a
+        morton-only store it still advertises the morton scheme while the
+        added coordinate is NESTED. Re-serializing such a result is not
+        internally consistent; the authoritative morton-only ``dggs``
+        discriminator is owned by the zagg#262 convention work.
     decode : bool, optional
         Assign the xdggs ``MortonIndex`` to the ``morton`` coordinate before
         returning (``moczarr.dggs.decode``), enabling the ``ds.dggs``
@@ -158,6 +177,12 @@ def open_hive(
     """
     import xarray as xr
 
+    if fabricate_cell_ids not in ("auto", True, False):
+        raise ValueError(
+            f"fabricate_cell_ids={fabricate_cell_ids!r}: expected 'auto', True, or False"
+        )
+    if fabricate_cell_ids != "auto":
+        fabricate_cell_ids = bool(fabricate_cell_ids)
     if anonymous:
         store_kwargs.setdefault("anonymous", True)
     manifest = read_manifest(store_root, **store_kwargs)
@@ -198,6 +223,18 @@ def open_hive(
         )
     dim = opened[0]["morton"].dims[0] if "morton" in opened[0].coords else "cells"
     result = xr.concat(opened, dim=dim) if len(opened) > 1 else opened[0]
+    if "morton" in result.coords and (
+        fabricate_cell_ids is True
+        or (fabricate_cell_ids == "auto" and "cell_ids" not in result.coords)
+    ):
+        ids = _fabricate_cell_ids(
+            np.asarray(result["morton"].values, dtype=np.uint64),
+            level=int(manifest["cell_order"]),
+            # +1 frame vs a direct call so the >24 warning lands on the
+            # user's open_hive(...) line, not this internal call site.
+            _stacklevel=4,
+        )
+        result = result.assign_coords(cell_ids=(result["morton"].dims, ids))
     result.attrs["morton_hive"] = {
         k: manifest[k] for k in ("spec", "cell_order", "shard_order", "dataset")
     }
