@@ -9,7 +9,9 @@ bound; the measured win lives in ``tools/bench_open.py``.
 
 import asyncio
 import itertools
+import json
 import time
+from pathlib import Path
 
 import numpy as np
 import pytest
@@ -39,6 +41,19 @@ class TestReadCommits:
         leaves = [convention.leaf_path(SHARDS[0]), convention.leaf_path("-544444")]
         stamps = store.read_commits(many_leaf_store, leaves, concurrency=8)
         assert stamps[0] is not None and stamps[1] is None
+
+    def test_corrupt_raises_through_async(self, tmp_path):
+        # D9 posture's loud half, pinned THROUGH the batched (async) path:
+        # a present-but-unparsable zarr.json RAISES at both concurrencies,
+        # not silently downgraded to None like an absent leaf.
+        root = build_many_leaf_store(tmp_path / "corrupt", SHARDS[:8])
+        leaf = convention.leaf_path(SHARDS[3])
+        (Path(root) / leaf / "zarr.json").write_text("not json {")
+        leaves = [convention.leaf_path(s) for s in SHARDS[:8]]
+        with pytest.raises(json.JSONDecodeError):
+            store.read_commits(root, leaves, concurrency=32)  # loud, THROUGH the batch
+        with pytest.raises(json.JSONDecodeError):
+            store.read_commits(root, leaves, concurrency=1)  # parity witness
 
 
 class TestWalkConcurrency:
