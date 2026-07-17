@@ -28,7 +28,7 @@ from __future__ import annotations
 import json
 import logging
 import warnings
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -163,6 +163,69 @@ def _stamp_from_meta(meta) -> dict | None:
     return dict(stamp) if isinstance(stamp, dict) else None
 
 
+def _run_coroutine(coro):
+    """Run *coro* to completion whether or not an event loop is running.
+
+    ``asyncio.run`` raises inside a running loop — the Jupyter case, and
+    notebook users are the primary audience — so under a running loop the
+    coroutine runs on a fresh loop in a worker thread instead.
+    """
+    import asyncio
+
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return asyncio.run(coro)
+    from concurrent.futures import ThreadPoolExecutor
+
+    with ThreadPoolExecutor(1) as pool:
+        return pool.submit(asyncio.run, coro).result()
+
+
+async def _get_json_async(store, key: str, semaphore):
+    """Async twin of :func:`read_json`, bounded by *semaphore*."""
+    import obstore
+    from obstore.exceptions import NotFoundError
+
+    async with semaphore:
+        try:
+            result = await obstore.get_async(store, key)
+            data = await result.bytes_async()
+        except (FileNotFoundError, NotFoundError):
+            return None
+    return json.loads(bytes(data))
+
+
+def read_commits(
+    store_root: str,
+    leaves: Sequence[str],
+    *,
+    store: Any = None,
+    concurrency: int | None = 32,
+    **store_kwargs: Any,
+) -> list[dict | None]:
+    """Commit stamps for many leaves, batched (issue #5).
+
+    One result per input leaf, aligned by position, each with
+    :func:`read_commit` semantics — ``None`` for debris/absent, a raise for
+    a present-but-unparsable ``zarr.json``. ``concurrency`` bounds the
+    in-flight GETs (``obstore.get_async`` behind a semaphore); ``None`` or
+    ``1`` keeps the serial per-leaf path for debugging.
+    """
+    handle = _resolve_store(store_root, store, store_kwargs)
+    if concurrency is None or concurrency <= 1:
+        return [read_commit(store_root, leaf, store=handle) for leaf in leaves]
+    import asyncio
+
+    keys = [f"{leaf.strip('/')}/zarr.json" for leaf in leaves]
+
+    async def gather():
+        semaphore = asyncio.Semaphore(concurrency)
+        return await asyncio.gather(*(_get_json_async(handle, key, semaphore) for key in keys))
+
+    return [_stamp_from_meta(meta) for meta in _run_coroutine(gather())]
+
+
 def read_leaf_coverage(
     store_root: str, leaf: str, *, store: Any = None, **store_kwargs: Any
 ) -> dict | None:
@@ -232,37 +295,87 @@ def bitmap_and(
     return moc_and(occupied, np.asarray(aoi, dtype=np.uint64))
 
 
-def walk_leaves(store_root: str, *, store: Any = None, **store_kwargs: Any) -> Iterator[str]:
+def _classify_children(listing, prefix: str) -> Iterator[tuple[str, bool]]:
+    """``(rel, is_leaf)`` for each conforming child prefix of one digit node.
+
+    Root children must be ``{sign+base}``-shaped, deeper children a single
+    ``1..4`` digit; a ``*.zarr`` child is a leaf at that node. Non-conforming
+    names below the root are ignored (the node invariant says they are not
+    ours to interpret).
+    """
+    for child in listing["common_prefixes"]:
+        rel = child.rstrip("/")
+        name = rel.split("/")[-1]
+        if name.endswith(".zarr"):
+            yield rel, True
+            continue
+        is_digit_node = (
+            is_base_component(name) if prefix == "" else len(name) == 1 and name in "1234"
+        )
+        if is_digit_node:
+            yield rel, False
+
+
+async def _list_level_async(store, prefixes: list[str], concurrency: int):
+    """One tree level's delimiter-LISTs, batched behind a semaphore."""
+    import asyncio
+
+    import obstore
+
+    semaphore = asyncio.Semaphore(concurrency)
+
+    async def one(prefix: str):
+        async with semaphore:
+            return await obstore.list_with_delimiter_async(store, prefix or None)
+
+    return await asyncio.gather(*(one(prefix) for prefix in prefixes))
+
+
+def walk_leaves(
+    store_root: str,
+    *,
+    store: Any = None,
+    concurrency: int | None = None,
+    **store_kwargs: Any,
+) -> Iterator[str]:
     """Yield the store-relative path of every leaf zarr — the discovery walk.
 
     The fallback/verification path (never the hot path): one delimiter-LIST
-    per digit node — root children must be ``{sign+base}``-shaped, deeper
-    children a single ``1..4`` digit; a ``*.zarr`` child is a leaf at that
-    node; no digit children means nothing finer exists (LIST is strongly
-    consistent and object stores have no empty prefixes, so absence is
-    definitive). Yields stamped and debris leaves alike — completeness is
+    per digit node — no digit children means nothing finer exists (LIST is
+    strongly consistent and object stores have no empty prefixes, so absence
+    is definitive). Yields stamped and debris leaves alike — completeness is
     the caller's check (:func:`read_commit`), matching the tiered postures.
-    Non-conforming names below the root are ignored (the node invariant says
-    they are not ours to interpret).
+
+    ``concurrency`` > 1 batches the LISTs breadth-parallel, one tree level
+    at a time (``obstore.list_with_delimiter_async`` behind a semaphore).
+    The yielded SET is identical to the serial walk's; the ORDER may differ
+    (level-by-level vs depth-first) — callers sort, per the contract.
     """
     import obstore
 
     handle = _resolve_store(store_root, store, store_kwargs)
-    stack = [""]
-    while stack:
-        prefix = stack.pop()
-        listing = obstore.list_with_delimiter(handle, prefix or None)
-        for child in listing["common_prefixes"]:
-            rel = child.rstrip("/")
-            name = rel.split("/")[-1]
-            if name.endswith(".zarr"):
-                yield rel
-                continue
-            is_digit_node = (
-                is_base_component(name) if prefix == "" else len(name) == 1 and name in "1234"
-            )
-            if is_digit_node:
-                stack.append(rel + "/")
+    if concurrency is None or concurrency <= 1:
+        stack = [""]
+        while stack:
+            prefix = stack.pop()
+            listing = obstore.list_with_delimiter(handle, prefix or None)
+            for rel, is_leaf in _classify_children(listing, prefix):
+                if is_leaf:
+                    yield rel
+                else:
+                    stack.append(rel + "/")
+        return
+    level = [""]
+    while level:
+        listings = _run_coroutine(_list_level_async(handle, level, concurrency))
+        next_level = []
+        for prefix, listing in zip(level, listings):
+            for rel, is_leaf in _classify_children(listing, prefix):
+                if is_leaf:
+                    yield rel
+                else:
+                    next_level.append(rel + "/")
+        level = next_level
 
 
 def warn_if_stale(store_root: str, shard: str | int, envelope: dict | None) -> bool:
@@ -305,6 +418,7 @@ __all__ = [
     "load_root_coverage",
     "open_object_store",
     "read_commit",
+    "read_commits",
     "read_coverage_bitmap",
     "read_json",
     "read_leaf_coverage",
