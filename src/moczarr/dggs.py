@@ -24,6 +24,7 @@ import xarray as xr
 
 try:
     from xdggs.grid import DGGSInfo, translate_parameters
+    from xdggs.healpix import center_around_prime_meridian
     from xdggs.index import DGGSIndex
     from xdggs.utils import _extract_cell_id_variable, register_dggs
 except ImportError as exc:  # pragma: no cover - exercised only in core-only envs
@@ -96,8 +97,12 @@ class MortonInfo(DGGSInfo):
     def cell_boundaries(self, cell_ids, backend="shapely") -> np.ndarray:
         """Cell boundary polygons (``shapely.Polygon``; the one supported backend).
 
-        ``mort2polygon`` returns closed ``[lat, lon]`` rings — and the bare
-        ring (not a one-element list) for a single cell, re-wrapped here.
+        ``mort2polygon`` returns closed ``[lat, lon]`` rings (4 unique vertices
+        plus the repeated first) — and the bare ring (not a one-element list)
+        for a single cell, re-wrapped here. The four vertices are recentered
+        around the prime meridian before ring construction so dateline-crossing
+        and polar cells stay well-formed (mirrors ``xdggs.healpix``'s
+        ``cell_boundaries``, which applies the same ``center_around_prime_meridian``).
         """
         if backend != "shapely":
             raise ValueError(f"invalid backend: {backend!r} (only 'shapely' is supported)")
@@ -107,9 +112,13 @@ class MortonInfo(DGGSInfo):
         rings = mort2polygon(_words(cell_ids))
         if np.asarray(cell_ids).size == 1:
             rings = [rings]
-        return shapely.polygons(
-            [shapely.linearrings(np.asarray(ring, dtype=np.float64)[:, ::-1]) for ring in rings]
-        )
+        if len(rings) == 0:
+            return shapely.polygons([])
+        # Drop the closing vertex -> (n, 4, 2) rings of [lat, lon].
+        verts = np.stack([np.asarray(ring, dtype=np.float64)[:-1] for ring in rings])
+        lat = verts[..., 0]
+        lon = center_around_prime_meridian(verts[..., 1], lat)
+        return shapely.polygons(shapely.linearrings(np.stack((lon, lat), axis=-1)))
 
     def zoom_to(self, cell_ids, level: int) -> np.ndarray:
         """Cells at another order — the xdggs zoom semantics.

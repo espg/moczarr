@@ -104,6 +104,23 @@ class TestMortonInfo:
         polys = info.cell_boundaries(np.asarray([convention.morton_word(GOLDEN)], dtype=np.uint64))
         assert polys.shape == (1,) and polys[0].geom_type == "Polygon"
 
+    def test_cell_boundaries_dateline(self):
+        # A cell straddling ±180° must recenter around the prime meridian, else
+        # the raw mortie ring wraps the long way (~7× area, center uncovered).
+        info = dggs.MortonInfo(level=6)
+        dateline = np.ascontiguousarray(
+            info.geographic2cell_ids(np.array([180.0]), np.array([0.0])), dtype=np.uint64
+        )
+        non_dateline = np.ascontiguousarray(
+            info.geographic2cell_ids(np.array([0.0]), np.array([0.0])), dtype=np.uint64
+        )
+        poly = info.cell_boundaries(dateline)[0]
+        ref = info.cell_boundaries(non_dateline)[0]
+        lon, lat = info.cell_ids2geographic(dateline)
+        # center normalizes to −180 ≡ +180; the recentered ring sits at +180.
+        assert poly.covers(shapely.Point(lon[0] % 360.0, lat[0]))
+        assert poly.area < 2.0 * ref.area
+
     def test_cell_boundaries_rejects_unknown_backend(self):
         with pytest.raises(ValueError, match="backend"):
             dggs.MortonInfo(level=6).cell_boundaries(_golden_family(), backend="geoarrow")
