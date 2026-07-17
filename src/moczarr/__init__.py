@@ -26,6 +26,7 @@ from moczarr.coverage import (
     ranges_words,
     root_coverage_and,
 )
+from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.open import open_hive
 from moczarr.store import (
     bitmap_and,
@@ -48,6 +49,7 @@ __all__ = [
     "COMMIT_ATTR",
     "COVERAGE_SIDECAR",
     "COVERAGE_SPEC",
+    "FLOAT64_EXACT_MAX_ORDER",
     "HIVE_SPEC",
     "HIVE_SPEC_V2",
     "MANIFEST_NAME",
@@ -59,6 +61,7 @@ __all__ = [
     "box_words",
     "check_node_invariant",
     "decode_bitmap",
+    "fabricate_cell_ids",
     "leaf_path",
     "load_root_coverage",
     "morton_decimal",
