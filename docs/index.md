@@ -24,3 +24,14 @@ kept while dual-write continues; morton-only stores get the fabricated
 view). This layer is the ratified gate for zagg's writer flip. The
 order-29→24 clip policy for browser/float64 safety is pending the
 resolution-discriminator metadata on the zagg#262 thread.
+
+**Shared store handle + concurrent metadata**
+([issue #5](https://github.com/espg/moczarr/issues/5)): one `open_hive()`
+call now constructs exactly one obstore store and one zarr wrapper — every
+read (manifest, root MOC, stamps, leaf data) flows through that pair, with
+leaf groups opened by deep path through the parentless digit tree. The
+candidate leaves' stamp GETs and the discovery walk's per-level LISTs batch
+concurrently behind `open_hive(..., concurrency=32)` (the zarr-python knob
+vocabulary; `None` or `1` runs serially, and the batching is notebook-safe
+under a running event loop). Leaf *data* opens remain serial pending the
+lazy-index work; `tools/bench_open.py` measures both.
