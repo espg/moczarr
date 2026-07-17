@@ -172,6 +172,14 @@ def aoi_mask(cells, aoi) -> np.ndarray:
     word), so identity tests against it silently drop exactly the dense
     regions. ``cells`` must share one order (a store's cell coordinate does,
     by convention); ``aoi`` members may be mixed-order.
+
+    Single order is *enforced*, not merely assumed: a mixed-order ``cells``
+    array raises ``ValueError``. ``infer_order_from_morton`` returns the
+    *minimum* order over an array, so a silent inference would clip finer
+    cells to the wrong (coarser) order and drop their rows — the module's
+    raise-on-ambiguity discipline forbids that. The check is one vectorized
+    ``clip2order`` compare (O(n), no per-cell Python loop): clipping to the
+    common order is identity iff every cell already sits at that order.
     """
     from mortie import clip2order, infer_order_from_morton
 
@@ -180,6 +188,11 @@ def aoi_mask(cells, aoi) -> np.ndarray:
     if cells.size == 0:
         return keep
     cell_order = int(infer_order_from_morton(cells))
+    if (clip2order(cell_order, cells) != cells).any():
+        raise ValueError(
+            f"aoi_mask requires single-order cells; got a mixed-order array "
+            f"(minimum order {cell_order}). Clip or split the cells to one order first."
+        )
     for member in np.asarray(aoi, dtype=np.uint64):
         one = np.asarray([member], dtype=np.uint64)
         member_order = int(infer_order_from_morton(one))
