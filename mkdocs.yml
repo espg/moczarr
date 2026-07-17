@@ -1,4 +1,5 @@
 site_name: moczarr
+site_url: https://espg.github.io/moczarr/
 site_description: Sparse-DGGS xarray reader for morton-hive zarr stores
 repo_url: https://github.com/espg/moczarr
 repo_name: espg/moczarr
