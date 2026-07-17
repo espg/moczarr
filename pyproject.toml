@@ -1,0 +1,101 @@
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project]
+name = "moczarr"
+dynamic = ["version"]
+description = "Sparse-DGGS xarray reader for morton-hive zarr stores (MOC domain, lazy dense views)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = {file = "LICENSE"}
+authors = [
+    {name = "Shane Grigsby", email = "refuge@rocktalus.com"},
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering :: GIS",
+]
+
+dependencies = [
+    "numpy>=2.0",
+    # Morton/HEALPix kernels: decimal<->word, hive_path, MOC algebra
+    # (moc_and), clip2order/children/parents. The layout convention itself is
+    # owned by the mortie spec (espg/mortie#62).
+    "mortie>=0.9.0",
+    "xarray",
+    "zarr>=3.1.5",
+    "obstore>=0.8.2",
+    # Zstd for the coverage-bitmap sidecar decode (O8 encoding).
+    "numcodecs>=0.14",
+]
+
+[project.optional-dependencies]
+# xdggs integration (MortonInfo/MortonIndex via register_dggs) is an EXTRA:
+# xdggs hard-requires lonboard/matplotlib/h3ronpy/cdshealpix — too heavy for
+# the core reader (see xarray-contrib/xdggs#128).
+xdggs = [
+    "xdggs>=0.4",
+]
+test = [
+    "pytest>=8.0",
+    "pytest-cov",
+]
+
+[project.urls]
+Homepage = "https://github.com/espg/moczarr"
+Repository = "https://github.com/espg/moczarr"
+Issues = "https://github.com/espg/moczarr/issues"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/moczarr/_version.py"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/moczarr"]
+
+[tool.hatch.build.targets.sdist]
+only-include = [
+    "src/moczarr",
+    "tests",
+    "README.md",
+    "LICENSE",
+    "pyproject.toml",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+lint.select = ["E", "F", "W", "I", "N"]
+lint.ignore = ["E501"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["moczarr"]
+
+[tool.mypy]
+python_version = "3.12"
+ignore_missing_imports = true
+
+[dependency-groups]
+dev = [
+    "pre-commit>=4.5.1",
+    "pytest",
+    "pytest-cov",
+    "ruff",
+]
+docs = [
+    "mkdocs>=1.6.1",
+    "mkdocs-material>=9.6.14",
+    "mkdocstrings>=0.29.1",
+    "mkdocstrings-python>=1.16.10",
+]
