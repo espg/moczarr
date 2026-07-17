@@ -1,0 +1,27 @@
+site_name: moczarr
+site_description: Sparse-DGGS xarray reader for morton-hive zarr stores
+repo_url: https://github.com/espg/moczarr
+repo_name: espg/moczarr
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          options:
+            docstring_style: numpy
+
+nav:
+  - Home: index.md
