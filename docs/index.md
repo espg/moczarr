@@ -14,3 +14,13 @@ for the architecture this implements (§5 reader, §6 xarray extension).
 
 Pre-alpha: the convention core (hive paths, manifest, coverage envelopes) is
 implemented; the store layer and `open_hive()` are in progress.
+
+The **`cell_ids` fabrication layer** is in: under the morton-only storage
+decision ([englacial/zagg#262](https://github.com/englacial/zagg/issues/262),
+"NESTED is fabricated, never stored") zagg stops writing the NESTED
+`cell_ids` array, and `open_hive()` derives it exactly from the stored
+`morton` coordinate instead (`fabricate_cell_ids="auto"`: stored arrays are
+kept while dual-write continues; morton-only stores get the fabricated
+view). This layer is the ratified gate for zagg's writer flip. The
+order-29→24 clip policy for browser/float64 safety is pending the
+resolution-discriminator metadata on the zagg#262 thread.
