@@ -168,3 +168,44 @@ class TestRanges:
         aoi = _words("-511")  # parent of the -5111..-5113 run, not of -5121
         hit = moc_and(words, aoi)
         np.testing.assert_array_equal(np.sort(hit), np.sort(_words("-5111", "-5112", "-5113")))
+
+
+class TestAoiMask:
+    """Row-level AOI containment — NOT ``isin`` against ``moc_and`` output.
+
+    The trap this pins (found live in the phase-3 opener): ``moc_and``
+    returns a COMPACTED cover, so when every child of a shard is present the
+    intersection is the parent word and identity tests match nothing —
+    silently dropping exactly the dense regions.
+    """
+
+    def _cells(self, shard):
+        # The full depth-1 subtree of `shard` plus one cousin.
+        return np.sort(_words(*(shard + d for d in "1234"), "-5121111"))
+
+    def test_parent_member_keeps_whole_subtree(self):
+        cells = self._cells("-511111")
+        keep = coverage.aoi_mask(cells, _words("-511111"))
+        # All four children kept (the compaction trap: moc_and+isin gives 0 here).
+        assert keep.sum() == 4
+        assert not keep[np.isin(cells, _words("-5121111"))].any()
+
+    def test_equal_order_member(self):
+        cells = self._cells("-511111")
+        keep = coverage.aoi_mask(cells, _words("-5111112"))
+        np.testing.assert_array_equal(cells[keep], _words("-5111112"))
+
+    def test_finer_member_keeps_containing_cell(self):
+        cells = self._cells("-511111")
+        keep = coverage.aoi_mask(cells, _words("-511111231"))  # 2 orders finer
+        np.testing.assert_array_equal(cells[keep], _words("-5111112"))
+
+    def test_disjoint_and_empty(self):
+        cells = self._cells("-511111")
+        assert coverage.aoi_mask(cells, _words("4331422")).sum() == 0
+        assert coverage.aoi_mask(np.asarray([], dtype=np.uint64), _words("-5")).size == 0
+
+    def test_mixed_order_members_union(self):
+        cells = self._cells("-511111")
+        keep = coverage.aoi_mask(cells, _words("-5111114", "-5121"))
+        np.testing.assert_array_equal(cells[keep], np.sort(_words("-5111114", "-5121111")))

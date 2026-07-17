@@ -161,6 +161,35 @@ def box_and(coverage: dict, aoi) -> np.ndarray:
     return moc_and(box_words(coverage), np.asarray(aoi, dtype=np.uint64))
 
 
+def aoi_mask(cells, aoi) -> np.ndarray:
+    """Boolean mask over ``cells``: which intersect the AOI morton cover.
+
+    The §5 nesting predicate (prefix = ancestor), applied in BOTH
+    directions: a cell is kept when it sits inside an AOI member (member
+    coarser-or-equal) or contains one (member finer). This is containment,
+    NOT ``np.isin`` against ``moc_and``'s output — MOC intersection returns
+    a *compacted* cover (a fully-occupied subtree compacts to its parent
+    word), so identity tests against it silently drop exactly the dense
+    regions. ``cells`` must share one order (a store's cell coordinate does,
+    by convention); ``aoi`` members may be mixed-order.
+    """
+    from mortie import clip2order, infer_order_from_morton
+
+    cells = np.asarray(cells, dtype=np.uint64)
+    keep = np.zeros(cells.size, dtype=bool)
+    if cells.size == 0:
+        return keep
+    cell_order = int(infer_order_from_morton(cells))
+    for member in np.asarray(aoi, dtype=np.uint64):
+        one = np.asarray([member], dtype=np.uint64)
+        member_order = int(infer_order_from_morton(one))
+        if member_order <= cell_order:
+            keep |= clip2order(member_order, cells) == member
+        else:
+            keep |= cells == clip2order(cell_order, one)[0]
+    return keep
+
+
 def ranges_contain(envelope: dict, shard: str | int) -> bool:
     """Whether the envelope's ranges list one shard id — O(ranges), no expansion."""
     from moczarr.convention import morton_decimal

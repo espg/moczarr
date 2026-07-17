@@ -16,6 +16,7 @@ from moczarr.convention import (
 )
 from moczarr.coverage import (
     COVERAGE_SPEC,
+    aoi_mask,
     box_and,
     box_words,
     decode_bitmap,
@@ -25,6 +26,7 @@ from moczarr.coverage import (
     ranges_words,
     root_coverage_and,
 )
+from moczarr.open import open_hive
 from moczarr.store import (
     bitmap_and,
     load_root_coverage,
@@ -51,6 +53,7 @@ __all__ = [
     "MANIFEST_NAME",
     "ROOT_COVERAGE_NAME",
     "__version__",
+    "aoi_mask",
     "bitmap_and",
     "box_and",
     "box_words",
@@ -60,6 +63,7 @@ __all__ = [
     "load_root_coverage",
     "morton_decimal",
     "morton_word",
+    "open_hive",
     "open_object_store",
     "parse_leaf_coverage",
     "parse_manifest",
