@@ -161,36 +161,71 @@ class MortonInfo(DGGSInfo):
 
 @register_dggs(GRID_NAME)
 class MortonIndex(DGGSIndex):
-    """``PandasIndex``-backed DGGS index over packed ``uint64`` morton words."""
+    """DGGS index over packed ``uint64`` morton words — pandas- or MOC-backed.
+
+    ``index_kind`` mirrors upstream ``HealpixIndex``: ``"pandas"`` (default)
+    materializes a ``PandasIndex``; ``"moc"`` wraps the core
+    :class:`moczarr.moc_index.MortonMocIndex` (interval-set domain, fabricated
+    coordinate) so the ``ds.dggs`` accessor works on a lazy index. An
+    ``xr.Index`` instance passes through as the inner index directly (the
+    ``open_hive(index_kind="moc", decode=True)`` wrap — no rebuild).
+    """
 
     _grid: DGGSInfo
 
-    def __init__(self, cell_ids, dim: str, name: str, grid_info: DGGSInfo):
-        super().__init__(cell_ids, dim, grid_info)
+    def __init__(
+        self, cell_ids, dim: str, name: str, grid_info: DGGSInfo, index_kind: str = "pandas"
+    ):
+        if index_kind not in ("pandas", "moc"):
+            raise ValueError(f"index_kind={index_kind!r}: expected 'pandas' or 'moc'")
+        self._dim = dim
         self._name = name
-        self._index.index.name = name
+        if isinstance(cell_ids, xr.Index):
+            self._index = cell_ids
+        elif index_kind == "pandas":
+            from xarray.indexes import PandasIndex
+
+            self._index = PandasIndex(cell_ids, dim)
+            self._index.index.name = name
+        else:
+            from moczarr.moc_index import MortonMocIndex
+            from moczarr.ranges import MortonRanges
+
+            ranges = MortonRanges.from_cell_words(_words(cell_ids), grid_info.level)
+            self._index = MortonMocIndex(ranges, dim=dim, name=name)
+        self._kind = index_kind
+        self._grid = grid_info
+
+    def values(self):
+        if self._kind == "moc":
+            return self._index.ranges.fabricate()
+        return self._index.index.values
 
     @classmethod
     def from_variables(cls, variables, *, options) -> "MortonIndex":
         name, var, dim = _extract_cell_id_variable(variables)
-        grid_info = MortonInfo.from_dict(dict(var.attrs) | dict(options or {}))
-        return cls(var.data, dim, name, grid_info)
+        options = dict(options or {})
+        index_kind = options.pop("index_kind", "pandas")
+        grid_info = MortonInfo.from_dict(dict(var.attrs) | options)
+        return cls(var.data, dim, name, grid_info, index_kind=index_kind)
 
     @property
     def grid_info(self) -> MortonInfo:
         return self._grid
 
     def _replace(self, new_index) -> "MortonIndex":
-        return type(self)(new_index, self._dim, self._name, self._grid)
+        return type(self)(new_index, self._dim, self._name, self._grid, index_kind=self._kind)
 
     def __repr__(self):
-        return f"<MortonIndex(level={self._grid.level})>"
+        return f"<MortonIndex(level={self._grid.level}, kind={self._kind})>"
 
     def _repr_inline_(self, max_width: int):
-        return f"MortonIndex(level={self._grid.level})"
+        return f"MortonIndex(level={self._grid.level}, kind={self._kind})"
 
 
-def decode(ds: xr.Dataset, name: str = "morton", **options) -> xr.Dataset:
+def decode(
+    ds: xr.Dataset, name: str = "morton", index_kind: str = "pandas", **options
+) -> xr.Dataset:
     """Assign a :class:`MortonIndex` to the ``name`` coordinate.
 
     The xdggs-convention decode pattern: build the index off the coord's grid
@@ -200,6 +235,11 @@ def decode(ds: xr.Dataset, name: str = "morton", **options) -> xr.Dataset:
     ``ds.attrs["morton_hive"]["cell_order"]`` (the ``open_hive`` manifest
     summary), then to the order packed in the first word itself. The filled
     attrs land on the returned coord, so ``xdggs.decode`` round-trips.
+
+    ``index_kind="moc"`` backs the index with the lazy
+    :class:`~moczarr.moc_index.MortonMocIndex`: a coordinate already indexed
+    by one (the ``open_hive(index_kind="moc")`` result) is wrapped as-is;
+    otherwise the materialized words run-detect into intervals.
     """
     try:
         var = ds[name].variable
@@ -219,7 +259,21 @@ def decode(ds: xr.Dataset, name: str = "morton", **options) -> xr.Dataset:
             attrs["level"] = int(infer_order_from_morton(_words(var.data[:1])))
     var = var.copy(deep=False)
     var.attrs = attrs
-    index = MortonIndex.from_variables({name: var}, options=options)
+    existing = ds.xindexes.get(name) if index_kind == "moc" else None
+    if existing is not None:
+        from moczarr.moc_index import MortonMocIndex
+
+        if isinstance(existing, MortonMocIndex):
+            grid_info = MortonInfo.from_dict(attrs | dict(options))
+            index: MortonIndex = MortonIndex(
+                existing, ds[name].dims[0], name, grid_info, index_kind="moc"
+            )
+        else:
+            existing = None
+    if existing is None:
+        index = MortonIndex.from_variables(
+            {name: var}, options=dict(options) | {"index_kind": index_kind}
+        )
     decoded = ds.assign_coords(xr.Coordinates.from_xindex(index))
     decoded[name].attrs.update(index.grid_info.to_dict())
     return decoded

@@ -118,6 +118,7 @@ def open_hive(
     anonymous: bool = False,
     fabricate_cell_ids: bool | str = "auto",
     decode: bool = False,
+    index_kind: str = "pandas",
     concurrency: int | None = 32,
     xr_kwargs: dict[str, Any] | None = None,
     **store_kwargs: Any,
@@ -158,7 +159,19 @@ def open_hive(
         Assign the xdggs ``MortonIndex`` to the ``morton`` coordinate before
         returning (``moczarr.dggs.decode``), enabling the ``ds.dggs``
         accessor. Requires the ``moczarr[xdggs]`` extra; the default leaves
-        the result index-free and xdggs-free.
+        the result xdggs-free.
+    index_kind : {"pandas", "moc"}, optional
+        Index posture for the ``morton`` coordinate (the xdggs vocabulary).
+        ``"pandas"`` (default) is the status quo: the stored coordinate is
+        read and, with ``decode=True``, indexed through a ``PandasIndex``.
+        ``"moc"`` is the lazy path: the on-disk ``morton``/``cell_ids``
+        arrays are never read — the row domain comes from the same coverage
+        arithmetic that selected the leaves (shard subtrees ∩ AOI), held as
+        a :class:`moczarr.moc_index.MortonMocIndex` whose coordinate is
+        fabricated on demand. The index attaches regardless of ``decode``
+        (it is core, xarray-only); ``decode=True`` additionally wraps it for
+        the ``ds.dggs`` accessor. Requiring ``decode`` here would chain the
+        core lazy index to the xdggs extra, against the ratified placement.
     concurrency : int or None, optional
         Maximum in-flight metadata requests (the candidate leaves' stamp
         GETs, and the discovery walk's per-level LISTs), default 32 — the
@@ -189,6 +202,8 @@ def open_hive(
         )
     if fabricate_cell_ids != "auto":
         fabricate_cell_ids = bool(fabricate_cell_ids)
+    if index_kind not in ("pandas", "moc"):
+        raise ValueError(f"index_kind={index_kind!r}: expected 'pandas' or 'moc'")
     if anonymous:
         store_kwargs.setdefault("anonymous", True)
     # ONE store construction pair for the whole open (issue #5): the obstore
@@ -206,6 +221,7 @@ def open_hive(
         store_root, manifest, aoi_words, window, store=obstore_store, concurrency=concurrency
     )
     stamps = read_commits(store_root, candidates, store=obstore_store, concurrency=concurrency)
+    domain = None  # index_kind="moc": the accumulated interval-set row domain
     for rel, stamp in zip(candidates, stamps):
         if stamp is None:
             continue  # debris or a MOC-listed shard whose leaf is gone (D4)
@@ -214,6 +230,19 @@ def open_hive(
             if coverage is not None and coverage.get("box"):
                 if box_and(coverage, aoi_words).size == 0:
                     continue  # conservative reject: false positives only
+        if index_kind == "moc":
+            # The leaf's row domain is arithmetic: zagg leaves are dense
+            # within a shard, so rows = subtree ∩ AOI — the exact set the
+            # pandas path's aoi_mask keeps, computed without reading the
+            # stored coordinate (interval space, moczarr.ranges).
+            from moczarr.ranges import MortonRanges
+
+            shard, _label = split_leaf_name(rel.rsplit("/", 1)[-1])
+            leaf_domain = MortonRanges.from_shards([morton_word(shard)], int(group))
+            if aoi_words is not None:
+                leaf_domain = leaf_domain.intersect(aoi_words)
+                if leaf_domain.size == 0:
+                    continue  # same skip the pandas path's empty aoi_mask takes
         ds = xr.open_zarr(
             zarr_store,
             group=f"{rel}/{group}",
@@ -223,7 +252,16 @@ def open_hive(
         )
         coords = [name for name in ("morton", "cell_ids") if name in ds]
         ds = ds.set_coords(coords)
-        if aoi_words is not None and "morton" in ds.coords:
+        if index_kind == "moc":
+            # Drop the on-disk cell arrays before concat — lazily built, so
+            # no chunk was read; the coordinate is the index's to fabricate.
+            moc_dim = ds["morton"].dims[0] if "morton" in ds.coords else "cells"
+            ds = ds.drop_vars(coords)
+            if aoi_words is not None:
+                full = MortonRanges.from_shards([morton_word(shard)], int(group))
+                ds = ds.isel({moc_dim: full.rank(leaf_domain.fabricate())})
+            domain = leaf_domain if domain is None else domain.union(leaf_domain)
+        elif aoi_words is not None and "morton" in ds.coords:
             keep = aoi_mask(np.asarray(ds["morton"].values, dtype=np.uint64), aoi_words)
             if not keep.any():
                 continue
@@ -236,7 +274,15 @@ def open_hive(
             + (f" in window {window!r}" if window is not None else "")
         )
     dim = opened[0]["morton"].dims[0] if "morton" in opened[0].coords else "cells"
+    if index_kind == "moc":
+        dim = moc_dim
     result = xr.concat(opened, dim=dim) if len(opened) > 1 else opened[0]
+    if index_kind == "moc":
+        from moczarr.moc_index import MortonMocIndex
+
+        assert domain is not None  # opened is non-empty, so a leaf set it
+        index = MortonMocIndex(domain, dim=dim, name="morton")
+        result = result.assign_coords(xr.Coordinates.from_xindex(index))
     if "morton" in result.coords and (
         fabricate_cell_ids is True
         or (fabricate_cell_ids == "auto" and "cell_ids" not in result.coords)
@@ -255,5 +301,5 @@ def open_hive(
     if decode:
         from moczarr import dggs  # lazy: raises the pointed extra hint when absent
 
-        result = dggs.decode(result)
+        result = dggs.decode(result, index_kind=index_kind)
     return result

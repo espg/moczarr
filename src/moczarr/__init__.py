@@ -28,6 +28,11 @@ from moczarr.coverage import (
 )
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.open import open_hive
+from moczarr.ranges import MortonRanges
+
+# moczarr.moc_index (MortonMocIndex) is imported by module path, not here:
+# the package root stays xarray-import-free (the repo's lazy-import posture),
+# and the index reaches most users through open_hive(index_kind="moc").
 from moczarr.store import (
     bitmap_and,
     load_root_coverage,
@@ -53,6 +58,7 @@ __all__ = [
     "HIVE_SPEC",
     "HIVE_SPEC_V2",
     "MANIFEST_NAME",
+    "MortonRanges",
     "ROOT_COVERAGE_NAME",
     "__version__",
     "aoi_mask",
