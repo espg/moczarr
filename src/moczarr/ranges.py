@@ -12,10 +12,16 @@ mortie packs the base+digit field MSB-aligned with an order marker in the
 low bits, so consecutive rank tails differ by a large power-of-two stride.
 But ``word >> shift`` (the base+digit field alone) IS unit-stride: it is a
 global rank coordinate ``K`` at the cell order, contiguous across
-rank-consecutive shard subtrees within a base cell (verified across sibling
-and parent-crossing boundaries) and monotonic everywhere words are. All
-intervals here therefore live in K space, inclusive ``[lo, hi]``; words
-convert at the boundaries via ``word = (K << shift) | marker``. The
+rank-consecutive shard subtrees (verified across sibling and parent-crossing
+boundaries) and monotonic everywhere words are. Base blocks are mutually
+contiguous in K — mortie packs ``+1..+6`` into blocks ``1..6`` and
+``-1..-6`` into blocks ``7..12`` densely, with only block ``0`` unused — so
+``_coalesce`` may merge intervals straight across a base or hemisphere seam
+(the ``+6/-1`` boundary merges into one interval; pinned in
+``tests/test_ranges.py``). Correctness rests on that adjacency-merging being
+safe, not on any inter-base gap existing. All intervals here therefore live
+in K space, inclusive ``[lo, hi]``; words convert at the boundaries via
+``word = (K << shift) | marker``. The
 ``(shift, marker)`` pair is derived empirically from mortie's own packing at
 construction (two ``morton_word`` calls, cached) — never hardcoded — and
 subtree spans are re-checked against ``4**depth``, so packing drift raises
