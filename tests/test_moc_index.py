@@ -8,6 +8,7 @@ classes skip in core-only envs (they need the ``[xdggs]`` extra to build the
 pandas side); everything else is xarray-only.
 """
 
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -146,7 +147,9 @@ class TestSelParity:
 
     def test_non_monotonic_list_drops_lazy_index(self, ds_moc, ds_pandas):
         words = [int(v) for v in ds_pandas["morton"].values[[7, 2]]]
-        got, want = ds_moc.sel(morton=words), ds_pandas.sel(morton=words)
+        with pytest.warns(UserWarning, match=r"not representable.*lazy index was dropped"):
+            got = ds_moc.sel(morton=words)
+        want = ds_pandas.sel(morton=words)
         np.testing.assert_array_equal(got["morton"].values, want["morton"].values)
         np.testing.assert_array_equal(got["count"].values, want["count"].values)
         assert "morton" not in got.xindexes  # unrepresentable: index dropped
@@ -194,9 +197,24 @@ class TestIselParity:
 
     def test_non_monotonic_drops_lazy_index(self, ds_moc, ds_pandas):
         indexer = np.asarray([9, 3, 3])
-        got, want = ds_moc.isel(cells=indexer), ds_pandas.isel(cells=indexer)
+        with pytest.warns(UserWarning, match=r"not representable.*lazy index was dropped"):
+            got = ds_moc.isel(cells=indexer)
+        want = ds_pandas.isel(cells=indexer)
         np.testing.assert_array_equal(got["morton"].values, want["morton"].values)
         assert "morton" not in got.xindexes
+
+    def test_representable_selects_do_not_warn(self, ds_moc, ds_pandas):
+        # Only the unrepresentable (non-monotonic/duplicated) drop paths warn;
+        # representable subsets — and the dimensionless scalar collapse — stay
+        # silent (finding: warn on the drop, not on ordinary selection).
+        words = [int(v) for v in ds_pandas["morton"].values[3:9]]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            ds_moc.sel(morton=words)  # monotonic list -> index kept
+            ds_moc.sel(morton=int(ds_pandas["morton"].values[5]))  # scalar sel
+            ds_moc.isel(cells=slice(3, 30))  # unit-step slice -> kept
+            ds_moc.isel(cells=np.asarray([0, 4, 17, 40]))  # increasing -> kept
+            ds_moc.isel(cells=7)  # scalar collapse: dimensionless, not a drop
 
 
 class TestAlignment:
