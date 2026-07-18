@@ -200,8 +200,8 @@ class TestMortonIndex:
         index = ds.xindexes["morton"]
         assert isinstance(index, dggs.MortonIndex)
         assert "cell_ids" in ds.coords and "cell_ids" not in ds.xindexes
-        assert repr(index) == "<MortonIndex(level=8)>"
-        assert index._repr_inline_(80) == "MortonIndex(level=8)"
+        assert repr(index) == "<MortonIndex(level=8, kind=pandas)>"
+        assert index._repr_inline_(80) == "MortonIndex(level=8, kind=pandas)"
 
     def test_isel_keeps_index(self, serc):
         ds = open_hive(serc, decode=True).isel(cells=[0, 1])

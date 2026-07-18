@@ -264,3 +264,155 @@ class TestOpenHiveWalkFallback:
         # And with the window given, the arithmetic path opens it.
         ds = open_hive(str(copy), window="2019", aoi=[SERC_SHARD])
         assert ds.sizes["cells"] == 16
+
+
+class TestOpenHiveMocIndex:
+    """``index_kind="moc"``: the lazy-index opener path (phase 5c).
+
+    The acceptance is FULL equality against the pandas path — same data
+    vars, same coordinate values (morton fabricated, cell_ids fabricated
+    NESTED) — with zero coordinate-chunk reads.
+    """
+
+    def _assert_equal_datasets(self, want, got):
+        assert set(want.variables) == set(got.variables)
+        for name in want.variables:
+            np.testing.assert_array_equal(want[name].values, got[name].values)
+            assert want[name].dtype == got[name].dtype
+        assert want.attrs["morton_hive"] == got.attrs["morton_hive"]
+
+    def test_full_store_equality(self, serc):
+        from moczarr.moc_index import MortonMocIndex
+
+        want = open_hive(serc)
+        got = open_hive(serc, index_kind="moc")
+        self._assert_equal_datasets(want, got)
+        assert isinstance(got.xindexes["morton"], MortonMocIndex)
+        assert "morton" not in want.xindexes  # default posture unchanged
+
+    @pytest.mark.parametrize(
+        "aoi",
+        [
+            [SERC_SHARD],  # shard order
+            ["433142224"],  # the occupied cell (cell order)
+            [SERC_SHARD, "433124"],  # multiple shards
+            ["43314"],  # coarser than shard order
+        ],
+    )
+    def test_aoi_equality(self, serc, aoi):
+        # Row domain = intervals ∩ AOI must equal the pandas path's aoi_mask
+        # rows exactly (same leaf gating: stamps, box reject, empty mask).
+        self._assert_equal_datasets(
+            open_hive(serc, aoi=aoi), open_hive(serc, aoi=aoi, index_kind="moc")
+        )
+
+    def test_aoi_outside_coverage_raises(self, serc):
+        with pytest.raises(ValueError, match="for the given AOI"):
+            open_hive(serc, aoi=["-5112333"], index_kind="moc")
+
+    def test_walk_fallback_equality(self, serc, tmp_path):
+        # No root MOC: the domain builds from the walked shard list — same
+        # arithmetic, same answer (D9).
+        copy = tmp_path / "serc"
+        shutil.copytree(FIXTURE, copy)
+        (copy / convention.ROOT_COVERAGE_NAME).unlink()
+        self._assert_equal_datasets(open_hive(str(copy)), open_hive(str(copy), index_kind="moc"))
+
+    def test_morton_only_store(self, serc, tmp_path):
+        # zagg#262 composition: on a store with no cell_ids arrays at all,
+        # "auto" fabricates NESTED off the index's fabricated words — golden
+        # parity against the original store's zagg-written array.
+        from test_fabricate import _morton_only_copy
+
+        golden = open_hive(serc, fabricate_cell_ids=False)["cell_ids"].values
+        ds = open_hive(_morton_only_copy(tmp_path), index_kind="moc")
+        np.testing.assert_array_equal(ds["cell_ids"].values, golden)
+
+    def test_fabricate_false_no_cell_ids(self, serc):
+        ds = open_hive(serc, index_kind="moc", fabricate_cell_ids=False)
+        assert "cell_ids" not in ds.variables
+
+    def test_zero_coordinate_chunk_reads(self, serc, monkeypatch):
+        # The plan's acceptance counter: a moc open GETs NO morton/cell_ids
+        # chunk objects — even with an AOI, even with the data loaded — while
+        # the pandas AOI path must read morton chunks (the row-mask truth).
+        import obstore
+
+        keys: list[str] = []
+        real_get, real_get_async = obstore.get, obstore.get_async
+
+        def record(store_, key, *args, **kwargs):
+            keys.append(key)
+            return real_get(store_, key, *args, **kwargs)
+
+        def record_async(store_, key, *args, **kwargs):
+            keys.append(key)
+            return real_get_async(store_, key, *args, **kwargs)
+
+        monkeypatch.setattr(obstore, "get", record)
+        monkeypatch.setattr(obstore, "get_async", record_async)
+
+        def coord_chunks():
+            return [k for k in keys if "/morton/c" in k or "/cell_ids/c" in k]
+
+        ds = open_hive(serc, aoi=[SERC_SHARD], index_kind="moc")
+        ds["count"].values  # force the data reads; they must still flow
+        assert coord_chunks() == []
+        keys.clear()
+        open_hive(serc, aoi=[SERC_SHARD])
+        assert coord_chunks() != []
+
+    def test_invalid_index_kind_raises(self, serc):
+        with pytest.raises(ValueError, match="index_kind"):
+            open_hive(serc, index_kind="lazy")
+
+    def test_decode_wraps_lazy_index(self, serc):
+        dggs = pytest.importorskip("moczarr.dggs")
+        from moczarr.moc_index import MortonMocIndex
+
+        ds = open_hive(serc, index_kind="moc", decode=True)
+        index = ds.xindexes["morton"]
+        assert isinstance(index, dggs.MortonIndex)
+        assert index._kind == "moc"
+        assert isinstance(index._index, MortonMocIndex)
+        # The accessor rides the lazy index; grid attrs round-trip.
+        assert ds["morton"].attrs["grid_name"] == "morton"
+        centers = ds.dggs.cell_centers()
+        assert centers["latitude"].sizes["cells"] == ds.sizes["cells"]
+        # sel through the wrapped index agrees with the core index.
+        word = int(ds["morton"].values[5])
+        assert int(ds.sel(morton=word)["count"]) == int(ds.isel(cells=5)["count"])
+
+    def test_decode_moc_from_materialized_words(self, serc):
+        # decode(index_kind="moc") on a dataset WITHOUT a lazy index —
+        # run-detects the materialized coordinate into intervals.
+        dggs = pytest.importorskip("moczarr.dggs")
+        from moczarr.moc_index import MortonMocIndex
+
+        ds = dggs.decode(open_hive(serc), index_kind="moc")
+        assert isinstance(ds.xindexes["morton"]._index, MortonMocIndex)
+        np.testing.assert_array_equal(ds["morton"].values, open_hive(serc)["morton"].values)
+
+    def test_windowed_store_moc(self, serc, tmp_path):
+        # The /2 arithmetic path composes: same leaf, lazy domain.
+        copy = tmp_path / "serc"
+        shutil.copytree(FIXTURE, copy)
+        manifest = json.loads((copy / convention.MANIFEST_NAME).read_text())
+        manifest["spec"] = convention.HIVE_SPEC_V2
+        manifest["temporal"] = {"schedule": "yearly", "time_field": "delta_time"}
+        (copy / convention.MANIFEST_NAME).write_text(json.dumps(manifest))
+        rel = convention.leaf_path(SERC_SHARD)
+        node = (copy / rel).parent
+        (copy / rel).rename(node / f"{SERC_SHARD}_2019.zarr")
+        want = open_hive(str(copy), window="2019", aoi=[SERC_SHARD])
+        got = open_hive(str(copy), window="2019", aoi=[SERC_SHARD], index_kind="moc")
+        self._assert_equal_datasets(want, got)
+
+    def test_sel_isel_on_result(self, serc):
+        # Integration smoke: label and positional selection on the opener's
+        # lazy result (the deep flows are pinned in test_moc_index.py).
+        ds = open_hive(serc, index_kind="moc")
+        sub = ds.sel(morton=[int(w) for w in ds["morton"].values[4:8]])
+        np.testing.assert_array_equal(
+            sub["count"].values, ds.isel(cells=slice(4, 8))["count"].values
+        )
