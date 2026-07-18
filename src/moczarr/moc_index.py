@@ -21,6 +21,7 @@ align/join must be opened with the same ``index_kind``.
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Hashable, Iterator, Mapping
 from typing import Any
 
@@ -30,6 +31,30 @@ from xarray.core.indexing import IndexSelResult
 
 from moczarr.convention import morton_word
 from moczarr.ranges import MortonRanges
+
+
+def _warn_index_dropped() -> None:
+    """Signal that an unrepresentable selection dropped the lazy index.
+
+    An interval set has no reordering freedom, so a non-monotonic or
+    duplicated positional pick cannot round-trip through it. The selected
+    *values* stay correct (xarray falls back to the already-fabricated
+    coordinate), but the result carries no ``MortonMocIndex`` — a silent type
+    change the reviewer asked to make observable. Both ``sel`` (which xarray
+    lowers to a positional ``isel``) and a direct ``isel`` land here, so the
+    single warning site lives on the ``isel`` drop path — warning in ``sel``
+    too would double-fire the same user action. ``stacklevel=3`` aims the
+    warning past this helper and ``isel`` toward the caller; xarray's variable
+    internal depth makes an exact user frame unreachable by a fixed level.
+    """
+    warnings.warn(
+        "MortonMocIndex: this positional selection is not representable as an "
+        "interval set (a non-monotonic or duplicated pick); the lazy index was "
+        "dropped. Selected values remain correct, but the result carries no "
+        'morton index (reopen with index_kind="moc" or set_xindex to restore it).',
+        UserWarning,
+        stacklevel=3,
+    )
 
 
 def _normalize_chunks(chunks: int | tuple[int, ...] | None, size: int) -> tuple[int, ...] | None:
@@ -246,13 +271,23 @@ class MortonMocIndex(xr.Index):
         try:
             indexes = {self._name: self._replace(self._ranges.subset(positions))}
         except ValueError:
-            pass  # non-monotonic pick: the lazy index drops, values still select
+            # Non-monotonic pick: values still select; the drop warning fires
+            # on the positional isel xarray lowers this to (single warn site).
+            pass
         return IndexSelResult({self._dim: positions}, indexes=indexes)
 
     def isel(
         self, indexers: Mapping[Any, int | slice | np.ndarray | xr.Variable]
     ) -> "MortonMocIndex | None":
-        """Positional subset in interval algebra; ``None`` when unrepresentable."""
+        """Positional subset in interval algebra; ``None`` when unrepresentable.
+
+        A non-monotonic or duplicated indexer cannot round-trip an interval
+        set, so the lazy index drops (values stay correct) and a
+        ``UserWarning`` fires — this is also where a ``sel`` drop surfaces,
+        since xarray lowers label selection to a positional ``isel``. A scalar
+        collapse returns ``None`` silently — the dimension is gone, so there is
+        no index to keep.
+        """
         indexer = indexers[self._dim]
         if isinstance(indexer, xr.Variable):
             indexer = indexer.data
@@ -261,7 +296,8 @@ class MortonMocIndex(xr.Index):
         try:
             return self._replace(self._ranges.subset(indexer))
         except ValueError:
-            return None  # non-monotonic/duplicated picks: drop the lazy index
+            _warn_index_dropped()  # non-monotonic/duplicated picks
+            return None
 
     def equals(self, other: xr.Index, **kwargs) -> bool:
         """Domain equality; pairing with a non-MOC index raises pointedly."""
