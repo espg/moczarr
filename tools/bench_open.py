@@ -5,8 +5,11 @@ imported by path — moczarr-only, no zagg) and reports, per ``open_hive``
 posture:
 
 - obstore store constructions (the phase-1 O(1) acceptance),
-- object-store request counts (GETs and delimiter-LISTs),
+- object-store request counts (GETs and delimiter-LISTs), with
+  morton/cell_ids CHUNK GETs broken out (the phase-5 lazy-index acceptance:
+  ``index_kind="moc"`` must show ZERO),
 - wall clock, serial (``concurrency=1``) vs batched (``concurrency=32``),
+  for ``index_kind="pandas"`` and ``index_kind="moc"``,
 
 plus the phase-3 MEASUREMENT arm espg ratified on the issue: thread-pooled
 per-leaf DATA opens (``xr.open_zarr`` over the shared wrapper in a
@@ -42,7 +45,14 @@ class Counters:
     def __init__(self):
         self.constructions = 0
         self.gets = 0
+        self.coord_chunk_gets = 0  # GETs of morton/cell_ids CHUNK objects
         self.lists = 0
+
+    def _classify_get(self, args, kwargs):
+        self.gets += 1
+        key = args[1] if len(args) > 1 else kwargs.get("path", "")
+        if "/morton/c" in str(key) or "/cell_ids/c" in str(key):
+            self.coord_chunk_gets += 1
 
     def install(self):
         import obstore
@@ -59,11 +69,11 @@ class Counters:
             return real_open(path, **kwargs)
 
         def counting_get(*args, **kwargs):
-            self.gets += 1
+            self._classify_get(args, kwargs)
             return real_get(*args, **kwargs)
 
         def counting_get_async(*args, **kwargs):
-            self.gets += 1
+            self._classify_get(args, kwargs)
             return real_get_async(*args, **kwargs)
 
         def counting_list(*args, **kwargs):
@@ -86,18 +96,21 @@ class Counters:
         # tiers (manifest, MOC, stamps, walk).
 
     def reset(self):
-        self.constructions = self.gets = self.lists = 0
+        self.constructions = self.gets = self.coord_chunk_gets = self.lists = 0
 
 
-def bench_open(root: str, counters: Counters, concurrency: int | None) -> dict:
+def bench_open(
+    root: str, counters: Counters, concurrency: int | None, index_kind: str = "pandas"
+) -> dict:
     counters.reset()
     t0 = time.perf_counter()
-    ds = open_hive(root, concurrency=concurrency)
+    ds = open_hive(root, concurrency=concurrency, index_kind=index_kind)
     elapsed = time.perf_counter() - t0
     return {
         "cells": ds.sizes["cells"],
         "constructions": counters.constructions,
         "gets": counters.gets,
+        "coord_chunk_gets": counters.coord_chunk_gets,
         "lists": counters.lists,
         "wall_s": elapsed,
     }
@@ -150,19 +163,30 @@ def main() -> None:
     with tempfile.TemporaryDirectory() as tmp:
         root = build_many_leaf_store(Path(tmp) / "store", shards)
         rows = [
-            ("serial (concurrency=1)", bench_open(root, counters, 1)),
+            ("pandas, serial (concurrency=1)", bench_open(root, counters, 1)),
             (
-                f"batched (concurrency={args.concurrency})",
+                f"pandas, batched (concurrency={args.concurrency})",
                 bench_open(root, counters, args.concurrency),
+            ),
+            (
+                "moc, serial (concurrency=1)",
+                bench_open(root, counters, 1, index_kind="moc"),
+            ),
+            (
+                f"moc, batched (concurrency={args.concurrency})",
+                bench_open(root, counters, args.concurrency, index_kind="moc"),
             ),
         ]
         print(f"\nopen_hive over {len(shards)} leaves (local fs):\n")
-        print("| posture | store constructions | GETs | LISTs | wall clock |")
-        print("|---|---|---|---|---|")
+        print(
+            "| index_kind + posture | store constructions | GETs | coord-chunk GETs "
+            "| LISTs | wall clock |"
+        )
+        print("|---|---|---|---|---|---|")
         for name, r in rows:
             print(
-                f"| {name} | {r['constructions']} | {r['gets']} | {r['lists']} "
-                f"| {r['wall_s']:.2f} s |"
+                f"| {name} | {r['constructions']} | {r['gets']} | {r['coord_chunk_gets']} "
+                f"| {r['lists']} | {r['wall_s']:.2f} s |"
             )
         leaf = bench_threaded_leaf_opens(root, shards, args.workers)
         print(f"\nleaf DATA opens, measurement only ({len(shards)} leaves):\n")
