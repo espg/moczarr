@@ -77,6 +77,91 @@ class TestRankSpace:
         assert ranges.size == 32
 
 
+def _subtree_words(shard, cell_order):
+    """Independent oracle: every cell of a shard's subtree, enumerated by
+    decimal tail (no interval machinery), for cross-checking ``fabricate()``."""
+    depth = cell_order - convention.decimal_order(shard)
+    return [convention.morton_word(shard + convention.rank_tail(r, depth)) for r in range(4**depth)]
+
+
+class TestSouthernAndMultiBaseGoldens:
+    """Literal-pinned southern + cross-base goldens (no store, pure arithmetic).
+
+    The SERC fixture is a single northern base (4) at order 8, so every other
+    ``MortonRanges`` golden rides one northern base. The substrate's most
+    counterintuitive behavior lives where that fixture structurally cannot
+    reach: the sign encoding (southern bases pack into K blocks *above*
+    northern ones), and the ``+6/-1`` base seam. These literals were derived
+    once from mortie and hard-coded — a packing change in the southern or
+    cross-base regime fails here rather than passing silently on the northern
+    fixture (the phase-4 southern-golden precedent, tests/test_fabricate.py).
+    """
+
+    # base -5, two rank-adjacent order-7 shards at cell order 8 (depth 1): the
+    # subtrees merge into a single K interval; fabricate() is these 8 words.
+    SOUTH_SHARDS = ("-51111111", "-51111112")
+    SOUTH_INTERVAL = [720896, 720903]
+    SOUTH_WORDS = (
+        12682136550675316744,
+        12682154142861361160,
+        12682171735047405576,
+        12682189327233449992,
+        12682206919419494408,
+        12682224511605538824,
+        12682242103791583240,
+        12682259695977627656,
+    )
+
+    # +6/-1 seam: base 6's max shard and base -1's min shard are K-adjacent
+    # (base 6 Kmax 458751, base -1 K0 458752), so their subtrees COALESCE into
+    # one interval — the seam is contiguous in K, not a break.
+    SEAM_SHARDS = ("6444444", "-1111111")
+    SEAM_INTERVAL = [458736, 458767]
+
+    # bases 3, 6, -1, -4 (order-6 shards, none at the max/min of its base):
+    # NON-adjacent, so four separate intervals ordered northern-then-southern.
+    MULTI_SHARDS = ("3444444", "6111111", "-1111111", "-4444444")
+    MULTI_INTERVALS = [[262128, 262143], [393216, 393231], [458752, 458767], [720880, 720895]]
+
+    def test_southern_fabricate_literals(self):
+        words = [convention.morton_word(s) for s in self.SOUTH_SHARDS]
+        ranges = MortonRanges.from_shards(words, CELL_ORDER)
+        assert ranges.intervals.tolist() == [self.SOUTH_INTERVAL]
+        np.testing.assert_array_equal(
+            ranges.fabricate(), np.asarray(self.SOUTH_WORDS, dtype=np.uint64)
+        )
+
+    def test_southern_rank_take_round_trip(self):
+        words = [convention.morton_word(s) for s in self.SOUTH_SHARDS]
+        ranges = MortonRanges.from_shards(words, CELL_ORDER)
+        fabricated = np.asarray(self.SOUTH_WORDS, dtype=np.uint64)
+        positions = np.arange(ranges.size, dtype=np.int64)
+        np.testing.assert_array_equal(ranges.take(positions), fabricated)
+        np.testing.assert_array_equal(ranges.rank(fabricated), positions)
+        assert ranges.member(fabricated).all()
+
+    def test_plus6_minus1_seam_coalesces(self):
+        words = [convention.morton_word(s) for s in self.SEAM_SHARDS]
+        ranges = MortonRanges.from_shards(words, CELL_ORDER)
+        assert ranges.intervals.tolist() == [self.SEAM_INTERVAL]  # one interval
+        assert ranges.size == 32
+        oracle = np.asarray(
+            sorted(w for sh in self.SEAM_SHARDS for w in _subtree_words(sh, CELL_ORDER)),
+            dtype=np.uint64,
+        )
+        np.testing.assert_array_equal(ranges.fabricate(), oracle)
+
+    def test_multi_base_orders_and_separates(self):
+        words = [convention.morton_word(s) for s in self.MULTI_SHARDS]
+        ranges = MortonRanges.from_shards(words, CELL_ORDER)
+        assert ranges.intervals.tolist() == self.MULTI_INTERVALS
+        oracle = np.asarray(
+            sorted(w for sh in self.MULTI_SHARDS for w in _subtree_words(sh, CELL_ORDER)),
+            dtype=np.uint64,
+        )
+        np.testing.assert_array_equal(ranges.fabricate(), oracle)
+
+
 class TestFabricateParity:
     """fabricate() byte-equal to the eager opener's morton coordinate."""
 
