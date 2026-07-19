@@ -10,7 +10,7 @@ is deliberately NOT here: fine→coarse reduction is plain xarray groupby over
 the parent coordinate::
 
     parents = moczarr.parent_cells(fine, level)
-    coarse = fine.assign_coords(parents).groupby(parents.name).mean()
+    coarse = fine.groupby(parents).mean()
 
 and *persisted* coarse products are zagg#300's pyramid sweep.
 
