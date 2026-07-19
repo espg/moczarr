@@ -117,7 +117,8 @@ class TestOpenHive:
         # empty returns nothing (the tier-0 box rejects the leaf) — fill rows
         # are not data. The box being conservative means SOME fill rows can
         # still come back on box false-positives; none-at-all is the empty
-        # case.
+        # case: a schema-correct 0-row dataset plus a UserWarning, never fill
+        # rows (issue #4).
         occupied = store.read_coverage_bitmap(serc, convention.leaf_path(SERC_SHARD))
         empty = next(
             SERC_SHARD + a + b
@@ -125,8 +126,9 @@ class TestOpenHive:
             for b in "1234"
             if convention.morton_word(SERC_SHARD + a + b) not in set(int(w) for w in occupied)
         )
-        with pytest.raises(ValueError, match="for the given AOI"):
-            open_hive(serc, aoi=[empty])
+        with pytest.warns(UserWarning, match="intersects no coverage"):
+            ds = open_hive(serc, aoi=[empty])
+        assert ds.sizes["cells"] == 0
 
     def test_unknown_leaf_coverage_spec_degrades_to_open(self, serc, tmp_path):
         # D9: an unknown leaf-coverage spec must NOT be half-parsed. The box
@@ -153,9 +155,12 @@ class TestOpenHive:
         by_word = open_hive(serc, aoi=np.asarray([convention.morton_word(SERC_SHARD)]))
         np.testing.assert_array_equal(by_str["morton"].values, by_word["morton"].values)
 
-    def test_aoi_outside_coverage_raises(self, serc):
-        with pytest.raises(ValueError, match="for the given AOI"):
-            open_hive(serc, aoi=["-5112333"])  # southern ocean, not SERC
+    def test_aoi_outside_coverage_is_empty(self, serc):
+        # Issue #4: a miss against a covered store is a data answer — empty
+        # dataset plus warning, not a raise (see TestEmptyAoi for the schema).
+        with pytest.warns(UserWarning, match="intersects no coverage"):
+            ds = open_hive(serc, aoi=["-5112333"])  # southern ocean, not SERC
+        assert ds.sizes["cells"] == 0
 
     def test_not_a_hive_store_raises(self, tmp_path):
         (tmp_path / "empty").mkdir()
@@ -165,6 +170,124 @@ class TestOpenHive:
     def test_window_on_unwindowed_store_raises(self, serc):
         with pytest.raises(ValueError, match="unwindowed"):
             open_hive(serc, window="2019")
+
+
+#: An AOI intersecting none of the SERC fixture's coverage (southern ocean).
+OUTSIDE = "-5112333"
+
+
+class TestEmptyAoi:
+    """Issue #4: an AOI (or window) over no coverage returns a schema-correct
+    empty Dataset plus a ``UserWarning`` — raising is reserved for a store
+    with no stamped coverage anywhere (``NoCoverageError``)."""
+
+    def _empty(self, root, **kwargs):
+        with pytest.warns(UserWarning, match="intersects no coverage") as record:
+            ds = open_hive(root, aoi=[OUTSIDE], **kwargs)
+        return ds, record
+
+    def test_schema_matches_nonempty_open(self, serc):
+        full = open_hive(serc)
+        empty, record = self._empty(serc)
+        assert empty.sizes["cells"] == 0
+        assert set(empty.data_vars) == set(full.data_vars)
+        for name in full.data_vars:
+            assert empty[name].dtype == full[name].dtype
+            assert empty[name].attrs == full[name].attrs
+        assert set(empty.coords) == set(full.coords)
+        for name in full.coords:
+            assert empty[name].dtype == full[name].dtype
+        assert empty.attrs["morton_hive"] == full.attrs["morton_hive"]
+        # The warning names the store and lands on user code (stacklevel).
+        ours = [w for w in record if "intersects no coverage" in str(w.message)]
+        assert serc in str(ours[0].message)
+        assert ours[0].filename == __file__
+
+    def test_concat_roundtrips(self, serc):
+        # The composability the issue asks for: concat with the empty result
+        # is the identity — values equal and, because both sides carry every
+        # variable (nothing to fill), dtypes are preserved: no int→float NaN
+        # promotion (pinned here, documented in open_hive's docstring).
+        full = open_hive(serc)
+        empty, _ = self._empty(serc)
+        cat = xr.concat([empty, full], dim="cells")
+        assert cat.sizes["cells"] == full.sizes["cells"]
+        for name in full.variables:
+            np.testing.assert_array_equal(cat[name].values, full[name].values)
+            assert cat[name].dtype == full[name].dtype
+
+    def test_moc_index_empty(self, serc):
+        from moczarr.moc_index import MortonMocIndex
+
+        empty, _ = self._empty(serc, index_kind="moc")
+        index = empty.xindexes["morton"]
+        assert isinstance(index, MortonMocIndex)
+        assert index.size == 0
+        assert empty.sizes["cells"] == 0
+        assert empty["morton"].dtype == np.uint64
+        assert empty["cell_ids"].dtype == np.uint64  # "auto" fabricates empty
+
+    def test_decode_empty(self, serc):
+        dggs = pytest.importorskip("moczarr.dggs")
+        for kind in ("pandas", "moc"):
+            empty, _ = self._empty(serc, decode=True, index_kind=kind)
+            assert isinstance(empty.xindexes["morton"], dggs.MortonIndex)
+            assert empty.sizes["cells"] == 0
+
+    def test_fabricate_toggles_on_empty(self, serc):
+        off, _ = self._empty(serc, index_kind="moc", fabricate_cell_ids=False)
+        assert "cell_ids" not in off.variables
+        on, _ = self._empty(serc, fabricate_cell_ids=True)
+        assert on["cell_ids"].dtype == np.uint64
+        assert on.sizes["cells"] == 0
+
+    def test_walk_fallback_empty(self, serc, tmp_path):
+        # Same posture with no root MOC: the walk finds coverage, the AOI
+        # misses it, the answer is still the schema-correct empty dataset.
+        copy = tmp_path / "serc"
+        shutil.copytree(FIXTURE, copy)
+        (copy / convention.ROOT_COVERAGE_NAME).unlink()
+        empty, _ = self._empty(str(copy))
+        assert empty.sizes["cells"] == 0
+        assert "count" in empty.data_vars
+
+    def test_window_scoped_empty(self, serc, tmp_path):
+        # The /2 pattern: a label in the store's vocabulary that holds no
+        # data is a data answer (empty), not an error — the schema comes from
+        # a stamped leaf in ANOTHER window (store-uniform schema).
+        copy = tmp_path / "serc"
+        shutil.copytree(FIXTURE, copy)
+        manifest = json.loads((copy / convention.MANIFEST_NAME).read_text())
+        manifest["spec"] = convention.HIVE_SPEC_V2
+        manifest["temporal"] = {"schedule": "yearly", "time_field": "delta_time"}
+        (copy / convention.MANIFEST_NAME).write_text(json.dumps(manifest))
+        rel = convention.leaf_path(SERC_SHARD)
+        (copy / rel).rename((copy / rel).parent / f"{SERC_SHARD}_2019.zarr")
+        with pytest.warns(UserWarning, match="window '2020' intersects no coverage"):
+            ds = open_hive(str(copy), window="2020")
+        assert ds.sizes["cells"] == 0
+        assert "count" in ds.data_vars
+        # A label that fails the frozen grammar still raises, as before.
+        with pytest.raises(ValueError, match="grammar"):
+            open_hive(str(copy), window="20 20")
+
+    def test_no_stamped_coverage_raises(self, tmp_path):
+        # The genuinely exceptional case: a hive root (manifest present) with
+        # ZERO committed leaves has no schema source — NoCoverageError on any
+        # open, AOI or not. Debris (templated but unstamped) is not coverage.
+        from conftest import _manifest, _write_json, _zarr_group
+
+        from moczarr import NoCoverageError
+
+        root = tmp_path / "bare"
+        _write_json(root / convention.MANIFEST_NAME, _manifest())
+        _write_json(root / convention.leaf_path(SERC_SHARD) / "zarr.json", _zarr_group({}))
+        with pytest.raises(NoCoverageError, match="no stamped coverage"):
+            open_hive(str(root))
+        with pytest.raises(NoCoverageError, match="no stamped coverage"):
+            open_hive(str(root), aoi=[SERC_SHARD])
+        with pytest.raises(ValueError):  # back-compat: still catchable as ValueError
+            open_hive(str(root))
 
 
 class TestSharedHandle:
@@ -306,9 +429,15 @@ class TestOpenHiveMocIndex:
             open_hive(serc, aoi=aoi), open_hive(serc, aoi=aoi, index_kind="moc")
         )
 
-    def test_aoi_outside_coverage_raises(self, serc):
-        with pytest.raises(ValueError, match="for the given AOI"):
-            open_hive(serc, aoi=["-5112333"], index_kind="moc")
+    def test_aoi_outside_coverage_is_empty(self, serc):
+        # Issue #4 on the moc path: empty interval domain, index attached.
+        from moczarr.moc_index import MortonMocIndex
+
+        with pytest.warns(UserWarning, match="intersects no coverage"):
+            ds = open_hive(serc, aoi=["-5112333"], index_kind="moc")
+        assert ds.sizes["cells"] == 0
+        assert isinstance(ds.xindexes["morton"], MortonMocIndex)
+        assert ds.xindexes["morton"].size == 0
 
     def test_walk_fallback_equality(self, serc, tmp_path):
         # No root MOC: the domain builds from the walked shard list — same
