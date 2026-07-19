@@ -299,9 +299,10 @@ class MortonMocIndex(xr.Index):
         set, so the lazy index drops (values stay correct) — this is also
         where a ``sel`` drop surfaces, since xarray lowers label selection to
         a positional ``isel``. A duplicate-free non-monotonic pick warns on
-        the drop; a pick containing duplicates drops *silently* (phase 6b:
-        the repeated-label lookup a truncation join issues is never
-        representable, so the drop is by design — see
+        the drop; *any* duplicate-containing pick drops *silently* — an
+        interval set cannot hold duplicates, and warning on every truncation-
+        join lookup (phase 6b) would be noise, so a user-initiated duplicate
+        ``sel(morton=[w, w])`` is included in that silence too (see
         :func:`_warn_index_dropped`). A scalar collapse returns ``None``
         silently — the dimension is gone, so there is no index to keep.
         """
@@ -319,7 +320,10 @@ class MortonMocIndex(xr.Index):
                 positions = np.asarray(indexer, dtype=np.int64).ravel()
                 positions = np.where(positions < 0, positions + self.size, positions)
                 if np.unique(positions).size < positions.size:
-                    return None  # duplicate-label lookup (phase 6b): by design
+                    # Any duplicate-containing pick drops silently, incl. a
+                    # user-initiated sel(morton=[w, w]) — interval sets cannot
+                    # hold duplicates, so there is nothing to warn toward.
+                    return None
             _warn_index_dropped()  # duplicate-free non-monotonic picks
             return None
 
