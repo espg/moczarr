@@ -27,7 +27,7 @@ from moczarr.coverage import (
     root_coverage_and,
 )
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
-from moczarr.join import parent_cells
+from moczarr.join import join_coarse, parent_cells
 from moczarr.open import open_hive
 from moczarr.ranges import MortonRanges
 
@@ -69,6 +69,7 @@ __all__ = [
     "check_node_invariant",
     "decode_bitmap",
     "fabricate_cell_ids",
+    "join_coarse",
     "leaf_path",
     "load_root_coverage",
     "morton_decimal",
