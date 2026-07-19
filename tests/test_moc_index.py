@@ -196,7 +196,9 @@ class TestIselParity:
         assert "morton" not in got.xindexes
 
     def test_non_monotonic_drops_lazy_index(self, ds_moc, ds_pandas):
-        indexer = np.asarray([9, 3, 3])
+        # Duplicate-free so the reorder warning stays pinned; duplicated
+        # picks are the silent phase-6b lookup path (TestDuplicateLabels).
+        indexer = np.asarray([9, 3])
         with pytest.warns(UserWarning, match=r"not representable.*lazy index was dropped"):
             got = ds_moc.isel(cells=indexer)
         want = ds_pandas.isel(cells=indexer)
@@ -215,6 +217,64 @@ class TestIselParity:
             ds_moc.isel(cells=slice(3, 30))  # unit-step slice -> kept
             ds_moc.isel(cells=np.asarray([0, 4, 17, 40]))  # increasing -> kept
             ds_moc.isel(cells=7)  # scalar collapse: dimensionless, not a drop
+
+
+class TestDuplicateLabels:
+    """Phase 6b: repeated labels select like ``PandasIndex`` — silently.
+
+    The truncation join's lookup (``coarse.sel(morton=parent_cells(...))``)
+    repeats each coarse label once per fine child, so repeated-label ``sel``
+    must return repeated positions in label order without the unrepresentable
+    warning; the lazy index drops by design (an interval set cannot hold
+    duplicate labels).
+    """
+
+    def test_repeated_labels_match_pandas(self, ds_moc, ds_pandas):
+        words = [int(v) for v in ds_pandas["morton"].values[[3, 3, 5]]]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            got = ds_moc.sel(morton=words)
+        want = ds_pandas.sel(morton=words)
+        np.testing.assert_array_equal(got["morton"].values, want["morton"].values)
+        np.testing.assert_array_equal(got["count"].values, want["count"].values)
+        assert "morton" not in got.xindexes  # duplicates: dropped by design
+
+    def test_mixed_order_of_appearance(self, ds_moc, ds_pandas):
+        # Repeats interleaved out of ascending order: positions follow the
+        # LABEL order, not the domain order (searchsorted is elementwise).
+        words = [int(v) for v in ds_pandas["morton"].values[[7, 2, 2, 11, 7]]]
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            got = ds_moc.sel(morton=words)
+        want = ds_pandas.sel(morton=words)
+        np.testing.assert_array_equal(got["morton"].values, want["morton"].values)
+        np.testing.assert_array_equal(got["count"].values, want["count"].values)
+
+    def test_missing_among_repeats_keyerror_parity(self, ds_moc, ds_pandas):
+        present = int(ds_pandas["morton"].values[3])
+        # An order-8 cell under the absent shard 4331423 (int64-safe, so the
+        # mixed list does not coerce to float64 on the pandas side).
+        missing = convention.morton_word("433142311")
+        with pytest.raises(KeyError):
+            ds_pandas.sel(morton=[present, present, missing])
+        with pytest.raises(KeyError):
+            ds_moc.sel(morton=[present, present, missing])
+
+    def test_duplicated_isel_is_silent(self, ds_moc, ds_pandas):
+        indexer = np.asarray([9, 3, 3])
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            got = ds_moc.isel(cells=indexer)
+        want = ds_pandas.isel(cells=indexer)
+        np.testing.assert_array_equal(got["morton"].values, want["morton"].values)
+        assert "morton" not in got.xindexes
+
+    def test_negative_wrap_duplicates_are_silent(self, ds_moc):
+        # -1 and size-1 name the same position: a duplicate after wrapping.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            got = ds_moc.isel(cells=np.asarray([0, ds_moc.sizes["cells"] - 1, -1]))
+        assert "morton" not in got.xindexes
 
 
 class TestAlignment:

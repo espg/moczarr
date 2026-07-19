@@ -36,22 +36,26 @@ from moczarr.ranges import MortonRanges
 def _warn_index_dropped() -> None:
     """Signal that an unrepresentable selection dropped the lazy index.
 
-    An interval set has no reordering freedom, so a non-monotonic or
-    duplicated positional pick cannot round-trip through it. The selected
-    *values* stay correct (xarray falls back to the already-fabricated
-    coordinate), but the result carries no ``MortonMocIndex`` — a silent type
-    change the reviewer asked to make observable. Both ``sel`` (which xarray
-    lowers to a positional ``isel``) and a direct ``isel`` land here, so the
-    single warning site lives on the ``isel`` drop path — warning in ``sel``
-    too would double-fire the same user action. ``stacklevel=3`` aims the
-    warning past this helper and ``isel`` toward the caller; xarray's variable
-    internal depth makes an exact user frame unreachable by a fixed level.
+    An interval set has no reordering freedom, so a non-monotonic positional
+    pick cannot round-trip through it. The selected *values* stay correct
+    (xarray falls back to the already-fabricated coordinate), but the result
+    carries no ``MortonMocIndex`` — a silent type change the reviewer asked
+    to make observable. Both ``sel`` (which xarray lowers to a positional
+    ``isel``) and a direct ``isel`` land here, so the single warning site
+    lives on the ``isel`` drop path — warning in ``sel`` too would
+    double-fire the same user action. Picks containing *duplicates* do NOT
+    warn (phase 6b): a repeated-label lookup is the sanctioned truncation-join
+    pattern (``coarse.sel(morton=parent_cells(fine, level))``), never
+    representable by any interval index, so its silent drop is by design, not
+    an accident worth surfacing. ``stacklevel=3`` aims the warning past this
+    helper and ``isel`` toward the caller; xarray's variable internal depth
+    makes an exact user frame unreachable by a fixed level.
     """
     warnings.warn(
         "MortonMocIndex: this positional selection is not representable as an "
-        "interval set (a non-monotonic or duplicated pick); the lazy index was "
-        "dropped. Selected values remain correct, but the result carries no "
-        'morton index (reopen with index_kind="moc" or set_xindex to restore it).',
+        "interval set (a non-monotonic pick); the lazy index was dropped. "
+        "Selected values remain correct, but the result carries no morton "
+        'index (reopen with index_kind="moc" or set_xindex to restore it).',
         UserWarning,
         stacklevel=3,
     )
@@ -254,6 +258,15 @@ class MortonMocIndex(xr.Index):
         an exact cell domain and raise; so do slices (cell ids are not an
         ordinal axis the user should be slicing by half-open label ranges —
         pass an AOI cover or use ``isel``).
+
+        Repeated labels return repeated positions in label order — the same
+        rows ``PandasIndex`` selects (the rank lookup is elementwise, so
+        repeats plumb straight through the ``IndexSelResult`` positions).
+        The result of a duplicated selection carries no lazy index (an
+        interval set cannot hold duplicate labels) and drops it silently:
+        this is the truncation-join lookup pattern
+        (``coarse.sel(morton=parent_cells(fine, level))``, phase 6b), not an
+        accident. A duplicate-free non-monotonic pick still warns on drop.
         """
         if method is not None or tolerance is not None:
             raise ValueError("MortonMocIndex does not support method= or tolerance=")
@@ -271,8 +284,9 @@ class MortonMocIndex(xr.Index):
         try:
             indexes = {self._name: self._replace(self._ranges.subset(positions))}
         except ValueError:
-            # Non-monotonic pick: values still select; the drop warning fires
-            # on the positional isel xarray lowers this to (single warn site).
+            # Unrepresentable pick: values still select; the drop surfaces on
+            # the positional isel xarray lowers this to (single decision
+            # site — duplicated lookups drop silently, reorders warn).
             pass
         return IndexSelResult({self._dim: positions}, indexes=indexes)
 
@@ -282,11 +296,14 @@ class MortonMocIndex(xr.Index):
         """Positional subset in interval algebra; ``None`` when unrepresentable.
 
         A non-monotonic or duplicated indexer cannot round-trip an interval
-        set, so the lazy index drops (values stay correct) and a
-        ``UserWarning`` fires — this is also where a ``sel`` drop surfaces,
-        since xarray lowers label selection to a positional ``isel``. A scalar
-        collapse returns ``None`` silently — the dimension is gone, so there is
-        no index to keep.
+        set, so the lazy index drops (values stay correct) — this is also
+        where a ``sel`` drop surfaces, since xarray lowers label selection to
+        a positional ``isel``. A duplicate-free non-monotonic pick warns on
+        the drop; a pick containing duplicates drops *silently* (phase 6b:
+        the repeated-label lookup a truncation join issues is never
+        representable, so the drop is by design — see
+        :func:`_warn_index_dropped`). A scalar collapse returns ``None``
+        silently — the dimension is gone, so there is no index to keep.
         """
         indexer = indexers[self._dim]
         if isinstance(indexer, xr.Variable):
@@ -296,7 +313,14 @@ class MortonMocIndex(xr.Index):
         try:
             return self._replace(self._ranges.subset(indexer))
         except ValueError:
-            _warn_index_dropped()  # non-monotonic/duplicated picks
+            # Slices never carry duplicates (subset only rejects reversed
+            # steps), so the silent duplicate path is array-shaped only.
+            if not isinstance(indexer, slice):
+                positions = np.asarray(indexer, dtype=np.int64).ravel()
+                positions = np.where(positions < 0, positions + self.size, positions)
+                if np.unique(positions).size < positions.size:
+                    return None  # duplicate-label lookup (phase 6b): by design
+            _warn_index_dropped()  # duplicate-free non-monotonic picks
             return None
 
     def equals(self, other: xr.Index, **kwargs) -> bool:
