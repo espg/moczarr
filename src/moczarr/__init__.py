@@ -27,6 +27,7 @@ from moczarr.coverage import (
     root_coverage_and,
 )
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
+from moczarr.join import parent_cells
 from moczarr.open import open_hive
 from moczarr.ranges import MortonRanges
 
@@ -74,6 +75,7 @@ __all__ = [
     "morton_word",
     "open_hive",
     "open_object_store",
+    "parent_cells",
     "parse_leaf_coverage",
     "parse_manifest",
     "parse_root_coverage",
