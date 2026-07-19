@@ -201,6 +201,16 @@ class TestJoinCoarse:
         with pytest.raises(ValueError, match="finer than the cells' order 6"):
             join_coarse(open_hive(coarse_store), ds)
 
+    def test_mixed_order_coarse_raises(self, ds):
+        # A corrupted coarse morton coordinate at two orders must raise, not
+        # silently derive the minimum order (5) and mis-attribute the join.
+        o5 = np.asarray(parent_cells(ds, 5).values, dtype=np.uint64)
+        o6 = np.asarray(parent_cells(ds, 6).values, dtype=np.uint64)
+        mixed = np.array([o5[0], o6[0]], dtype=np.uint64)
+        coarse = xr.Dataset({"count": ("cells", [1.0, 2.0])}, coords={"morton": ("cells", mixed)})
+        with pytest.raises(ValueError, match=r"mixed-order \(orders \[5, 6\]\)"):
+            join_coarse(ds, coarse)
+
     @pytest.mark.parametrize("fine_kind", ["plain", "moc", "pandas"])
     @pytest.mark.parametrize("coarse_kind", ["plain", "moc", "pandas"])
     def test_index_kind_pairings(self, serc, coarse_store, fine_kind, coarse_kind):

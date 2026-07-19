@@ -104,12 +104,25 @@ def _coarse_lookup(coarse) -> tuple[int, Callable]:
     if isinstance(index, MortonMocIndex):
         return index.level, lambda parents: index.ranges.rank(parents, missing=-1)
     import pandas as pd
-    from mortie import infer_order_from_morton
+    from mortie import clip2order, infer_order_from_morton
 
     words = np.asarray(coarse["morton"].values, dtype=np.uint64)
     if words.size == 0:
         raise ValueError("coarse has zero cells — nothing to join")
+    # Single order is enforced, not assumed: infer_order_from_morton returns
+    # the *minimum* order of a mixed array, so an unguarded corrupted coarse
+    # coordinate would derive too coarse a level and silently mis-attribute
+    # (the aoi_mask guard mirrors this check).
     level = int(infer_order_from_morton(words))
+    if (clip2order(level, words) != words).any():
+        orders = sorted(
+            int(infer_order_from_morton(np.asarray([w], dtype=np.uint64))) for w in np.unique(words)
+        )
+        raise ValueError(
+            f"coarse 'morton' coordinate is mixed-order (orders {orders}); "
+            f"join_coarse requires single-order coarse cells. Clip or split to "
+            f"one order first."
+        )
     labels = pd.Index(words)
     return level, lambda parents: labels.get_indexer(parents)
 
