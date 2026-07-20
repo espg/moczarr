@@ -26,6 +26,7 @@ from moczarr.coverage import (
     ranges_words,
     root_coverage_and,
 )
+from moczarr.exceptions import NoCoverageError
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.join import join_coarse, parent_cells
 from moczarr.open import open_hive
@@ -60,6 +61,7 @@ __all__ = [
     "HIVE_SPEC_V2",
     "MANIFEST_NAME",
     "MortonRanges",
+    "NoCoverageError",
     "ROOT_COVERAGE_NAME",
     "__version__",
     "aoi_mask",

@@ -12,10 +12,16 @@ decimal strings, mixed orders allowed. Shards are rejected arithmetically
 (root MOC ∩ AOI), then per leaf by the tier-0 box off the stamp already
 fetched, and finally rows are subset exactly on the ``morton`` coordinate
 (tier 2 — the coordinate is the truth; the MOC tiers are only indexes).
+
+An AOI (or window) that intersects no coverage is a data answer, not an
+error: the result is a schema-correct EMPTY dataset plus a ``UserWarning``
+(issue #4). Only a store with no stamped coverage anywhere — no schema
+source at all — raises, as :class:`moczarr.exceptions.NoCoverageError`.
 """
 
 from __future__ import annotations
 
+import warnings
 from typing import Any
 
 import numpy as np
@@ -34,6 +40,7 @@ from moczarr.coverage import (
     ranges_words,
     root_coverage_and,
 )
+from moczarr.exceptions import NoCoverageError
 from moczarr.fabricate import fabricate_cell_ids as _fabricate_cell_ids
 from moczarr.store import (
     load_root_coverage,
@@ -108,6 +115,32 @@ def _candidate_leaves(
             if moc_and(np.asarray([w], dtype=np.uint64), aoi).size
         }
     return sorted(found, key=lambda rel: found[rel])
+
+
+def _schema_leaf(
+    store_root: str, window: str | None, *, store: Any = None, concurrency: int | None = None
+) -> str | None:
+    """One commit-stamped leaf anywhere in the store, or ``None`` (issue #4).
+
+    The empty-AOI return needs a schema source — data-variable names,
+    dtypes, and attrs live only in leaf zarr metadata — so this finds ANY
+    committed leaf: root-MOC candidates first (window-qualified when
+    given), the walk otherwise. A leaf from another window still serves —
+    the schema is store-uniform (one manifest, one writer). Runs only on
+    the already-exceptional empty path, so the extra stamp GETs (some
+    repeating the caller's) stay off the hot path. ``None`` means the store
+    has no stamped coverage at all — the caller's ``NoCoverageError`` case.
+    """
+    envelope = load_root_coverage(store_root, store=store)
+    if envelope is not None:
+        candidates = [leaf_path(int(w), window=window) for w in np.sort(ranges_words(envelope))]
+        stamps = read_commits(store_root, candidates, store=store, concurrency=concurrency)
+        rel = next((r for r, s in zip(candidates, stamps) if s is not None), None)
+        if rel is not None:
+            return rel
+    leaves = sorted(walk_leaves(store_root, store=store, concurrency=concurrency))
+    stamps = read_commits(store_root, leaves, store=store, concurrency=concurrency)
+    return next((r for r, s in zip(leaves, stamps) if s is not None), None)
 
 
 def open_hive(
@@ -189,9 +222,24 @@ def open_hive(
     xarray.Dataset
         Leaves concatenated along the cell dimension in ascending packed
         morton order, with ``morton``/``cell_ids`` as coordinates and the
-        manifest summary under ``attrs["morton_hive"]``. Raises
-        ``ValueError`` when the root is not a hive store or nothing
-        intersects the query.
+        manifest summary under ``attrs["morton_hive"]``.
+
+        An ``aoi`` (or ``window``) that intersects no coverage returns a
+        schema-correct EMPTY dataset — every data variable and coordinate
+        present with its stored name/dtype/attrs (schema read from one
+        covered leaf's metadata) and zero rows along the cell dimension —
+        and emits a ``UserWarning`` naming the store (issue #4). The empty
+        result composes with ``decode``, ``index_kind="moc"`` (an empty
+        interval domain), and ``fabricate_cell_ids``; ``xr.concat`` of the
+        empty result with a non-empty one preserves dtypes — both sides
+        carry every variable, so xarray fills nothing and no int→float NaN
+        promotion occurs (pinned in ``tests/test_open.py``).
+
+        Raises ``ValueError`` when the root is not a hive store (no
+        manifest), and :class:`moczarr.NoCoverageError` — a ``ValueError``
+        subclass — when the store has no stamped coverage anywhere: with
+        zero committed leaves there is no schema source at all, whatever
+        the query.
     """
     import xarray as xr
     from zarr.storage import ObjectStore
@@ -268,11 +316,74 @@ def open_hive(
             ds = ds.isel({ds["morton"].dims[0]: keep})
         opened.append(ds)
     if not opened:
-        raise ValueError(
-            f"nothing to open at {store_root}"
-            + (" for the given AOI" if aoi_words is not None else "")
-            + (f" in window {window!r}" if window is not None else "")
+        # Issue #4 contract: emptiness against a covered store is a data
+        # answer — a schema-correct 0-row dataset plus a UserWarning. The
+        # schema comes from ONE stamped leaf's metadata (an AOI-rejected
+        # candidate when one exists, else _schema_leaf's store-wide search);
+        # only a store with no stamped leaf anywhere has no schema to serve
+        # and raises NoCoverageError.
+        schema_rel = next((r for r, s in zip(candidates, stamps) if s is not None), None)
+        schema_from_walk = False
+        if schema_rel is None:
+            schema_rel = _schema_leaf(
+                store_root, window, store=obstore_store, concurrency=concurrency
+            )
+            schema_from_walk = True
+        if schema_rel is None:
+            raise NoCoverageError(
+                f"nothing to open at {store_root}: the store has no stamped coverage "
+                f"anywhere (no committed leaf exists to define a schema)"
+            )
+        scope = [
+            part
+            for part, active in (
+                ("the given AOI", aoi_words is not None),
+                (f"window {window!r}", window is not None),
+            )
+            if active
+        ]
+        if not scope and schema_from_walk:
+            # Unscoped whole-store open (aoi=None, window=None) where the root
+            # MOC lists no openable leaf, yet _schema_leaf's walk found a
+            # committed leaf on disk. That is a STALE root MOC, not an empty
+            # store: silently returning 0 cells here (issue #4's empty
+            # contract is scoped to an AOI/window over no coverage) would
+            # hide committed data from a whole-store open. Raise instead —
+            # never auto-walk the read path; regenerate the coverage
+            # explicitly. Opting this case into the empty return is a
+            # one-line change if that lean is preferred later.
+            raise ValueError(
+                f"stale root MOC at {store_root}: the root coverage lists no "
+                f"openable leaf, but a committed leaf exists on disk at "
+                f"{schema_rel!r}. Regenerate the root coverage before opening "
+                f"(the store's writer / zagg's refresh_root_coverage / the "
+                f"coverage sweep)."
+            )
+        # scope is non-empty here: the only unscoped way into this path is a
+        # stale root MOC, handled by the raise above.
+        warnings.warn(
+            f"{' in '.join(scope)} intersects no coverage at {store_root}"
+            "; returning a schema-correct empty dataset (0 cells)",
+            UserWarning,
+            stacklevel=2,
         )
+        ds = xr.open_zarr(
+            zarr_store,
+            group=f"{schema_rel}/{group}",
+            consolidated=False,
+            zarr_format=3,
+            **(xr_kwargs or {}),
+        )
+        coords = [name for name in ("morton", "cell_ids") if name in ds]
+        ds = ds.set_coords(coords)
+        empty_dim = ds["morton"].dims[0] if "morton" in ds.coords else "cells"
+        if index_kind == "moc":
+            from moczarr.ranges import MortonRanges
+
+            moc_dim = empty_dim
+            ds = ds.drop_vars(coords)
+            domain = MortonRanges(np.empty((0, 2), dtype=np.uint64), int(group))
+        opened.append(ds.isel({empty_dim: slice(0)}))
     dim = opened[0]["morton"].dims[0] if "morton" in opened[0].coords else "cells"
     if index_kind == "moc":
         dim = moc_dim
@@ -280,7 +391,7 @@ def open_hive(
     if index_kind == "moc":
         from moczarr.moc_index import MortonMocIndex
 
-        assert domain is not None  # opened is non-empty, so a leaf set it
+        assert domain is not None  # a leaf set it, or the empty path did
         index = MortonMocIndex(domain, dim=dim, name="morton")
         result = result.assign_coords(xr.Coordinates.from_xindex(index))
     if "morton" in result.coords and (

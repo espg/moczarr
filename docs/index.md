@@ -36,6 +36,23 @@ vocabulary; `None` or `1` runs serially, and the batching is notebook-safe
 under a running event loop). Leaf *data* opens remain serial pending the
 lazy-index work; `tools/bench_open.py` measures both.
 
+## Empty AOIs and `NoCoverageError`
+
+An `aoi` (or `window`) that intersects none of a store's coverage is a data
+answer, not an error ([issue #4](https://github.com/espg/moczarr/issues/4)):
+`open_hive` returns a **schema-correct empty Dataset** — every data variable
+and coordinate present with its stored name/dtype/attrs (schema read from one
+covered leaf's metadata), zero rows along the cell dimension — and emits a
+`UserWarning` naming the store. The empty result composes with
+`xr.concat`/groupby sweeps (concatenating it with a non-empty result
+preserves dtypes: both sides carry every variable, so xarray fills nothing
+and no int→float NaN promotion occurs), and with `index_kind="moc"` (an
+empty interval domain), `decode=True`, and `fabricate_cell_ids`. Only the
+genuinely exceptional case raises: a store whose tree holds **no stamped
+coverage at all** has no schema to serve, and any open of it raises
+`NoCoverageError` — a `ValueError` subclass, so pre-existing
+`except ValueError` callers keep working while new callers catch precisely.
+
 ## The MOC-backed lazy index (`index_kind="moc"`)
 
 `open_hive(..., index_kind="moc")` replaces the read-and-materialize
