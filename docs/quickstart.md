@@ -11,6 +11,8 @@ pip install '.[xdggs]'
 
 An S3-hosted store works identically — pass `s3://bucket/prefix` (plus
 `anonymous=True` for public buckets) wherever the local path appears.
+Prefer a notebook? The same walk-through is
+[runnable on binder](examples/quickstart.ipynb).
 
 ## Open a store
 

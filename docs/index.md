@@ -1,5 +1,7 @@
 # moczarr
 
+[![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/espg/moczarr/main?labpath=docs%2Fexamples%2Fquickstart.ipynb)
+
 Sparse-DGGS xarray reader for **morton-hive** zarr stores: MOC-declared
 domains, arithmetic shard paths, lazy dense views.
 
@@ -63,8 +65,10 @@ anomaly = both["h_mean"] - both["h_mean_o6"]
 
 Continue with the [quickstart](quickstart.md) (open → AOI → decode →
 join, every snippet runnable against the fixture), the
-[concepts](concepts.md) page for how the store convention and the lazy
-index work, and the [API reference](api/open.md).
+[example notebook](examples/quickstart.ipynb) (the same flow,
+[runnable on binder](https://mybinder.org/v2/gh/espg/moczarr/main?labpath=docs%2Fexamples%2Fquickstart.ipynb)),
+the [concepts](concepts.md) page for how the store convention and the
+lazy index work, and the [API reference](api/open.md).
 
 ## Where the convention lives
 
