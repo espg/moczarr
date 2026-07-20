@@ -208,13 +208,26 @@ class TestEmptyAoi:
         # is the identity — values equal and, because both sides carry every
         # variable (nothing to fill), dtypes are preserved: no int→float NaN
         # promotion (pinned here, documented in open_hive's docstring).
-        full = open_hive(serc)
-        empty, _ = self._empty(serc)
+        # Concat across opens needs index_kind="pandas": the moc default's
+        # interval index has no concat (pinned below).
+        full = open_hive(serc, index_kind="pandas")
+        empty, _ = self._empty(serc, index_kind="pandas")
         cat = xr.concat([empty, full], dim="cells")
         assert cat.sizes["cells"] == full.sizes["cells"]
         for name in full.variables:
             np.testing.assert_array_equal(cat[name].values, full[name].values)
             assert cat[name].dtype == full[name].dtype
+
+    def test_concat_of_moc_indexed_raises(self, serc):
+        # The known limitation of the index_kind="moc" default (issue #1
+        # phase 7d flip): the interval index has no concat currency, so
+        # concatenating two default-opened datasets raises — reopen with
+        # index_kind="pandas" for concat workflows (documented in the
+        # quickstart/concepts pages and the CHANGELOG).
+        full = open_hive(serc)
+        empty, _ = self._empty(serc)
+        with pytest.raises(NotImplementedError):
+            xr.concat([empty, full], dim="cells")
 
     def test_moc_index_empty(self, serc):
         from moczarr.moc_index import MortonMocIndex
@@ -429,11 +442,13 @@ class TestOpenHiveMocIndex:
     def test_full_store_equality(self, serc):
         from moczarr.moc_index import MortonMocIndex
 
-        want = open_hive(serc)
+        want = open_hive(serc, index_kind="pandas")
         got = open_hive(serc, index_kind="moc")
         self._assert_equal_datasets(want, got)
         assert isinstance(got.xindexes["morton"], MortonMocIndex)
-        assert "morton" not in want.xindexes  # default posture unchanged
+        assert "morton" not in want.xindexes  # the pandas posture stays index-free
+        # The default IS the moc path (the phase-7d flip, issue #1).
+        assert isinstance(open_hive(serc).xindexes["morton"], MortonMocIndex)
 
     @pytest.mark.parametrize(
         "aoi",
@@ -475,7 +490,7 @@ class TestOpenHiveMocIndex:
         # parity against the original store's zagg-written array.
         from test_fabricate import _morton_only_copy
 
-        golden = open_hive(serc, fabricate_cell_ids=False)["cell_ids"].values
+        golden = open_hive(serc, fabricate_cell_ids=False, index_kind="pandas")["cell_ids"].values
         ds = open_hive(_morton_only_copy(tmp_path), index_kind="moc")
         np.testing.assert_array_equal(ds["cell_ids"].values, golden)
 
@@ -510,7 +525,7 @@ class TestOpenHiveMocIndex:
         ds["count"].values  # force the data reads; they must still flow
         assert coord_chunks() == []
         keys.clear()
-        open_hive(serc, aoi=[SERC_SHARD])
+        open_hive(serc, aoi=[SERC_SHARD], index_kind="pandas")
         assert coord_chunks() != []
 
     def test_invalid_index_kind_raises(self, serc):

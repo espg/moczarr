@@ -18,10 +18,10 @@ What you get:
   `s3://bucket/prefix`) to a lazy `xarray.Dataset`, with AOI and
   time-window scoping resolved through coverage metadata, not object
   listings.
-- **A MOC-backed lazy index** — the row domain held as an interval set
-  built from the same coverage arithmetic that selected the leaves; the
-  on-disk cell arrays are never read, and the `morton` coordinate is
-  fabricated on demand.
+- **A MOC-backed lazy index** (the default) — the row domain held as an
+  interval set built from the same coverage arithmetic that selected the
+  leaves; the on-disk cell arrays are never read, and the `morton`
+  coordinate is fabricated on demand.
 - **Exact NESTED fabrication** — HEALPix NESTED `cell_ids` derived
   exactly from the packed morton words ("NESTED is fabricated, never
   stored").

@@ -190,18 +190,26 @@ class TestMortonIndex:
         assert ds.dggs.grid_info == dggs.MortonInfo(level=8)
 
     def test_default_is_undecoded(self, serc):
-        assert "morton" not in open_hive(serc).xindexes
+        # The default open carries the core lazy index (the phase-7d moc
+        # flip, issue #1) but stays undecoded: no xdggs MortonIndex — and so
+        # no ds.dggs accessor surface — until decode=True.
+        from moczarr.moc_index import MortonMocIndex
+
+        index = open_hive(serc).xindexes["morton"]
+        assert isinstance(index, MortonMocIndex)
+        assert not isinstance(index, dggs.MortonIndex)
 
     def test_single_index_morton_only(self, serc):
         # One DGGSIndex per dataset (the accessor's rule): morton is indexed,
-        # cell_ids stays a plain coordinate.
+        # cell_ids stays a plain coordinate. The default decode wraps the
+        # lazy moc index (the phase-7d flip).
         ds = open_hive(serc, decode=True)
         assert set(ds.xindexes) == {"morton"}
         index = ds.xindexes["morton"]
         assert isinstance(index, dggs.MortonIndex)
         assert "cell_ids" in ds.coords and "cell_ids" not in ds.xindexes
-        assert repr(index) == "<MortonIndex(level=8, kind=pandas)>"
-        assert index._repr_inline_(80) == "MortonIndex(level=8, kind=pandas)"
+        assert repr(index) == "<MortonIndex(level=8, kind=moc)>"
+        assert index._repr_inline_(80) == "MortonIndex(level=8, kind=moc)"
 
     def test_isel_keeps_index(self, serc):
         ds = open_hive(serc, decode=True).isel(cells=[0, 1])
@@ -293,7 +301,7 @@ class TestCombinedFlags:
         # Morton-only store, both flags on: fabrication attaches cell_ids
         # BEFORE decode indexes morton, and the fabricated coordinate is
         # byte-equal to the original store's stored (zagg-written) golden.
-        golden = open_hive(serc, fabricate_cell_ids=False)["cell_ids"].values
+        golden = open_hive(serc, fabricate_cell_ids=False, index_kind="pandas")["cell_ids"].values
         ds = open_hive(_morton_only_copy(tmp_path), fabricate_cell_ids="auto", decode=True)
         assert isinstance(ds.xindexes["morton"], dggs.MortonIndex)
         assert ds.dggs.grid_info == dggs.MortonInfo(level=8)
@@ -302,10 +310,12 @@ class TestCombinedFlags:
         np.testing.assert_array_equal(ds["cell_ids"].values, golden)
 
     def test_decode_and_fabricate_dual_written(self, serc):
-        # Unmodified (dual-written) fixture with both flags: the stored
-        # cell_ids rides through untouched and morton still gets its index.
+        # Unmodified (dual-written) fixture with both flags: cell_ids equals
+        # the stored (zagg-written) bytes — read directly on the pandas
+        # path, reproduced exactly by fabrication on the moc default — and
+        # morton still gets its index.
         ds = open_hive(serc, fabricate_cell_ids="auto", decode=True)
         assert isinstance(ds.xindexes["morton"], dggs.MortonIndex)
         assert ds.dggs.grid_info == dggs.MortonInfo(level=8)
-        stored = open_hive(serc, fabricate_cell_ids=False)["cell_ids"].values
+        stored = open_hive(serc, fabricate_cell_ids=False, index_kind="pandas")["cell_ids"].values
         np.testing.assert_array_equal(ds["cell_ids"].values, stored)
