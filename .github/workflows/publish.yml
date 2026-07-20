@@ -1,0 +1,116 @@
+name: Publish
+
+# Tag-driven release: pushing a *.*.* tag builds sdist+wheel, publishes to
+# TestPyPI then PyPI via trusted publishing (OIDC — no token secrets; the
+# one-time PyPI-side registration binds project `moczarr` to this repo,
+# workflow `publish.yml`, environments `testpypi`/`pypi`), then creates the
+# GitHub release with the artifacts attached. Tags are espg's to push.
+
+on:
+  push:
+    tags:
+      - "*.*.*"
+
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+
+  build:
+    name: Build distribution
+    needs: test
+    runs-on: ubuntu-latest
+
+    steps:
+    - uses: actions/checkout@v5
+      with:
+        fetch-depth: 0  # hatch-vcs derives the version from the tag
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+
+    - name: Build sdist and wheel
+      run: uv build
+
+    - name: Store distribution packages
+      uses: actions/upload-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+  publish-to-testpypi:
+    name: Publish to TestPyPI
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: testpypi
+      url: https://test.pypi.org/p/moczarr
+    permissions:
+      id-token: write  # trusted publishing (OIDC)
+
+    steps:
+    - name: Download dists
+      uses: actions/download-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+    - name: Publish to TestPyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+      with:
+        repository-url: https://test.pypi.org/legacy/
+        verbose: true
+
+  publish-to-pypi:
+    name: Publish to PyPI
+    needs: publish-to-testpypi
+    runs-on: ubuntu-latest
+    environment:
+      name: pypi
+      url: https://pypi.org/p/moczarr
+    permissions:
+      id-token: write  # trusted publishing (OIDC)
+
+    steps:
+    - name: Download dists
+      uses: actions/download-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+    - name: Publish to PyPI
+      uses: pypa/gh-action-pypi-publish@release/v1
+
+  github-release:
+    name: Create GitHub Release
+    needs: publish-to-pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+    - name: Download dists
+      uses: actions/download-artifact@v4
+      with:
+        name: python-package-distributions
+        path: dist/
+
+    - name: Create GitHub Release + attach artifacts
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        TAG="${GITHUB_REF#refs/tags/}"
+        cat > release_notes.md <<EOF
+        ## Installation
+
+        \`\`\`sh
+        pip install moczarr==$TAG
+        \`\`\`
+
+        See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/main/CHANGELOG.md).
+        EOF
+        gh release create "$TAG" \
+          --repo '${{ github.repository }}' \
+          --title "Release $TAG" \
+          --notes-file release_notes.md || echo "Release already exists"
+        gh release upload "$TAG" dist/* \
+          --repo '${{ github.repository }}' --clobber
