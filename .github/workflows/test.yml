@@ -28,3 +28,28 @@ jobs:
 
     - name: Run tests with pytest
       run: uv run pytest --cov=moczarr --cov-report=xml --cov-report=term
+
+  # Non-blocking check that the committed-executed quickstart notebook still
+  # re-executes cleanly (phase 7b, issue #1). continue-on-error keeps notebook
+  # drift from gating PRs; tighten once the store spec settles.
+  notebook:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+
+    steps:
+    - uses: actions/checkout@v5
+
+    - name: Install uv
+      uses: astral-sh/setup-uv@v6
+
+    - name: Set up Python
+      run: uv python install 3.12
+
+    - name: Install dependencies
+      run: uv sync --extra test --extra xdggs
+
+    - name: Re-execute the quickstart notebook
+      run: >
+        uv run --with nbconvert --with ipykernel
+        jupyter nbconvert --to notebook --execute --stdout
+        docs/examples/quickstart.ipynb > /dev/null

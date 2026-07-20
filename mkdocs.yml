@@ -18,6 +18,8 @@ theme:
 
 plugins:
   - search
+  - mkdocs-jupyter:
+      execute: false  # committed-executed: outputs live in the notebook
   - mkdocstrings:
       handlers:
         python:
@@ -27,6 +29,7 @@ plugins:
 nav:
   - Home: index.md
   - Quickstart: quickstart.md
+  - Example notebook: examples/quickstart.ipynb
   - Concepts: concepts.md
   - API reference:
       - open: api/open.md

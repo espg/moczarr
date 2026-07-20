@@ -1,0 +1,14 @@
+# Binder environment (repo2docker) for docs/examples/quickstart.ipynb.
+# Local development uses uv (`uv sync --extra test --extra xdggs`), not this file.
+name: moczarr-binder
+channels:
+  - conda-forge
+dependencies:
+  - python=3.12
+  - pip
+  - matplotlib-base
+  - notebook
+  - pip:
+      # The repo checkout itself, with the xdggs accessor extra. repo2docker
+      # keeps .git in the build context, so hatch-vcs can derive a version.
+      - ".[xdggs]"
