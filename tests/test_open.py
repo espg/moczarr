@@ -65,6 +65,15 @@ class TestOpenHive:
         # The leaf's dggs zarr-convention attrs survive (phase-4 seam).
         assert "dggs" in ds.attrs or "zarr_conventions" in ds.attrs
 
+    def test_data_var_order_is_deterministic(self, serc):
+        # zarr-python lists group members in async completion order, so a
+        # naive open reshuffles ds.data_vars run to run — non-reproducible
+        # reprs and notebook diffs. open_hive sorts them lexically; two
+        # consecutive opens must agree (and match sorted order).
+        first = list(open_hive(serc).data_vars)
+        second = list(open_hive(serc).data_vars)
+        assert first == second == sorted(first)
+
     def test_matches_manual_leaf_open(self, serc):
         # Drop-in claim: one leaf opened by plain xr.open_zarr equals the
         # corresponding slice of open_hive's result.

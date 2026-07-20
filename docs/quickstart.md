@@ -34,7 +34,7 @@ Coordinates:
     cell_ids    (cells) uint64 768B 238064 238065 238066 ... 239118 239119
 Data variables:
     count       (cells) int32 384B 30 31 6 2 11 9 22 34 30 ... 0 0 0 0 0 0 0 0
-    h_mean      (cells) float32 384B 29.92 22.49 22.39 28.04 ... nan nan nan nan
+    h_max       (cells) float32 384B 26.6 32.99 30.18 25.69 ... nan nan nan nan
     ...
 Indexes:
     morton   MortonMocIndex(ranges=5, size=96)

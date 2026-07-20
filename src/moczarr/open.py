@@ -412,6 +412,12 @@ def open_hive(
             _stacklevel=4,
         )
         result = result.assign_coords(cell_ids=(result["morton"].dims, ids))
+    # Data-variable order is otherwise the completion order of zarr-python's
+    # async member listing — non-deterministic run to run (a fresh open
+    # reshuffles ds.data_vars). Sort lexically so a given store always opens
+    # with the same variable order: reproducible reprs and stable notebook
+    # outputs. Coordinates and the morton index ride along unchanged.
+    result = result[sorted(result.data_vars)]
     result.attrs["morton_hive"] = {
         k: manifest[k] for k in ("spec", "cell_order", "shard_order", "dataset")
     }
