@@ -1,0 +1,3 @@
+# moczarr.exceptions
+
+::: moczarr.exceptions

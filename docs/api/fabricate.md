@@ -1,0 +1,3 @@
+# moczarr.fabricate
+
+::: moczarr.fabricate
