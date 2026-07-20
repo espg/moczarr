@@ -271,6 +271,28 @@ class TestEmptyAoi:
         with pytest.raises(ValueError, match="grammar"):
             open_hive(str(copy), window="20 20")
 
+    def test_stale_root_moc_unscoped_raises(self, serc, tmp_path):
+        # A STALE root MOC: the root coverage lists only a vanished leaf, yet
+        # a committed leaf remains on disk unlisted (found by the schema
+        # walk). An unscoped whole-store open must NOT silently return 0 cells
+        # here — issue #4's empty contract is scoped to an AOI/window over no
+        # coverage, so a whole-store open of a stale-indexed store raises,
+        # naming the found leaf and pointing at regeneration.
+        copy = tmp_path / "serc"
+        shutil.copytree(FIXTURE, copy)
+        envelope = json.loads((copy / convention.ROOT_COVERAGE_NAME).read_text())
+        envelope["ranges"] = [["4331111", "4331111"]]  # an order-6 leaf never written
+        (copy / convention.ROOT_COVERAGE_NAME).write_text(json.dumps(envelope))
+        with pytest.raises(ValueError, match="stale root MOC"):
+            open_hive(str(copy))
+        # The #4 boundary, pinned: the SAME stale store opened AOI-scoped keeps
+        # the empty-Dataset + UserWarning contract (scope is present, so the
+        # stale-root raise does not fire).
+        with pytest.warns(UserWarning, match="intersects no coverage"):
+            ds = open_hive(str(copy), aoi=[OUTSIDE])
+        assert ds.sizes["cells"] == 0
+        assert "count" in ds.data_vars
+
     def test_no_stamped_coverage_raises(self, tmp_path):
         # The genuinely exceptional case: a hive root (manifest present) with
         # ZERO committed leaves has no schema source — NoCoverageError on any

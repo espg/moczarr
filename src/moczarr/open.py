@@ -323,10 +323,12 @@ def open_hive(
         # only a store with no stamped leaf anywhere has no schema to serve
         # and raises NoCoverageError.
         schema_rel = next((r for r, s in zip(candidates, stamps) if s is not None), None)
+        schema_from_walk = False
         if schema_rel is None:
             schema_rel = _schema_leaf(
                 store_root, window, store=obstore_store, concurrency=concurrency
             )
+            schema_from_walk = True
         if schema_rel is None:
             raise NoCoverageError(
                 f"nothing to open at {store_root}: the store has no stamped coverage "
@@ -340,13 +342,28 @@ def open_hive(
             )
             if active
         ]
-        warnings.warn(
-            (
-                f"{' in '.join(scope)} intersects no coverage at {store_root}"
-                if scope
-                else f"no listed leaf is openable at {store_root} (stale root MOC?)"
+        if not scope and schema_from_walk:
+            # Unscoped whole-store open (aoi=None, window=None) where the root
+            # MOC lists no openable leaf, yet _schema_leaf's walk found a
+            # committed leaf on disk. That is a STALE root MOC, not an empty
+            # store: silently returning 0 cells here (issue #4's empty
+            # contract is scoped to an AOI/window over no coverage) would
+            # hide committed data from a whole-store open. Raise instead —
+            # never auto-walk the read path; regenerate the coverage
+            # explicitly. Opting this case into the empty return is a
+            # one-line change if that lean is preferred later.
+            raise ValueError(
+                f"stale root MOC at {store_root}: the root coverage lists no "
+                f"openable leaf, but a committed leaf exists on disk at "
+                f"{schema_rel!r}. Regenerate the root coverage before opening "
+                f"(the store's writer / zagg's refresh_root_coverage / the "
+                f"coverage sweep)."
             )
-            + "; returning a schema-correct empty dataset (0 cells)",
+        # scope is non-empty here: the only unscoped way into this path is a
+        # stale root MOC, handled by the raise above.
+        warnings.warn(
+            f"{' in '.join(scope)} intersects no coverage at {store_root}"
+            "; returning a schema-correct empty dataset (0 cells)",
             UserWarning,
             stacklevel=2,
         )
