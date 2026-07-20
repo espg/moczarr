@@ -13,7 +13,7 @@ authors = [
     {name = "Shane Grigsby", email = "refuge@rocktalus.com"},
 ]
 classifiers = [
-    "Development Status :: 3 - Alpha",
+    "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
     "Programming Language :: Python :: 3.12",
@@ -58,8 +58,10 @@ test = [
 
 [project.urls]
 Homepage = "https://github.com/espg/moczarr"
+Documentation = "https://espg.github.io/moczarr/"
 Repository = "https://github.com/espg/moczarr"
 Issues = "https://github.com/espg/moczarr/issues"
+Changelog = "https://github.com/espg/moczarr/blob/main/CHANGELOG.md"
 
 [tool.hatch.version]
 source = "vcs"
@@ -75,6 +77,7 @@ only-include = [
     "src/moczarr",
     "tests",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "pyproject.toml",
 ]
