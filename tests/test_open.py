@@ -213,30 +213,61 @@ class TestEmptyAoi:
         assert ours[0].filename == __file__
 
     def test_concat_roundtrips(self, serc):
-        # The composability the issue asks for: concat with the empty result
-        # is the identity — values equal and, because both sides carry every
-        # variable (nothing to fill), dtypes are preserved: no int→float NaN
+        # The composability issue #4 asks for, now on the DEFAULT moc index:
+        # concat with the empty result is the identity. The empty side
+        # contributes no intervals, so MortonMocIndex.concat returns the
+        # non-empty domain unchanged; both sides carry every variable
+        # (nothing to fill), so dtypes are preserved — no int→float NaN
         # promotion (pinned here, documented in open_hive's docstring).
-        # Concat across opens needs index_kind="pandas": the moc default's
-        # interval index has no concat (pinned below).
-        full = open_hive(serc, index_kind="pandas")
-        empty, _ = self._empty(serc, index_kind="pandas")
+        from moczarr.moc_index import MortonMocIndex
+
+        full = open_hive(serc)
+        empty, _ = self._empty(serc)
         cat = xr.concat([empty, full], dim="cells")
+        assert isinstance(cat.xindexes["morton"], MortonMocIndex)
         assert cat.sizes["cells"] == full.sizes["cells"]
         for name in full.variables:
             np.testing.assert_array_equal(cat[name].values, full[name].values)
             assert cat[name].dtype == full[name].dtype
 
-    def test_concat_of_moc_indexed_raises(self, serc):
-        # The known limitation of the index_kind="moc" default (issue #1
-        # phase 7d flip): the interval index has no concat currency, so
-        # concatenating two default-opened datasets raises — reopen with
-        # index_kind="pandas" for concat workflows (documented in the
-        # quickstart/concepts pages and the CHANGELOG).
+    def _ordered_halves(self, serc):
+        # Two disjoint, word-ordered opens whose union is the whole store:
+        # the lower and upper halves of the stamped shards, ascending in
+        # packed-word order (the batch-sweep / AOI-tile concat pattern).
+        shards = sorted(_stamped_shards(serc), key=convention.morton_word)
+        half = len(shards) // 2
+        return shards[:half], shards[half:]
+
+    def test_concat_disjoint_ordered_roundtrips(self, serc):
+        # Issue #1 phase-7 (b): concat of two disjoint, ascending moc opens
+        # fabricates a coordinate byte-identical to the single full open, and
+        # the result keeps a MortonMocIndex (no materialization).
+        from moczarr.moc_index import MortonMocIndex
+
+        lo_shards, hi_shards = self._ordered_halves(serc)
+        lo = open_hive(serc, aoi=lo_shards)
+        hi = open_hive(serc, aoi=hi_shards)
         full = open_hive(serc)
-        empty, _ = self._empty(serc)
-        with pytest.raises(NotImplementedError):
-            xr.concat([empty, full], dim="cells")
+        cat = xr.concat([lo, hi], dim="cells")
+        assert isinstance(cat.xindexes["morton"], MortonMocIndex)
+        assert cat.sizes["cells"] == full.sizes["cells"]
+        np.testing.assert_array_equal(cat["morton"].values, full["morton"].values)
+        np.testing.assert_array_equal(cat["cell_ids"].values, full["cell_ids"].values)
+        for name in full.data_vars:
+            np.testing.assert_array_equal(cat[name].values, full[name].values)
+
+    def test_concat_overlapping_or_reversed_raises(self, serc):
+        # The general (overlap / interleave / reversed) case stays on the
+        # index_kind="pandas" escape: MortonMocIndex.concat raises pointedly,
+        # naming that escape, rather than reordering the domain out from under
+        # the data variables.
+        lo_shards, hi_shards = self._ordered_halves(serc)
+        lo = open_hive(serc, aoi=lo_shards)
+        hi = open_hive(serc, aoi=hi_shards)
+        full = open_hive(serc)
+        for parts in ([hi, lo], [full, lo]):  # reversed, then overlapping
+            with pytest.raises(NotImplementedError, match=r'index_kind="pandas"'):
+                xr.concat(parts, dim="cells")
 
     def test_moc_index_empty(self, serc):
         from moczarr.moc_index import MortonMocIndex

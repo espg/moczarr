@@ -22,7 +22,7 @@ align/join must be opened with the same ``index_kind``.
 from __future__ import annotations
 
 import warnings
-from collections.abc import Hashable, Iterator, Mapping
+from collections.abc import Hashable, Iterable, Iterator, Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -200,6 +200,69 @@ class MortonMocIndex(xr.Index):
         return self._ranges
 
     # -- xarray Index API -------------------------------------------------
+
+    @classmethod
+    def concat(
+        cls,
+        indexes: Sequence["MortonMocIndex"],
+        dim: Hashable,
+        positions: Iterable[Iterable[int]] | None = None,
+    ) -> "MortonMocIndex":
+        """Concatenate disjoint, ascending MOC domains (the batch-sweep case).
+
+        ``xr.concat`` of moc-indexed datasets is supported when the domains
+        are already disjoint and in ascending word order end to end — the
+        AOI-tile / batch-sweep pattern, where each open covers a distinct
+        spatial block. The data variables concatenate in the given block
+        order, and the fabricated ``morton`` coordinate has to match row for
+        row; that holds exactly when the concatenated interval blocks are
+        ascending and non-overlapping, so no coalescing sort can reorder the
+        domain out from under the data (adjacent blocks, ``next.lo ==
+        prev.hi + 1``, merge without disturbing the ascending word sequence).
+        An empty domain contributes no intervals, so ``concat([empty, full])``
+        returns ``full`` — the issue #4 "empty composes through concat"
+        contract, now honored on the default index.
+
+        Overlapping, interleaved, or reversed domains — and any request that
+        carries explicit ``positions`` (xarray's interleave path) — raise a
+        pointed ``NotImplementedError`` naming the ``index_kind="pandas"``
+        escape, whose materialized coordinate concatenates arbitrarily.
+        """
+        escape = (
+            'reopen the datasets with index_kind="pandas" to concatenate them '
+            "(a materialized coordinate concatenates in any order)"
+        )
+        if positions is not None:
+            raise NotImplementedError(
+                "MortonMocIndex.concat cannot honor explicit positions (an "
+                f"interleave would reorder the interval domain); {escape}"
+            )
+        first = indexes[0]
+        orders = {index._ranges.cell_order for index in indexes}
+        if len(orders) != 1:
+            raise NotImplementedError(
+                f"MortonMocIndex.concat across mixed cell orders {sorted(orders)} "
+                f"is not supported; {escape}"
+            )
+        blocks = [index._ranges.intervals for index in indexes]
+        combined = np.concatenate(blocks) if blocks else np.empty((0, 2), dtype=np.uint64)
+        # The data variables concatenate in block order; the fabricated
+        # coordinate has to match row for row. That holds only if the blocks
+        # are ascending and disjoint end to end — otherwise MortonRanges'
+        # coalescing sort would reorder the domain out from under the data. A
+        # single vectorized check covers within-block (already disjoint) and
+        # cross-block boundaries: next.lo must clear prev.hi.
+        if combined.shape[0] > 1 and (combined[1:, 0] <= combined[:-1, 1]).any():
+            raise NotImplementedError(
+                "MortonMocIndex.concat supports only disjoint, ascending domains "
+                "(the batch-sweep case); these overlap, interleave, or are "
+                f"reversed; {escape}"
+            )
+        return cls(
+            MortonRanges(combined, first._ranges.cell_order),
+            dim=first._dim,
+            name=first._name,
+        )
 
     def create_variables(
         self, variables: Mapping[Any, xr.Variable] | None = None
