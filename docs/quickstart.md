@@ -82,8 +82,9 @@ The result is value-identical to the materialized open
 rank arithmetic on intervals. See
 [the lazy index](concepts.md#the-lazy-index) for what degrades (and how)
 when a selection can't be represented as intervals — and note that
-`xr.concat` of two moc-indexed datasets is not supported: open with
-`index_kind="pandas"` when you need to concatenate across opens.
+`xr.concat` of moc-indexed datasets works when their domains are disjoint
+and ascending (the batch-sweep case); overlapping or out-of-order concat
+raises, pointing you to `index_kind="pandas"`.
 
 ## Decode: the `ds.dggs` accessor
 

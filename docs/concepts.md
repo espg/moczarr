@@ -99,9 +99,11 @@ Edges to know about:
   warning** — never by wrong answers.
 - Mixing moc- and pandas-indexed datasets in one alignment raises
   pointedly: reopen both with the same `index_kind`.
-- `xr.concat` of two moc-indexed datasets raises `NotImplementedError`
-  (an interval-set index has no concat currency yet); open with
-  `index_kind="pandas"` when concatenating across opens.
+- `xr.concat` of moc-indexed datasets works when their domains are
+  disjoint and in ascending word order (the batch-sweep / AOI-tile case);
+  overlapping, interleaved, or reversed domains raise `NotImplementedError`
+  pointing to `index_kind="pandas"`, whose materialized coordinate
+  concatenates arbitrarily.
 - Mixed-order (pyramid) domains are out of scope v1: intervals-per-order
   is the named seam
   ([issue #8](https://github.com/espg/moczarr/issues/8), gated on

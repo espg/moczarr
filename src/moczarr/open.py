@@ -207,8 +207,8 @@ def open_hive(
         ``"pandas"`` materializes instead: the stored coordinate is read
         and, with ``decode=True``, indexed through a ``PandasIndex`` — use
         it when a workflow needs what the interval index cannot represent
-        (notably ``xr.concat`` across opens, which raises
-        ``NotImplementedError`` on moc-indexed datasets).
+        (notably ``xr.concat`` of overlapping or out-of-order domains; the
+        disjoint, ascending batch-sweep concat works on the moc default).
     concurrency : int or None, optional
         Maximum in-flight metadata requests (the candidate leaves' stamp
         GETs, and the discovery walk's per-level LISTs), default 32 — the
@@ -234,12 +234,13 @@ def open_hive(
         covered leaf's metadata) and zero rows along the cell dimension —
         and emits a ``UserWarning`` naming the store (issue #4). The empty
         result composes with ``decode``, ``index_kind="moc"`` (an empty
-        interval domain), and ``fabricate_cell_ids``; with
-        ``index_kind="pandas"``, ``xr.concat`` of the empty result with a
-        non-empty one preserves dtypes — both sides carry every variable,
-        so xarray fills nothing and no int→float NaN promotion occurs
-        (pinned in ``tests/test_open.py``; the moc default's interval index
-        has no concat, so concat workflows open with ``"pandas"``).
+        interval domain), and ``fabricate_cell_ids``. ``xr.concat`` of the
+        empty result with a non-empty one preserves dtypes on either
+        ``index_kind`` — both sides carry every variable, so xarray fills
+        nothing and no int→float NaN promotion occurs; on the moc default
+        the empty side contributes no intervals, so the concat returns the
+        non-empty domain unchanged (issue #4's empty-composes-through-concat
+        contract, pinned in ``tests/test_open.py``).
 
         Raises ``ValueError`` when the root is not a hive store (no
         manifest), and :class:`moczarr.NoCoverageError` — a ``ValueError``
