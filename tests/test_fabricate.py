@@ -90,8 +90,10 @@ class TestFabricateCellIds:
 
     def test_golden_parity_serc(self):
         # The money test: fabricated ids from the fixture's morton coordinate
-        # EXACTLY equal the zagg-written stored cell_ids array.
-        ds = open_hive(str(FIXTURE), fabricate_cell_ids=False)
+        # EXACTLY equal the zagg-written stored cell_ids array. The stored
+        # bytes are only readable on the pandas path (the moc default never
+        # reads the coordinate chunks).
+        ds = open_hive(str(FIXTURE), fabricate_cell_ids=False, index_kind="pandas")
         stored = np.asarray(ds["cell_ids"].values, dtype=np.uint64)
         fabricated = fabricate_cell_ids(np.asarray(ds["morton"].values, dtype=np.uint64), level=8)
         assert fabricated.dtype == stored.dtype == np.uint64
@@ -100,16 +102,20 @@ class TestFabricateCellIds:
 
 class TestOpenHiveFabrication:
     def test_auto_keeps_stored(self):
-        # Default ("auto") on a store that carries cell_ids: the stored
-        # coordinate rides through untouched — identical to a no-fabrication
-        # open.
-        ds_auto = open_hive(str(FIXTURE))
-        ds_plain = open_hive(str(FIXTURE), fabricate_cell_ids=False)
+        # "auto" on a pandas-path open of a store that carries cell_ids: the
+        # stored coordinate rides through untouched — identical to a
+        # no-fabrication open. (The moc default drops the stored arrays
+        # unread and fabricates the exact same values instead; the parity
+        # tests in test_open.py pin that equivalence.)
+        ds_auto = open_hive(str(FIXTURE), index_kind="pandas")
+        ds_plain = open_hive(str(FIXTURE), fabricate_cell_ids=False, index_kind="pandas")
         assert "cell_ids" in ds_auto.coords
         np.testing.assert_array_equal(ds_auto["cell_ids"].values, ds_plain["cell_ids"].values)
 
     def test_auto_fabricates_when_absent(self, tmp_path):
-        golden = open_hive(str(FIXTURE), fabricate_cell_ids=False)["cell_ids"].values
+        golden = open_hive(str(FIXTURE), fabricate_cell_ids=False, index_kind="pandas")[
+            "cell_ids"
+        ].values
         ds = open_hive(_morton_only_copy(tmp_path))
         assert "cell_ids" in ds.coords
         assert ds["cell_ids"].dtype == np.uint64
@@ -123,7 +129,9 @@ class TestOpenHiveFabrication:
         # True fabricates even when a stored array exists; parity means the
         # replacement equals the stored bytes.
         ds = open_hive(str(FIXTURE), fabricate_cell_ids=True)
-        stored = open_hive(str(FIXTURE), fabricate_cell_ids=False)["cell_ids"].values
+        stored = open_hive(str(FIXTURE), fabricate_cell_ids=False, index_kind="pandas")[
+            "cell_ids"
+        ].values
         np.testing.assert_array_equal(ds["cell_ids"].values, stored)
 
     def test_invalid_posture_raises(self):

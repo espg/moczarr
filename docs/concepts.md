@@ -71,14 +71,16 @@ actually store.
 
 ## The lazy index
 
-`open_hive(..., index_kind="moc")` replaces read-and-materialize with the
-§6 posture: the row domain is held as a `MortonRanges` interval set built
+`open_hive`'s default index posture (`index_kind="moc"`) replaces
+read-and-materialize with the §6 posture: the row domain is held as a
+`MortonRanges` interval set built
 from the *same* coverage arithmetic that selected the leaves, and the
 `morton` coordinate is fabricated from it on demand by a `MortonMocIndex`
 (a plain `xarray.Index` — core, no xdggs needed). The on-disk
 `morton`/`cell_ids` arrays are never read: `tools/bench_open.py` pins
 **zero coordinate-chunk GETs** for a moc open, and the result is
-value-identical to the `index_kind="pandas"` path.
+value-identical to the materialized `index_kind="pandas"` path (one kwarg
+away when a workflow needs it).
 
 The substrate works in **rank space**, not word space: packed words at a
 fixed cell order are not unit-stride across a shard subtree, but

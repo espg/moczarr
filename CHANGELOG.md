@@ -5,6 +5,15 @@
 First release — the complete phase 0–7 reader from the plan issue
 ([#1](https://github.com/espg/moczarr/issues/1)).
 
+**`open_hive` defaults to the lazy index**: `index_kind="moc"` is the
+default posture — a whole-store or AOI open reads *no* coordinate chunks,
+holding the row domain as an interval set and fabricating the `morton`
+coordinate on demand. The result is value-identical to the materialized
+open; pass `index_kind="pandas"` to materialize instead. One workflow
+difference to know: `xr.concat` across two moc-indexed opens raises
+`NotImplementedError` (the interval index has no concat yet) — concat
+workflows should open with `index_kind="pandas"`.
+
 - Scaffold + the morton-hive convention core: hive paths, manifest
   parsing, node invariant, morton decimal↔word helpers
   ([#2](https://github.com/espg/moczarr/pull/2)).

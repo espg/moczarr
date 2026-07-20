@@ -25,11 +25,11 @@ ds = moczarr.open_hive("s3://bucket/prefix", aoi=["433142"], anonymous=True)
   morton words or decimal strings, mixed orders) and time-window scoping
   resolve through coverage metadata, not object listings. An AOI over no
   coverage is a data answer: a schema-correct empty dataset, not an error.
-- **A MOC-backed lazy index** — the row domain held as a rank-space
-  interval set built from the same coverage arithmetic that selected the
-  leaves; the on-disk cell arrays are never read, and the `morton`
-  coordinate is fabricated on demand (`sel`/`isel`/alignment as interval
-  arithmetic).
+- **A MOC-backed lazy index** (the default) — the row domain held as a
+  rank-space interval set built from the same coverage arithmetic that
+  selected the leaves; the on-disk cell arrays are never read, and the
+  `morton` coordinate is fabricated on demand (`sel`/`isel`/alignment as
+  interval arithmetic; `index_kind="pandas"` materializes instead).
 - **Exact NESTED fabrication** — HEALPix NESTED `cell_ids` derived exactly
   from the packed morton words ("NESTED is fabricated, never stored").
 - **Cross-resolution joins** — morton truncation makes coarse↔fine work a

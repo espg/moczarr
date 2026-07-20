@@ -30,12 +30,14 @@ packed morton order:
 <xarray.Dataset> Size: 5kB
 Dimensions:     (cells: 96)
 Coordinates:
+  * morton      (cells) uint64 768B 5340987683084697608 ... 5359547439361556488
     cell_ids    (cells) uint64 768B 238064 238065 238066 ... 239118 239119
-    morton      (cells) uint64 768B 5340987683084697608 ... 5359547439361556488
 Data variables:
     count       (cells) int32 384B 30 31 6 2 11 9 22 34 30 ... 0 0 0 0 0 0 0 0
     h_mean      (cells) float32 384B 29.92 22.49 22.39 28.04 ... nan nan nan nan
     ...
+Indexes:
+    morton   MortonMocIndex(ranges=5, size=96)
 ```
 
 `morton` is the packed `uint64` morton word (the stored cell identity);
@@ -65,17 +67,19 @@ answer, not an error: you get a schema-correct **empty** dataset and a
 
 ## The lazy index
 
-`index_kind="moc"` holds the row domain as an interval set instead of
+That `MortonMocIndex` in the repr above is the **default** index posture
+(`index_kind="moc"`): the row domain is held as an interval set instead of
 reading the stored coordinate — the on-disk `morton`/`cell_ids` chunks are
 **never fetched**, and the coordinate fabricates on demand:
 
 ```python
-lazy = moczarr.open_hive("tests/data/serc_hive", index_kind="moc")
+lazy = moczarr.open_hive("tests/data/serc_hive")   # moc is the default
 lazy.xindexes["morton"]  # <MortonMocIndex(level=8, ranges=5, size=96)>
 ```
 
-The result is value-identical to the materialized (`index_kind="pandas"`)
-open; `sel`/`isel`/alignment run as rank arithmetic on intervals. See
+The result is value-identical to the materialized open
+(`index_kind="pandas"`, one kwarg away); `sel`/`isel`/alignment run as
+rank arithmetic on intervals. See
 [the lazy index](concepts.md#the-lazy-index) for what degrades (and how)
 when a selection can't be represented as intervals — and note that
 `xr.concat` of two moc-indexed datasets is not supported: open with
