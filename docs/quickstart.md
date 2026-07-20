@@ -108,7 +108,7 @@ plain xarray groupby over the fabricated parent coordinate:
 ```python
 parents = moczarr.parent_cells(ds, 6)     # DataArray "parent_o6"
 coarse = ds.groupby(parents).mean().rename({parents.name: "morton"})
-coarse.sizes                              # {'parent_o6': 6} -> 6 shards
+coarse.sizes                              # {'morton': 6} -> 6 shards
 ```
 
 **Coarse → fine** is `join_coarse`: each fine cell looks up its containing
