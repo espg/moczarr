@@ -29,6 +29,7 @@ import numpy as np
 from moczarr.convention import (
     HIVE_SPEC_V2,
     leaf_path,
+    manifest_path_grouping,
     morton_word,
     split_leaf_name,
     validate_label,
@@ -74,6 +75,7 @@ def _candidate_leaves(
     and the error message lists the labels.
     """
     windowed = manifest["spec"] == HIVE_SPEC_V2
+    grouping = manifest_path_grouping(manifest)
     if window is not None:
         validate_label(window)
         if not windowed:
@@ -91,11 +93,13 @@ def _candidate_leaves(
             from mortie import clip2order
 
             words = np.unique(clip2order(int(manifest["shard_order"]), words))
-        return [leaf_path(int(w), window=window) for w in np.sort(words)]
+        return [leaf_path(int(w), window=window, path_grouping=grouping) for w in np.sort(words)]
     # Walk fallback (no usable root MOC), and the windowed-discovery case.
     found: dict[str, int] = {}
     labels: set[str] = set()
-    for rel in walk_leaves(store_root, store=store, concurrency=concurrency):
+    for rel in walk_leaves(
+        store_root, store=store, concurrency=concurrency, path_grouping=grouping
+    ):
         shard, label = split_leaf_name(rel.rsplit("/", 1)[-1])
         labels.add(label if label is not None else "<none>")
         if label != window:
@@ -118,7 +122,12 @@ def _candidate_leaves(
 
 
 def _schema_leaf(
-    store_root: str, window: str | None, *, store: Any = None, concurrency: int | None = None
+    store_root: str,
+    window: str | None,
+    *,
+    store: Any = None,
+    concurrency: int | None = None,
+    path_grouping: int = 1,
 ) -> str | None:
     """One commit-stamped leaf anywhere in the store, or ``None`` (issue #4).
 
@@ -133,12 +142,17 @@ def _schema_leaf(
     """
     envelope = load_root_coverage(store_root, store=store)
     if envelope is not None:
-        candidates = [leaf_path(int(w), window=window) for w in np.sort(ranges_words(envelope))]
+        candidates = [
+            leaf_path(int(w), window=window, path_grouping=path_grouping)
+            for w in np.sort(ranges_words(envelope))
+        ]
         stamps = read_commits(store_root, candidates, store=store, concurrency=concurrency)
         rel = next((r for r, s in zip(candidates, stamps) if s is not None), None)
         if rel is not None:
             return rel
-    leaves = sorted(walk_leaves(store_root, store=store, concurrency=concurrency))
+    leaves = sorted(
+        walk_leaves(store_root, store=store, concurrency=concurrency, path_grouping=path_grouping)
+    )
     stamps = read_commits(store_root, leaves, store=store, concurrency=concurrency)
     return next((r for r, s in zip(leaves, stamps) if s is not None), None)
 
@@ -326,7 +340,11 @@ def open_hive(
         schema_from_walk = False
         if schema_rel is None:
             schema_rel = _schema_leaf(
-                store_root, window, store=obstore_store, concurrency=concurrency
+                store_root,
+                window,
+                store=obstore_store,
+                concurrency=concurrency,
+                path_grouping=manifest_path_grouping(manifest),
             )
             schema_from_walk = True
         if schema_rel is None:

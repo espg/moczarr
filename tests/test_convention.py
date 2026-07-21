@@ -127,6 +127,54 @@ class TestNodeInvariant:
             convention.check_node_invariant(bad)
 
 
+class TestPathGrouping:
+    """The D21 digit-chunking (spec §6.1): grouping is the ONE path code path."""
+
+    def test_group_digits(self):
+        assert convention.group_digits("112333", 1) == list("112333")
+        assert convention.group_digits("112333", 3) == ["112", "333"]
+        # The LAST component carries the remainder (leading stay full-width).
+        assert convention.group_digits("33142241", 3) == ["331", "422", "41"]
+        assert convention.group_digits("", 3) == []
+
+    def test_leaf_path_grouped_goldens(self):
+        # Both hemispheres + the short remainder component (8 % 3 == 2).
+        assert convention.leaf_path("433142241", path_grouping=3) == "4/331/422/41/433142241.zarr"
+        assert (
+            convention.leaf_path("-433412214", path_grouping=3) == "-4/334/122/14/-433412214.zarr"
+        )
+        # Evenly dividing order: no short component.
+        assert convention.leaf_path("-5112333", path_grouping=3) == "-5/112/333/-5112333.zarr"
+        assert convention.leaf_path("-5112333", path_grouping=6) == "-5/112333/-5112333.zarr"
+
+    def test_grouping_one_is_the_same_path(self):
+        # path_grouping=1 must be byte-identical to the (mortie-delegated)
+        # default — one generic chunking, never a separate branch.
+        assert convention.leaf_path(SHARD, path_grouping=1) == convention.leaf_path(SHARD)
+
+    def test_windowed_grouped(self):
+        path = convention.leaf_path("-5112333", window="2019", path_grouping=3)
+        assert path == "-5/112/333/-5112333_2019.zarr"
+
+    def test_node_invariant_grouped(self):
+        convention.check_node_invariant("4/331/422/41/433142241.zarr", path_grouping=3)
+        convention.check_node_invariant("-5/112/333/-5112333_2019.zarr", path_grouping=3)
+        for bad in (
+            "-5/1/1/2/3/3/3/-5112333.zarr",  # one-digit components under grouping 3
+            "-5/11/23/33/-5112333.zarr",  # short NON-terminal component
+            "4/331/422/414/43314224.zarr",  # id != concatenated components
+        ):
+            with pytest.raises(ValueError, match="node invariant"):
+                convention.check_node_invariant(bad, path_grouping=3)
+        # A grouped path is a violation under grouping 1 (and the default).
+        with pytest.raises(ValueError, match="node invariant"):
+            convention.check_node_invariant("-5/112/333/-5112333.zarr")
+
+    def test_manifest_accessor(self):
+        assert convention.manifest_path_grouping({"path_grouping": 3}) == 3
+        assert convention.manifest_path_grouping({}) == 1  # D21: absent -> 1
+
+
 def _manifest(**overrides):
     base = {
         "spec": convention.HIVE_SPEC,
@@ -173,6 +221,13 @@ class TestManifest:
     def test_v2_requires_temporal(self):
         with pytest.raises(ValueError, match="temporal block"):
             convention.parse_manifest(_manifest(spec=convention.HIVE_SPEC_V2))
+
+    def test_path_grouping_validated(self):
+        assert convention.parse_manifest(_manifest(path_grouping=3))["path_grouping"] == 3
+        assert "path_grouping" not in convention.parse_manifest(_manifest())  # absent ok
+        for bad in (0, -1, "3", [1, 2], True, None):
+            with pytest.raises(ValueError, match="path_grouping"):
+                convention.parse_manifest(_manifest(path_grouping=bad))
 
     def test_v1_refuses_temporal(self):
         with pytest.raises(ValueError, match="must not carry"):

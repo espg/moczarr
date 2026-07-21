@@ -295,13 +295,16 @@ def bitmap_and(
     return moc_and(occupied, np.asarray(aoi, dtype=np.uint64))
 
 
-def _classify_children(listing, prefix: str) -> Iterator[tuple[str, bool]]:
+def _classify_children(listing, prefix: str, path_grouping: int = 1) -> Iterator[tuple[str, bool]]:
     """``(rel, is_leaf)`` for each conforming child prefix of one digit node.
 
-    Root children must be ``{sign+base}``-shaped, deeper children a single
-    ``1..4`` digit; a ``*.zarr`` child is a leaf at that node. Non-conforming
-    names below the root are ignored (the node invariant says they are not
-    ours to interpret).
+    Root children must be ``{sign+base}``-shaped, deeper children a digit
+    (``1..4``) component of 1..``path_grouping`` digits (spec §6.1: only the
+    terminal component may be short, but terminal-ness is not knowable from
+    one LIST, so the walker accepts any conforming width and recurses); a
+    ``*.zarr`` child is a leaf at that node. Non-conforming names below the
+    root are ignored (the node invariant says they are not ours to
+    interpret).
     """
     for child in listing["common_prefixes"]:
         rel = child.rstrip("/")
@@ -310,7 +313,9 @@ def _classify_children(listing, prefix: str) -> Iterator[tuple[str, bool]]:
             yield rel, True
             continue
         is_digit_node = (
-            is_base_component(name) if prefix == "" else len(name) == 1 and name in "1234"
+            is_base_component(name)
+            if prefix == ""
+            else 1 <= len(name) <= path_grouping and set(name) <= set("1234")
         )
         if is_digit_node:
             yield rel, False
@@ -336,6 +341,7 @@ def walk_leaves(
     *,
     store: Any = None,
     concurrency: int | None = None,
+    path_grouping: int = 1,
     **store_kwargs: Any,
 ) -> Iterator[str]:
     """Yield the store-relative path of every leaf zarr — the discovery walk.
@@ -345,6 +351,11 @@ def walk_leaves(
     strongly consistent and object stores have no empty prefixes, so absence
     is definitive). Yields stamped and debris leaves alike — completeness is
     the caller's check (:func:`read_commit`), matching the tiered postures.
+
+    ``path_grouping`` is the manifest's digit-chunking (spec §6.1) — child
+    classification depends on it, so callers walking a grouped store must
+    pass the manifest's value (readers hold the manifest before any path
+    work; D10).
 
     ``concurrency`` > 1 batches the LISTs breadth-parallel, one tree level
     at a time (``obstore.list_with_delimiter_async`` behind a semaphore).
@@ -359,7 +370,7 @@ def walk_leaves(
         while stack:
             prefix = stack.pop()
             listing = obstore.list_with_delimiter(handle, prefix or None)
-            for rel, is_leaf in _classify_children(listing, prefix):
+            for rel, is_leaf in _classify_children(listing, prefix, path_grouping):
                 if is_leaf:
                     yield rel
                 else:
@@ -370,7 +381,7 @@ def walk_leaves(
         listings = _run_coroutine(_list_level_async(handle, level, concurrency))
         next_level = []
         for prefix, listing in zip(level, listings):
-            for rel, is_leaf in _classify_children(listing, prefix):
+            for rel, is_leaf in _classify_children(listing, prefix, path_grouping):
                 if is_leaf:
                     yield rel
                 else:

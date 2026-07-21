@@ -6,12 +6,20 @@ The layout is owned by the mortie spec (espg/mortie#62); zagg writes it
     {store_root}/
       morton_hive.json               <- static manifest; root-only exception
       coverage.moc                   <- root ranges MOC; root-only exception
-      {sign+base}/{d1}/.../{d_n}/    <- one decimal digit per level
+      {sign+base}/{d1}/.../{d_n}/    <- digit component(s) per level
         {full_id}.zarr/              <- vanilla zarr v3 leaf
         {full_id}_{window}.zarr/     <- time-windowed leaf (morton-hive/2)
 
 - Ids are morton decimal strings: sign + base digit (``1..6``), then one
   digit ``1..4`` per order. A string prefix is a spatial ancestor.
+- Path components chunk the digit tail per the manifest's ``path_grouping``
+  (spec §6.1; zagg D21): ``path_grouping`` digits per component, the LAST
+  component carrying the remainder when the order does not divide evenly
+  (leading components stay full-width, so component boundaries are ancestor
+  prefixes shared by deeper shards regardless of their order). ``1`` — the
+  default, and every existing store retroactively — is a value of the one
+  generic chunking, never a separate code path; readers chunk per the
+  manifest, never by assumption.
 - Below the root a node holds only digit children and ``*.zarr`` objects
   (the node invariant); the manifest and root ``coverage.moc`` are the two
   root-only exceptions.
@@ -108,6 +116,28 @@ def is_base_component(name: str) -> bool:
     return len(base) == 1 and base in "123456"
 
 
+def group_digits(digits: str, path_grouping: int) -> list[str]:
+    """Chunk a digit tail into hive path components (spec §6.1, zagg D21).
+
+    Left to right, ``path_grouping`` digits per component; the LAST component
+    carries the remainder when ``len(digits) % path_grouping != 0``. Leading
+    components stay full-width so every component boundary is a spatial
+    ancestor prefix (§2) shared by deeper shards regardless of their order —
+    mixed-order shards share ancestor nodes, the property the digit tree
+    exists for.
+    """
+    return [digits[i : i + path_grouping] for i in range(0, len(digits), path_grouping)]
+
+
+def manifest_path_grouping(manifest: dict) -> int:
+    """The manifest's ``path_grouping`` (D21: absent reads as ``1``).
+
+    Assumes a :func:`parse_manifest`-validated manifest; the single accessor
+    keeps the absent->1 normalization in one place.
+    """
+    return int(manifest.get("path_grouping", 1))
+
+
 def validate_label(label: str) -> str:
     """Validate a window label against the frozen charset; returns it."""
     if not isinstance(label, str) or not _LABEL_RE.match(label):
@@ -143,12 +173,16 @@ def split_leaf_name(name: str) -> tuple[str, str | None]:
     return full_id, window
 
 
-def leaf_path(shard: str | int, window: str | None = None) -> str:
+def leaf_path(shard: str | int, window: str | None = None, *, path_grouping: int = 1) -> str:
     """Store-relative hive path of a shard's leaf zarr.
 
-    Computed by mortie's ``hive_path`` (the convention owner) and re-checked
-    against the node invariant so drift on either side fails loudly.
-    ``window`` selects the time-windowed leaf at the same node.
+    ``path_grouping`` is the manifest's digit-chunking (spec §6.1; default
+    ``1`` — every pre-D21 store). At ``1`` the path is computed by mortie's
+    ``hive_path`` (the convention owner) and re-checked against the node
+    invariant so drift on either side fails loudly; the grouped form chunks
+    the decimal here (:func:`group_digits`) until mortie grows the grouped
+    ``hive_path`` (espg/mortie#62). ``window`` selects the time-windowed
+    leaf at the same node.
     """
     from mortie import MortonIndexArray
 
@@ -159,21 +193,29 @@ def leaf_path(shard: str | int, window: str | None = None) -> str:
             f"packed morton word is required. Parse a decimal id by passing it "
             f"as a string (e.g. morton_word('-5112333')) instead."
         )
-    rel = MortonIndexArray.from_words(np.asarray([word], dtype=np.uint64)).hive_path()[0]
-    if window is not None:
-        node, _sep, bare = rel.rpartition("/")
-        rel = f"{node}/{leaf_name(bare.removesuffix('.zarr'), window)}"
-    check_node_invariant(rel)
+    if path_grouping == 1:
+        rel = MortonIndexArray.from_words(np.asarray([word], dtype=np.uint64)).hive_path()[0]
+        if window is not None:
+            node, _sep, bare = rel.rpartition("/")
+            rel = f"{node}/{leaf_name(bare.removesuffix('.zarr'), window)}"
+    else:
+        decimal = morton_decimal(word)
+        base = decimal_base(decimal)
+        components = [base, *group_digits(decimal[len(base) :], path_grouping)]
+        rel = f"{'/'.join(components)}/{leaf_name(decimal, window)}"
+    check_node_invariant(rel, path_grouping=path_grouping)
     return rel
 
 
-def check_node_invariant(rel_path: str) -> None:
+def check_node_invariant(rel_path: str, *, path_grouping: int = 1) -> None:
     """Raise unless ``rel_path`` is a legal hive leaf path.
 
     Below the root only digit components are allowed — ``{sign+base}``
-    (optional ``-``, one digit ``1..6``) at the first level, one ``1..4``
-    digit per level after — terminating in ``{full_id}.zarr`` (or the
-    windowed ``{full_id}_{window}.zarr``) whose id equals the concatenated
+    (optional ``-``, one digit ``1..6``) at the first level, then digit
+    (``1..4``) components chunked per ``path_grouping`` (spec §6.1): every
+    component full-width except the last, which carries the remainder —
+    terminating in ``{full_id}.zarr`` (or the windowed
+    ``{full_id}_{window}.zarr``) whose id equals the concatenated
     components. This is the walker's contract: any other name under the root
     (bar the manifest and the root ``coverage.moc``) breaks child
     classification.
@@ -188,10 +230,14 @@ def check_node_invariant(rel_path: str) -> None:
         except ValueError:
             full_id = None  # malformed window label -> not a legal leaf
         ok = is_base_component(head)
-        ok = ok and all(len(d) == 1 and d in "1234" for d in digits)
+        ok = ok and all(1 <= len(d) <= path_grouping and set(d) <= set("1234") for d in digits)
+        # Only the LAST component may be short (the remainder rides last).
+        ok = ok and all(len(d) == path_grouping for d in digits[:-1])
         ok = ok and full_id == head + "".join(digits)
     if not ok:
-        raise ValueError(f"path {rel_path!r} violates the hive node invariant")
+        raise ValueError(
+            f"path {rel_path!r} violates the hive node invariant (path_grouping={path_grouping})"
+        )
 
 
 def parse_manifest(payload: object) -> dict:
@@ -216,6 +262,11 @@ def parse_manifest(payload: object) -> dict:
             f"manifest cell_order {payload['cell_order']} is above shard_order "
             f"{payload['shard_order']} (cells nest inside shards)"
         )
+    grouping = payload.get("path_grouping", 1)
+    if isinstance(grouping, bool) or not isinstance(grouping, int) or grouping < 1:
+        # Spec §6.1 defines path_grouping as an integer digit count (absent
+        # reads as 1, D21); no list form exists in the spec grammar.
+        raise ValueError(f"manifest path_grouping must be an integer >= 1 (got {grouping!r})")
     temporal = payload.get("temporal")
     if spec == HIVE_SPEC_V2:
         if not isinstance(temporal, dict) or not temporal.get("schedule"):
