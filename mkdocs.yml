@@ -18,6 +18,8 @@ theme:
 
 plugins:
   - search
+  - mkdocs-jupyter:
+      execute: false  # committed-executed: outputs live in the notebook
   - mkdocstrings:
       handlers:
         python:
@@ -26,3 +28,18 @@ plugins:
 
 nav:
   - Home: index.md
+  - Quickstart: quickstart.md
+  - Example notebook: examples/quickstart.ipynb
+  - Concepts: concepts.md
+  - API reference:
+      - open: api/open.md
+      - join: api/join.md
+      - moc_index: api/moc_index.md
+      - ranges: api/ranges.md
+      - fabricate: api/fabricate.md
+      - dggs: api/dggs.md
+      - convention: api/convention.md
+      - coverage: api/coverage.md
+      - store: api/store.md
+      - exceptions: api/exceptions.md
+  - Development: development.md

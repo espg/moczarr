@@ -203,6 +203,10 @@ class MortonIndex(DGGSIndex):
     coordinate) so the ``ds.dggs`` accessor works on a lazy index. An
     ``xr.Index`` instance passes through as the inner index directly (the
     ``open_hive(index_kind="moc", decode=True)`` wrap — no rebuild).
+
+    The ``"pandas"`` default here is the decode-a-materialized-coordinate
+    convention (upstream parity); :func:`moczarr.open_hive` itself defaults
+    to ``index_kind="moc"`` and passes the kind through explicitly.
     """
 
     _grid: DGGSInfo

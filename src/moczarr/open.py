@@ -165,7 +165,7 @@ def open_hive(
     anonymous: bool = False,
     fabricate_cell_ids: bool | str = "auto",
     decode: bool = False,
-    index_kind: str = "pandas",
+    index_kind: str = "moc",
     concurrency: int | None = 32,
     xr_kwargs: dict[str, Any] | None = None,
     **store_kwargs: Any,
@@ -207,18 +207,22 @@ def open_hive(
         returning (``moczarr.dggs.decode``), enabling the ``ds.dggs``
         accessor. Requires the ``moczarr[xdggs]`` extra; the default leaves
         the result xdggs-free.
-    index_kind : {"pandas", "moc"}, optional
+    index_kind : {"moc", "pandas"}, optional
         Index posture for the ``morton`` coordinate (the xdggs vocabulary).
-        ``"pandas"`` (default) is the status quo: the stored coordinate is
-        read and, with ``decode=True``, indexed through a ``PandasIndex``.
-        ``"moc"`` is the lazy path: the on-disk ``morton``/``cell_ids``
-        arrays are never read — the row domain comes from the same coverage
-        arithmetic that selected the leaves (shard subtrees ∩ AOI), held as
-        a :class:`moczarr.moc_index.MortonMocIndex` whose coordinate is
+        ``"moc"`` (default) is the lazy path: the on-disk
+        ``morton``/``cell_ids`` arrays are never read — the row domain comes
+        from the same coverage arithmetic that selected the leaves (shard
+        subtrees ∩ AOI), held as a
+        :class:`moczarr.moc_index.MortonMocIndex` whose coordinate is
         fabricated on demand. The index attaches regardless of ``decode``
         (it is core, xarray-only); ``decode=True`` additionally wraps it for
         the ``ds.dggs`` accessor. Requiring ``decode`` here would chain the
         core lazy index to the xdggs extra, against the ratified placement.
+        ``"pandas"`` materializes instead: the stored coordinate is read
+        and, with ``decode=True``, indexed through a ``PandasIndex`` — use
+        it when a workflow needs what the interval index cannot represent
+        (notably ``xr.concat`` of overlapping or out-of-order domains; the
+        disjoint, ascending batch-sweep concat works on the moc default).
     concurrency : int or None, optional
         Maximum in-flight metadata requests (the candidate leaves' stamp
         GETs, and the discovery walk's per-level LISTs), default 32 — the
@@ -244,10 +248,13 @@ def open_hive(
         covered leaf's metadata) and zero rows along the cell dimension —
         and emits a ``UserWarning`` naming the store (issue #4). The empty
         result composes with ``decode``, ``index_kind="moc"`` (an empty
-        interval domain), and ``fabricate_cell_ids``; ``xr.concat`` of the
-        empty result with a non-empty one preserves dtypes — both sides
-        carry every variable, so xarray fills nothing and no int→float NaN
-        promotion occurs (pinned in ``tests/test_open.py``).
+        interval domain), and ``fabricate_cell_ids``. ``xr.concat`` of the
+        empty result with a non-empty one preserves dtypes on either
+        ``index_kind`` — both sides carry every variable, so xarray fills
+        nothing and no int→float NaN promotion occurs; on the moc default
+        the empty side contributes no intervals, so the concat returns the
+        non-empty domain unchanged (issue #4's empty-composes-through-concat
+        contract, pinned in ``tests/test_open.py``).
 
         Raises ``ValueError`` when the root is not a hive store (no
         manifest), and :class:`moczarr.NoCoverageError` — a ``ValueError``
@@ -424,6 +431,12 @@ def open_hive(
             _stacklevel=4,
         )
         result = result.assign_coords(cell_ids=(result["morton"].dims, ids))
+    # Data-variable order is otherwise the completion order of zarr-python's
+    # async member listing — non-deterministic run to run (a fresh open
+    # reshuffles ds.data_vars). Sort lexically so a given store always opens
+    # with the same variable order: reproducible reprs and stable notebook
+    # outputs. Coordinates and the morton index ride along unchanged.
+    result = result[sorted(result.data_vars)]
     result.attrs["morton_hive"] = {
         k: manifest[k] for k in ("spec", "cell_order", "shard_order", "dataset")
     }

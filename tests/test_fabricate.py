@@ -165,7 +165,7 @@ class TestFabricateCellIds:
         # The money test: fabricated ids from the (morton-only) fixture's
         # morton coordinate EXACTLY equal the cell_ids array the final
         # dual-written zagg fixture stored (frozen in the .npy golden).
-        ds = open_hive(str(FIXTURE), fabricate_cell_ids=False)
+        ds = open_hive(str(FIXTURE), fabricate_cell_ids=False, index_kind="pandas")
         assert "cell_ids" not in ds.variables  # post-#314 stores are morton-only
         fabricated = fabricate_cell_ids(np.asarray(ds["morton"].values, dtype=np.uint64), level=8)
         assert fabricated.dtype == np.uint64
@@ -177,7 +177,7 @@ class TestOpenHiveFabrication:
         # Default ("auto") on a store that carries cell_ids (the zagg
         # emit_cell_ids transition hatch): the stored coordinate rides
         # through untouched — the deviant bytes prove no refabrication.
-        ds_auto = open_hive(_dual_written_copy(tmp_path))
+        ds_auto = open_hive(_dual_written_copy(tmp_path), index_kind="pandas")
         assert "cell_ids" in ds_auto.coords
         np.testing.assert_array_equal(ds_auto["cell_ids"].values, golden_cell_ids() + np.uint64(1))
 

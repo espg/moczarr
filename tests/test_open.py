@@ -65,6 +65,15 @@ class TestOpenHive:
         # The leaf's dggs zarr-convention attrs survive (phase-4 seam).
         assert "dggs" in ds.attrs or "zarr_conventions" in ds.attrs
 
+    def test_data_var_order_is_deterministic(self, serc):
+        # zarr-python lists group members in async completion order, so a
+        # naive open reshuffles ds.data_vars run to run — non-reproducible
+        # reprs and notebook diffs. open_hive sorts them lexically; two
+        # consecutive opens must agree (and match sorted order).
+        first = list(open_hive(serc).data_vars)
+        second = list(open_hive(serc).data_vars)
+        assert first == second == sorted(first)
+
     def test_matches_manual_leaf_open(self, serc):
         # Drop-in claim: one leaf opened by plain xr.open_zarr equals the
         # corresponding slice of open_hive's result.
@@ -204,17 +213,61 @@ class TestEmptyAoi:
         assert ours[0].filename == __file__
 
     def test_concat_roundtrips(self, serc):
-        # The composability the issue asks for: concat with the empty result
-        # is the identity — values equal and, because both sides carry every
-        # variable (nothing to fill), dtypes are preserved: no int→float NaN
+        # The composability issue #4 asks for, now on the DEFAULT moc index:
+        # concat with the empty result is the identity. The empty side
+        # contributes no intervals, so MortonMocIndex.concat returns the
+        # non-empty domain unchanged; both sides carry every variable
+        # (nothing to fill), so dtypes are preserved — no int→float NaN
         # promotion (pinned here, documented in open_hive's docstring).
+        from moczarr.moc_index import MortonMocIndex
+
         full = open_hive(serc)
         empty, _ = self._empty(serc)
         cat = xr.concat([empty, full], dim="cells")
+        assert isinstance(cat.xindexes["morton"], MortonMocIndex)
         assert cat.sizes["cells"] == full.sizes["cells"]
         for name in full.variables:
             np.testing.assert_array_equal(cat[name].values, full[name].values)
             assert cat[name].dtype == full[name].dtype
+
+    def _ordered_halves(self, serc):
+        # Two disjoint, word-ordered opens whose union is the whole store:
+        # the lower and upper halves of the stamped shards, ascending in
+        # packed-word order (the batch-sweep / AOI-tile concat pattern).
+        shards = sorted(_stamped_shards(serc), key=convention.morton_word)
+        half = len(shards) // 2
+        return shards[:half], shards[half:]
+
+    def test_concat_disjoint_ordered_roundtrips(self, serc):
+        # Issue #1 phase-7 (b): concat of two disjoint, ascending moc opens
+        # fabricates a coordinate byte-identical to the single full open, and
+        # the result keeps a MortonMocIndex (no materialization).
+        from moczarr.moc_index import MortonMocIndex
+
+        lo_shards, hi_shards = self._ordered_halves(serc)
+        lo = open_hive(serc, aoi=lo_shards)
+        hi = open_hive(serc, aoi=hi_shards)
+        full = open_hive(serc)
+        cat = xr.concat([lo, hi], dim="cells")
+        assert isinstance(cat.xindexes["morton"], MortonMocIndex)
+        assert cat.sizes["cells"] == full.sizes["cells"]
+        np.testing.assert_array_equal(cat["morton"].values, full["morton"].values)
+        np.testing.assert_array_equal(cat["cell_ids"].values, full["cell_ids"].values)
+        for name in full.data_vars:
+            np.testing.assert_array_equal(cat[name].values, full[name].values)
+
+    def test_concat_overlapping_or_reversed_raises(self, serc):
+        # The general (overlap / interleave / reversed) case stays on the
+        # index_kind="pandas" escape: MortonMocIndex.concat raises pointedly,
+        # naming that escape, rather than reordering the domain out from under
+        # the data variables.
+        lo_shards, hi_shards = self._ordered_halves(serc)
+        lo = open_hive(serc, aoi=lo_shards)
+        hi = open_hive(serc, aoi=hi_shards)
+        full = open_hive(serc)
+        for parts in ([hi, lo], [full, lo]):  # reversed, then overlapping
+            with pytest.raises(NotImplementedError, match=r'index_kind="pandas"'):
+                xr.concat(parts, dim="cells")
 
     def test_moc_index_empty(self, serc):
         from moczarr.moc_index import MortonMocIndex
@@ -429,11 +482,13 @@ class TestOpenHiveMocIndex:
     def test_full_store_equality(self, serc):
         from moczarr.moc_index import MortonMocIndex
 
-        want = open_hive(serc)
+        want = open_hive(serc, index_kind="pandas")
         got = open_hive(serc, index_kind="moc")
         self._assert_equal_datasets(want, got)
         assert isinstance(got.xindexes["morton"], MortonMocIndex)
-        assert "morton" not in want.xindexes  # default posture unchanged
+        assert "morton" not in want.xindexes  # the pandas posture stays index-free
+        # The default IS the moc path (the phase-7d flip, issue #1).
+        assert isinstance(open_hive(serc).xindexes["morton"], MortonMocIndex)
 
     @pytest.mark.parametrize(
         "aoi",
@@ -509,7 +564,7 @@ class TestOpenHiveMocIndex:
         ds["count"].values  # force the data reads; they must still flow
         assert coord_chunks() == []
         keys.clear()
-        open_hive(serc, aoi=[SERC_SHARD])
+        open_hive(serc, aoi=[SERC_SHARD], index_kind="pandas")
         assert coord_chunks() != []
 
     def test_invalid_index_kind_raises(self, serc):
