@@ -52,6 +52,19 @@ COMMIT_ATTR = "morton_hive_commit"
 COVERAGE_SIDECAR = "coverage.moc"
 ROOT_COVERAGE_NAME = "coverage.moc"
 
+#: Spec §5: the permanent, self-declared zarr-convention UUID for
+#: morton-declared stores (minted once; readers may key on it).
+MORTON_CONVENTION_UUID = "3e22156d-ea9e-4e01-95fe-e3809a4b41e7"
+#: Spec §5: the self-declared ``zarr_conventions`` entry, verbatim. The list
+#: may carry other entries alongside (e.g. the generic dggs registry one).
+MORTON_CONVENTION_ENTRY = {
+    "schema_url": "https://github.com/espg/mortie/blob/main/docs/specification.md#dggs-attrs",
+    "spec_url": "https://github.com/espg/mortie/blob/main/docs/specification.md",
+    "uuid": MORTON_CONVENTION_UUID,
+    "name": "morton-dggs",
+    "description": "Packed-u64 morton (HEALPix) DGGS convention",
+}
+
 #: Frozen window-label charset (no ``_``, so leaf names split unambiguously).
 _LABEL_RE = re.compile(r"^[0-9A-Za-z-]{1,32}$")
 
