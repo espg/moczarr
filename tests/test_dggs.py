@@ -314,7 +314,10 @@ class TestCombinedFlags:
         # stored cell_ids rides through untouched (deviant bytes kept) and
         # morton still gets its index.
         ds = open_hive(
-            _dual_written_copy(tmp_path), fabricate_cell_ids="auto", decode=True, index_kind="pandas"
+            _dual_written_copy(tmp_path),
+            fabricate_cell_ids="auto",
+            decode=True,
+            index_kind="pandas",
         )
         assert isinstance(ds.xindexes["morton"], dggs.MortonIndex)
         assert ds.dggs.grid_info == dggs.MortonInfo(level=8)
