@@ -9,7 +9,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from test_fabricate import _morton_only_copy
+from test_fabricate import _dual_written_copy, golden_cell_ids
 
 from moczarr import convention, open_hive, store
 
@@ -289,23 +289,22 @@ class TestDecode:
 class TestCombinedFlags:
     """Both #6/#7 knobs together: fabrication feeds decode (the merge-order test)."""
 
-    def test_decode_and_fabricate_morton_only(self, serc, tmp_path):
-        # Morton-only store, both flags on: fabrication attaches cell_ids
-        # BEFORE decode indexes morton, and the fabricated coordinate is
-        # byte-equal to the original store's stored (zagg-written) golden.
-        golden = open_hive(serc, fabricate_cell_ids=False)["cell_ids"].values
-        ds = open_hive(_morton_only_copy(tmp_path), fabricate_cell_ids="auto", decode=True)
+    def test_decode_and_fabricate_morton_only(self, serc):
+        # Morton-only store (the fixture, post zagg#314), both flags on:
+        # fabrication attaches cell_ids BEFORE decode indexes morton, and the
+        # fabricated coordinate is byte-equal to the frozen dual-written golden.
+        ds = open_hive(serc, fabricate_cell_ids="auto", decode=True)
         assert isinstance(ds.xindexes["morton"], dggs.MortonIndex)
         assert ds.dggs.grid_info == dggs.MortonInfo(level=8)
         assert "cell_ids" in ds.coords and "cell_ids" not in ds.xindexes
         assert ds["cell_ids"].dtype == np.uint64
-        np.testing.assert_array_equal(ds["cell_ids"].values, golden)
+        np.testing.assert_array_equal(ds["cell_ids"].values, golden_cell_ids())
 
-    def test_decode_and_fabricate_dual_written(self, serc):
-        # Unmodified (dual-written) fixture with both flags: the stored
-        # cell_ids rides through untouched and morton still gets its index.
-        ds = open_hive(serc, fabricate_cell_ids="auto", decode=True)
+    def test_decode_and_fabricate_dual_written(self, tmp_path):
+        # Dual-written (emit_cell_ids hatch) shape with both flags: the
+        # stored cell_ids rides through untouched (deviant bytes kept) and
+        # morton still gets its index.
+        ds = open_hive(_dual_written_copy(tmp_path), fabricate_cell_ids="auto", decode=True)
         assert isinstance(ds.xindexes["morton"], dggs.MortonIndex)
         assert ds.dggs.grid_info == dggs.MortonInfo(level=8)
-        stored = open_hive(serc, fabricate_cell_ids=False)["cell_ids"].values
-        np.testing.assert_array_equal(ds["cell_ids"].values, stored)
+        np.testing.assert_array_equal(ds["cell_ids"].values, golden_cell_ids() + np.uint64(1))
