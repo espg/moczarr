@@ -4,6 +4,7 @@
   "short_name": "ATL06",
   "version": "007"
  },
+ "semantic_hash": "ab87989b37adbce3797f73fa1fd5d9b2a634538764e180aef05f5c6a7106870b",
  "cell_order": 8,
  "shard_order": 6,
  "split_schedule": [
@@ -14,9 +15,10 @@
   1,
   1
  ],
+ "path_grouping": 1,
  "pyramid": {
   "orders": [],
   "aggregation": {}
  },
- "generated_at": "2026-07-17T20:35:37+00:00"
+ "generated_at": "2026-07-21T00:53:56+00:00"
 }

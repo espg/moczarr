@@ -217,3 +217,36 @@ class TestAoiMask:
         mixed = np.sort(_words("-5111111", "-51111121"))  # order 7 + order 8
         with pytest.raises(ValueError, match="single-order"):
             coverage.aoi_mask(mixed, _words("-5"))
+
+    def test_pure_point_cells(self):
+        # v1 posture (spec §4): points are order-29 members for containment,
+        # via their area twins — and a pure-point array is UNIFORM order 29,
+        # so the single-order guard accepts it rather than wrongly rejecting.
+        from test_convention import POINT_NORTH_WORD, POINT_SOUTH_WORD
+
+        cells = np.asarray([POINT_NORTH_WORD, POINT_SOUTH_WORD], dtype=np.uint64)
+        # North point path starts "41234..."; its order-4 ancestor contains it.
+        keep = coverage.aoi_mask(cells, _words("41234"))
+        np.testing.assert_array_equal(keep, [True, False])
+
+    def test_point_cell_in_order29_area_member(self):
+        # An order-29 AREA member on the same path contains the point (twin
+        # equality) — raw word equality would miss it (different suffixes).
+        from test_convention import AREA29_NORTH_WORD, POINT_NORTH_WORD, POINT_SOUTH_WORD
+
+        cells = np.asarray([POINT_NORTH_WORD, POINT_SOUTH_WORD], dtype=np.uint64)
+        keep = coverage.aoi_mask(cells, np.asarray([AREA29_NORTH_WORD], dtype=np.uint64))
+        np.testing.assert_array_equal(keep, [True, False])
+
+    def test_mixed_kind_cells_and_point_members(self):
+        # Mixed order-29 area + point cells are well-formed (§4: both are
+        # order-29 encodings); a POINT member selects the coarser cell that
+        # contains its path, like any finer member.
+        from test_convention import AREA29_SOUTH_WORD, POINT_NORTH_WORD, POINT_SOUTH_WORD
+
+        cells = np.asarray([POINT_NORTH_WORD, AREA29_SOUTH_WORD], dtype=np.uint64)
+        keep = coverage.aoi_mask(cells, np.asarray([POINT_SOUTH_WORD], dtype=np.uint64))
+        np.testing.assert_array_equal(keep, [False, True])
+        coarse = _words("41234")  # order-4 cells
+        keep = coverage.aoi_mask(coarse, np.asarray([POINT_NORTH_WORD], dtype=np.uint64))
+        np.testing.assert_array_equal(keep, [True])

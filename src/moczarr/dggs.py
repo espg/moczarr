@@ -32,7 +32,41 @@ except ImportError as exc:  # pragma: no cover - exercised only in core-only env
         "moczarr.dggs requires xdggs; install the extra: pip install 'moczarr[xdggs]'"
     ) from exc
 
+from moczarr.convention import MORTON_CONVENTION_UUID
+
 GRID_NAME = "morton"
+
+
+def _morton_convention_block(ds: xr.Dataset) -> dict | None:
+    """The dataset's §5 morton dggs declaration, or ``None``.
+
+    Recognizes the writer-flip attrs shape (mortie spec §5): an attrs
+    ``dggs`` block with ``name: "morton"``, and/or the permanent self-
+    declared convention UUID in ``zarr_conventions``. Hard-rejects the
+    RETIRED ``name: "healpix"`` + ``indexing_scheme: "morton"`` shape — the
+    scheme-blind misread hazard D16 removed: a healpix reader that ignores
+    the indexing scheme would decode packed morton words as NESTED ids and
+    mis-place every cell, so that shape must never decode quietly.
+    """
+    block = ds.attrs.get("dggs")
+    if not isinstance(block, dict):
+        return None
+    if block.get("name") == "healpix" and block.get("indexing_scheme") == "morton":
+        raise ValueError(
+            "dataset declares dggs name 'healpix' with indexing_scheme 'morton' "
+            "— the retired pre-flip shape (mortie spec §5). A scheme-blind "
+            "healpix reader would silently decode morton words as NESTED ids "
+            "and mis-place every cell; morton-declared stores use name "
+            "'morton'. Regenerate the store with a post-flip (zagg#314) writer."
+        )
+    conventions = ds.attrs.get("zarr_conventions")
+    declared_by_uuid = isinstance(conventions, list) and any(
+        isinstance(entry, dict) and entry.get("uuid") == MORTON_CONVENTION_UUID
+        for entry in conventions
+    )
+    if block.get("name") == GRID_NAME or declared_by_uuid:
+        return dict(block)
+    return None
 
 
 def _words(cell_ids) -> np.ndarray:
@@ -235,10 +269,18 @@ def decode(
     The xdggs-convention decode pattern: build the index off the coord's grid
     attrs (merged with ``**options``, e.g. ``level=...``), assign it via
     ``xr.Coordinates.from_xindex``. Missing attrs are filled in —
-    ``grid_name`` is always ``"morton"``, and ``level`` falls back to
-    ``ds.attrs["morton_hive"]["cell_order"]`` (the ``open_hive`` manifest
-    summary), then to the order packed in the first word itself. The filled
-    attrs land on the returned coord, so ``xdggs.decode`` round-trips.
+    ``grid_name`` is always ``"morton"``, and ``level`` falls back to the §5
+    convention block's ``refinement_level`` (a dataset carrying the
+    writer-flip ``dggs``/``zarr_conventions`` attrs — mortie spec §5,
+    recognized by ``name: "morton"`` and/or the permanent convention UUID),
+    then to ``ds.attrs["morton_hive"]["cell_order"]`` (the ``open_hive``
+    manifest summary), then to the order packed in the first word itself.
+    The retired ``name: "healpix"`` + ``indexing_scheme: "morton"`` attrs
+    shape hard-rejects with a diagnostic (§5: the scheme-blind misread
+    hazard). The filled attrs land on the returned coord, so
+    ``xdggs.decode`` round-trips. xdggs's own zarr-convention path
+    (``xdggs.decode(ds, convention="zarr", name="morton")``) reaches the
+    same registered grid directly off the §5 block.
 
     ``index_kind="moc"`` backs the index with the lazy
     :class:`~moczarr.moc_index.MortonMocIndex`: a coordinate already indexed
@@ -253,9 +295,15 @@ def decode(
     attrs.setdefault("grid_name", GRID_NAME)
     if attrs["grid_name"] != GRID_NAME:
         raise ValueError(f"{name!r} carries grid_name {attrs['grid_name']!r}, not {GRID_NAME!r}")
+    # The §5 convention block (writer-flip attrs shape): recognized whenever
+    # present — and the retired healpix+morton shape hard-rejects here even
+    # when the level comes from elsewhere.
+    block = _morton_convention_block(ds)
     if "level" not in attrs and "level" not in options and "cell_order" not in attrs:
         hive = ds.attrs.get("morton_hive") or {}
-        if "cell_order" in hive:
+        if block is not None and "refinement_level" in block:
+            attrs["level"] = int(block["refinement_level"])
+        elif "cell_order" in hive:
             attrs["level"] = int(hive["cell_order"])
         else:
             from mortie import infer_order_from_morton

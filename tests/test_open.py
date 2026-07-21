@@ -80,7 +80,7 @@ class TestOpenHive:
         rel = convention.leaf_path(SERC_SHARD)
         manual = xr.open_zarr(
             f"{serc}/{rel}", group="8", consolidated=False, zarr_format=3
-        ).set_coords(["morton", "cell_ids"])
+        ).set_coords(["morton"])
         ds = open_hive(serc)
         word = convention.morton_word(SERC_SHARD)
         sel = ds.where(
@@ -89,7 +89,7 @@ class TestOpenHive:
             drop=True,
         )
         assert sel.sizes["cells"] == 16
-        np.testing.assert_array_equal(sel["cell_ids"].values, manual["cell_ids"].values)
+        np.testing.assert_array_equal(sel["morton"].values, manual["morton"].values)
         np.testing.assert_array_equal(sel["count"].values, manual["count"].values)
 
     def test_debris_skipped(self, serc):
@@ -524,15 +524,14 @@ class TestOpenHiveMocIndex:
         (copy / convention.ROOT_COVERAGE_NAME).unlink()
         self._assert_equal_datasets(open_hive(str(copy)), open_hive(str(copy), index_kind="moc"))
 
-    def test_morton_only_store(self, serc, tmp_path):
-        # zagg#262 composition: on a store with no cell_ids arrays at all,
-        # "auto" fabricates NESTED off the index's fabricated words — golden
-        # parity against the original store's zagg-written array.
-        from test_fabricate import _morton_only_copy
+    def test_morton_only_store(self, serc):
+        # zagg#262 composition: on a morton-only store (the fixture, post
+        # zagg#314), "auto" fabricates NESTED off the index's fabricated
+        # words — golden parity against the frozen dual-written array.
+        from test_fabricate import golden_cell_ids
 
-        golden = open_hive(serc, fabricate_cell_ids=False, index_kind="pandas")["cell_ids"].values
-        ds = open_hive(_morton_only_copy(tmp_path), index_kind="moc")
-        np.testing.assert_array_equal(ds["cell_ids"].values, golden)
+        ds = open_hive(serc, index_kind="moc")
+        np.testing.assert_array_equal(ds["cell_ids"].values, golden_cell_ids())
 
     def test_fabricate_false_no_cell_ids(self, serc):
         ds = open_hive(serc, index_kind="moc", fabricate_cell_ids=False)

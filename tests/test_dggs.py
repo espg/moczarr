@@ -9,7 +9,8 @@ from pathlib import Path
 
 import numpy as np
 import pytest
-from test_fabricate import _morton_only_copy
+import xarray as xr
+from test_fabricate import _dual_written_copy, golden_cell_ids
 
 from moczarr import convention, open_hive, store
 
@@ -297,25 +298,114 @@ class TestDecode:
 class TestCombinedFlags:
     """Both #6/#7 knobs together: fabrication feeds decode (the merge-order test)."""
 
-    def test_decode_and_fabricate_morton_only(self, serc, tmp_path):
-        # Morton-only store, both flags on: fabrication attaches cell_ids
-        # BEFORE decode indexes morton, and the fabricated coordinate is
-        # byte-equal to the original store's stored (zagg-written) golden.
-        golden = open_hive(serc, fabricate_cell_ids=False, index_kind="pandas")["cell_ids"].values
-        ds = open_hive(_morton_only_copy(tmp_path), fabricate_cell_ids="auto", decode=True)
+    def test_decode_and_fabricate_morton_only(self, serc):
+        # Morton-only store (the fixture, post zagg#314), both flags on:
+        # fabrication attaches cell_ids BEFORE decode indexes morton, and the
+        # fabricated coordinate is byte-equal to the frozen dual-written golden.
+        ds = open_hive(serc, fabricate_cell_ids="auto", decode=True)
         assert isinstance(ds.xindexes["morton"], dggs.MortonIndex)
         assert ds.dggs.grid_info == dggs.MortonInfo(level=8)
         assert "cell_ids" in ds.coords and "cell_ids" not in ds.xindexes
         assert ds["cell_ids"].dtype == np.uint64
-        np.testing.assert_array_equal(ds["cell_ids"].values, golden)
+        np.testing.assert_array_equal(ds["cell_ids"].values, golden_cell_ids())
 
-    def test_decode_and_fabricate_dual_written(self, serc):
-        # Unmodified (dual-written) fixture with both flags: cell_ids equals
-        # the stored (zagg-written) bytes — read directly on the pandas
-        # path, reproduced exactly by fabrication on the moc default — and
+    def test_decode_and_fabricate_dual_written(self, tmp_path):
+        # Dual-written (emit_cell_ids hatch) shape with both flags: the
+        # stored cell_ids rides through untouched (deviant bytes kept) and
         # morton still gets its index.
-        ds = open_hive(serc, fabricate_cell_ids="auto", decode=True)
+        ds = open_hive(
+            _dual_written_copy(tmp_path),
+            fabricate_cell_ids="auto",
+            decode=True,
+            index_kind="pandas",
+        )
         assert isinstance(ds.xindexes["morton"], dggs.MortonIndex)
         assert ds.dggs.grid_info == dggs.MortonInfo(level=8)
-        stored = open_hive(serc, fabricate_cell_ids=False, index_kind="pandas")["cell_ids"].values
-        np.testing.assert_array_equal(ds["cell_ids"].values, stored)
+        np.testing.assert_array_equal(ds["cell_ids"].values, golden_cell_ids() + np.uint64(1))
+
+
+class TestConventionBlock:
+    """The mortie spec §5 zarr DGGS convention block (writer-flip attrs)."""
+
+    def _writer_flip_attrs(self, level):
+        # Hand-built EXACTLY per spec §5: the dggs declaration (name and
+        # coordinate both "morton", no kind/resolution field — §4) plus the
+        # self-declared zarr_conventions entry.
+        return {
+            "zarr_conventions": [convention.MORTON_CONVENTION_ENTRY],
+            "dggs": {
+                "name": "morton",
+                "coordinate": "morton",
+                "refinement_level": level,
+                "spatial_dimension": "cells",
+                "compression": "none",
+            },
+        }
+
+    def test_constants_match_spec(self):
+        assert convention.MORTON_CONVENTION_UUID == "3e22156d-ea9e-4e01-95fe-e3809a4b41e7"
+        entry = convention.MORTON_CONVENTION_ENTRY
+        assert entry["uuid"] == convention.MORTON_CONVENTION_UUID
+        assert entry["name"] == "morton-dggs"
+        assert entry["schema_url"].endswith("docs/specification.md#dggs-attrs")
+        assert entry["spec_url"].endswith("espg/mortie/blob/main/docs/specification.md")
+
+    def test_decode_reads_block_level(self):
+        # No coord attrs, no morton_hive summary: level comes from the §5
+        # block's refinement_level (grid_name/level translation).
+        ds = xr.Dataset(coords={"morton": ("cells", _golden_family())})
+        ds.attrs.update(self._writer_flip_attrs(level=6))
+        out = dggs.decode(ds)
+        assert isinstance(out.xindexes["morton"], dggs.MortonIndex)
+        assert out.dggs.grid_info == dggs.MortonInfo(level=6)
+
+    def test_decode_recognizes_uuid_only(self):
+        # Recognition also keys on the permanent UUID in zarr_conventions
+        # (readers may key on it — §5), independent of the block's name.
+        ds = xr.Dataset(coords={"morton": ("cells", _golden_family())})
+        attrs = self._writer_flip_attrs(level=6)
+        del attrs["dggs"]["name"]
+        ds.attrs.update(attrs)
+        out = dggs.decode(ds)
+        assert out.dggs.grid_info == dggs.MortonInfo(level=6)
+
+    def test_real_fixture_attrs_carry_the_block(self, serc):
+        # The regenerated (post zagg#314) fixture IS writer-flip shaped: the
+        # opened dataset carries the §5 attrs and decode reads them.
+        ds = open_hive(serc)
+        block = ds.attrs["dggs"]
+        assert block["name"] == "morton" and block["coordinate"] == "morton"
+        entries = {e["uuid"]: e for e in ds.attrs["zarr_conventions"]}
+        assert entries[convention.MORTON_CONVENTION_UUID] == convention.MORTON_CONVENTION_ENTRY
+        del ds.attrs["morton_hive"]  # force the §5-block level path
+        out = dggs.decode(ds)
+        assert out.dggs.grid_info == dggs.MortonInfo(level=8)
+
+    def test_retired_healpix_morton_shape_hard_rejects(self):
+        # §5: name "healpix" + indexing_scheme "morton" is the scheme-blind
+        # misread hazard — decode must refuse with a diagnostic, never parse.
+        ds = xr.Dataset(coords={"morton": ("cells", _golden_family())})
+        ds.attrs["dggs"] = {
+            "name": "healpix",
+            "indexing_scheme": "morton",
+            "refinement_level": 6,
+            "coordinate": "cell_ids",
+        }
+        with pytest.raises(ValueError, match="scheme-blind"):
+            dggs.decode(ds)
+
+    def test_xdggs_zarr_convention_reaches_morton(self, serc):
+        # xdggs's own decode(convention="zarr") hits GRID_REGISTRY["morton"]
+        # off the §5 block (name= must be given: xdggs 0.6.0's zarr decoder
+        # keys the new index on the passed name, and None breaks xarray).
+        rel = convention.leaf_path(SERC_SHARD)
+        ds = xr.open_zarr(f"{serc}/{rel}", group="8", consolidated=False, zarr_format=3)
+        out = xdggs.decode(ds, convention="zarr", name="morton")
+        idx = out.xindexes["morton"]
+        assert isinstance(idx, dggs.MortonIndex)
+        assert idx.grid_info.level == 8
+        # The decoder consumes the declaration: block popped, our
+        # self-declared entry left in place (it removed only the generic one).
+        assert "dggs" not in out.attrs
+        uuids = [e["uuid"] for e in out.attrs.get("zarr_conventions", [])]
+        assert uuids == [convention.MORTON_CONVENTION_UUID]

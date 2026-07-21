@@ -180,20 +180,34 @@ def aoi_mask(cells, aoi) -> np.ndarray:
     raise-on-ambiguity discipline forbids that. The check is one vectorized
     ``clip2order`` compare (O(n), no per-cell Python loop): clipping to the
     common order is identity iff every cell already sits at that order.
+
+    POINT-kind words (spec §1 suffix ``48..=63``) are first-class members on
+    BOTH sides — the v1 posture: for containment a point counts as an
+    order-29 member like any other, normalized to its order-29 area twin
+    (same path; §4 — membership at a coarser level is ordinary truncation).
+    A pure-point ``cells`` array is therefore uniform order 29 (the
+    single-order guard accepts it), and mixed order-29 area + point arrays
+    are well-formed per §4.
     """
     from mortie import clip2order, infer_order_from_morton
 
-    cells = np.asarray(cells, dtype=np.uint64)
+    from moczarr.convention import point_to_area29
+
+    cells = np.atleast_1d(np.asarray(cells, dtype=np.uint64))
     keep = np.zeros(cells.size, dtype=bool)
     if cells.size == 0:
         return keep
+    # §4 normalization: containment arithmetic runs in area space (points
+    # -> their order-29 twins on the same path; area words pass through).
+    cells = np.asarray(point_to_area29(cells), dtype=np.uint64)
     cell_order = int(infer_order_from_morton(cells))
     if (clip2order(cell_order, cells) != cells).any():
         raise ValueError(
             f"aoi_mask requires single-order cells; got a mixed-order array "
             f"(minimum order {cell_order}). Clip or split the cells to one order first."
         )
-    for member in np.asarray(aoi, dtype=np.uint64):
+    members = np.atleast_1d(np.asarray(aoi, dtype=np.uint64))
+    for member in np.asarray(point_to_area29(members), dtype=np.uint64):
         one = np.asarray([member], dtype=np.uint64)
         member_order = int(infer_order_from_morton(one))
         if member_order <= cell_order:

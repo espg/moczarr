@@ -67,7 +67,7 @@ def build(out: Path) -> None:
 
     def carrier(shard: int) -> tuple[pd.DataFrame, np.ndarray]:
         coords = grid.chunk_coords(shard)
-        n = len(coords["cell_ids"])
+        n = len(coords["morton"])
         rng = np.random.default_rng(shard % 2**32)
         n_occ = N_OCCUPIED[stamped.index(shard) % len(N_OCCUPIED)]
         occupied_rows = np.sort(rng.choice(n, size=min(n_occ, n), replace=False))
