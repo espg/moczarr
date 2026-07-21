@@ -35,6 +35,19 @@ GOLDEN_NESTED = 238416
 #: lat≈-80°, and the negative-base decimal path at the store's real cell order).
 GOLDEN_WORD_O19_SOUTH = 11570383905173274643
 GOLDEN_NESTED_O19_SOUTH = 2483716583387
+#: Order-29 area/point golden pairs (both hemispheres; words shared with
+#: test_convention's §1/§4 goldens) and their NESTED ids: the AREA id at the
+#: exact order 29, the POINT id at the order-24 clip (spec §4 — a point has
+#: no area claim, so the NESTED view truncates it to the float64-exact
+#: ceiling; areas NEVER clip).
+AREA29_NORTH_WORD = 4733760060091642285
+POINT_NORTH_WORD = 4733760060091642301
+NESTED29_NORTH = 895209638871198829
+NESTED24_NORTH = 874228162960155
+AREA29_SOUTH_WORD = 13712984013617909341
+POINT_SOUTH_WORD = 13712984013617909360
+NESTED29_SOUTH = 3140015627252765584
+NESTED24_SOUTH = 3066421510989028
 
 
 def golden_cell_ids() -> np.ndarray:
@@ -111,6 +124,42 @@ class TestFabricateCellIds:
         # derive an order from).
         with pytest.warns(UserWarning, match="float64"):
             fabricate_cell_ids([], level=FLOAT64_EXACT_MAX_ORDER + 1)
+
+    def test_point_words_clip_to_24(self):
+        # Point-kind words (spec §1 suffix 48..=63) yield the order-24
+        # ancestor's NESTED id — silently (already float64-exact).
+        import warnings
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            ids = fabricate_cell_ids([POINT_NORTH_WORD, POINT_SOUTH_WORD])
+        assert ids.dtype == np.uint64
+        assert ids.tolist() == [NESTED24_NORTH, NESTED24_SOUTH]
+
+    def test_area29_never_clips_and_warns(self):
+        # Genuine order-29 AREA cells keep their exact ids (coarsening an
+        # area cell changes the labelled thing — spec §4) behind the >24
+        # float64 warning.
+        with pytest.warns(UserWarning, match="float64"):
+            ids = fabricate_cell_ids([AREA29_NORTH_WORD, AREA29_SOUTH_WORD])
+        assert ids.tolist() == [NESTED29_NORTH, NESTED29_SOUTH]
+
+    def test_mixed_area_and_point_words(self):
+        # Mixed kinds in one array are well-formed (spec §4): mortie's
+        # kernel takes one order per call, so points (clipped to 24) and
+        # areas fabricate separately and reassemble by position.
+        words = [AREA29_NORTH_WORD, POINT_NORTH_WORD, POINT_SOUTH_WORD, AREA29_SOUTH_WORD]
+        with pytest.warns(UserWarning, match="float64"):  # the area half
+            ids = fabricate_cell_ids(words)
+        assert ids.tolist() == [NESTED29_NORTH, NESTED24_NORTH, NESTED24_SOUTH, NESTED29_SOUTH]
+
+    def test_point_level_cross_check(self):
+        # level checks the ENCODED order: points are order-29 encodings even
+        # though their NESTED view is the order-24 clip.
+        ids = fabricate_cell_ids([POINT_NORTH_WORD], level=29)
+        assert ids.tolist() == [NESTED24_NORTH]
+        with pytest.raises(ValueError, match="order 29"):
+            fabricate_cell_ids([POINT_NORTH_WORD], level=24)
 
     def test_golden_parity_serc(self):
         # The money test: fabricated ids from the (morton-only) fixture's

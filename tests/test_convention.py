@@ -127,6 +127,86 @@ class TestNodeInvariant:
             convention.check_node_invariant(bad)
 
 
+# Order-29 decimal strings (both hemispheres) and their golden packed words
+# — area (unmarked, the §4 tie-break) and point (p-marked) forms, literals
+# pinned once against mortie 0.9.0 + the spec §1 suffix arithmetic.
+AREA29_NORTH = "4" + "1234" * 7 + "2"
+AREA29_SOUTH = "-5" + "4321" * 7 + "1"
+AREA29_NORTH_WORD = 4733760060091642285  # suffix 45
+POINT_NORTH_WORD = 4733760060091642301  # suffix 61
+AREA29_SOUTH_WORD = 13712984013617909341  # suffix 29
+POINT_SOUTH_WORD = 13712984013617909360  # suffix 48
+
+
+class TestPointKind:
+    """Spec §1/§4: kind is encoding-carried (suffix band), never metadata."""
+
+    def test_suffix_table_bands(self):
+        # §1 table, incl. the 27/28 and 47/48 band boundaries, both
+        # hemispheres: 0..=27 area (order == suffix), 28..=47 order-28/29
+        # area preorder, 48..=63 order-29 point.
+        for base in ("4", "-5"):
+            o27 = convention.morton_word(base + "1" * 27)
+            o28 = convention.morton_word(base + "1" * 28)
+            area_lo = convention.morton_word(base + "1" * 29)  # suffix 29
+            area_hi = convention.morton_word(base + "1" * 27 + "44")  # suffix 47
+            assert o27 & 0x3F == 27 and not convention.is_point_word(o27)
+            assert o28 & 0x3F == 28 and not convention.is_point_word(o28)
+            assert area_lo & 0x3F == 29 and not convention.is_point_word(area_lo)
+            assert area_hi & 0x3F == 47 and not convention.is_point_word(area_hi)
+            point_lo = convention.area29_to_point(area_lo)
+            point_hi = convention.area29_to_point(area_hi)
+            assert point_lo & 0x3F == 48 and convention.is_point_word(point_lo)
+            assert point_hi & 0x3F == 63 and convention.is_point_word(point_hi)
+        # Vectorized form: bool array over mixed kinds.
+        mixed = np.asarray([AREA29_NORTH_WORD, POINT_NORTH_WORD], dtype=np.uint64)
+        np.testing.assert_array_equal(convention.is_point_word(mixed), [False, True])
+
+    def test_p_round_trip_goldens(self):
+        # BOTH §4 parse directions, both hemispheres: p-marked -> POINT word,
+        # unmarked order-29 -> AREA word (the tie-break); renders invert both.
+        for dec, area_word, point_word in (
+            (AREA29_NORTH, AREA29_NORTH_WORD, POINT_NORTH_WORD),
+            (AREA29_SOUTH, AREA29_SOUTH_WORD, POINT_SOUTH_WORD),
+        ):
+            assert convention.morton_word(dec) == area_word
+            assert convention.morton_word(dec + "p") == point_word
+            assert convention.morton_decimal(area_word) == dec
+            assert convention.morton_decimal(point_word) == dec + "p"
+
+    def test_p_legal_only_at_order29(self):
+        for bad in ("41p", "4" + "1" * 28 + "p", "p"):
+            with pytest.raises(ValueError, match="order-29"):
+                convention.morton_word(bad)
+
+    def test_twin_round_trips(self):
+        for area, point in (
+            (AREA29_NORTH_WORD, POINT_NORTH_WORD),
+            (AREA29_SOUTH_WORD, POINT_SOUTH_WORD),
+        ):
+            assert convention.area29_to_point(area) == point
+            assert convention.point_to_area29(point) == area
+        # Area words pass through the point->area normalization unchanged.
+        assert convention.point_to_area29(AREA29_NORTH_WORD) == AREA29_NORTH_WORD
+        # Sub-29 words have no point twin (points exist only at order 29).
+        for bad in (convention.morton_word("41"), convention.morton_word("4" + "1" * 28)):
+            with pytest.raises(ValueError, match="order-29"):
+                convention.area29_to_point(bad)
+
+    def test_paths_never_carry_points(self):
+        # leaf_path rejects point words and p-marked ids (spec §2/§6.6)...
+        with pytest.raises(ValueError, match="POINT"):
+            convention.leaf_path(POINT_NORTH_WORD)
+        with pytest.raises(ValueError, match="POINT"):
+            convention.leaf_path(AREA29_SOUTH + "p")
+        # ...and the node invariant rejects a p-suffixed leaf id.
+        with pytest.raises(ValueError, match="kind-suffix"):
+            convention.check_node_invariant("4/1/41p.zarr")
+        # The unmarked order-29 path stays legal (parses as AREA, §4).
+        rel = convention.leaf_path(AREA29_NORTH)
+        convention.check_node_invariant(rel)
+
+
 class TestPathGrouping:
     """The D21 digit-chunking (spec §6.1): grouping is the ONE path code path."""
 

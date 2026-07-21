@@ -55,28 +55,113 @@ ROOT_COVERAGE_NAME = "coverage.moc"
 #: Frozen window-label charset (no ``_``, so leaf names split unambiguously).
 _LABEL_RE = re.compile(r"^[0-9A-Za-z-]{1,32}$")
 
+#: Spec §1 suffix bands: ``0..=27`` area (order == suffix), ``28..=47``
+#: order-28/29 area preorder, ``48..=63`` order-29 POINT (no area claim).
+_POINT_SUFFIX_MIN = 48
+_SUFFIX_MASK = np.uint64(0x3F)
+
+
+def is_point_word(word) -> bool | np.ndarray:
+    """Whether packed word(s) encode an order-29 POINT (spec §1/§4).
+
+    Kind is carried by the word's 6-bit suffix — ``48..=63`` is the point
+    band; everything below (``0..=47``) is an AREA element, exact at its
+    encoded order — never by store or array metadata (§4). Suffix-mask
+    implementation, golden-tested against the spec §1 table; swaps to
+    mortie's public kind predicate once released (espg/mortie#116 —
+    mortie 0.9.0 has none). Scalar in -> bool; array in -> bool array.
+    """
+    words = np.asarray(word, dtype=np.uint64)
+    mask = (words & _SUFFIX_MASK) >= np.uint64(_POINT_SUFFIX_MIN)
+    return bool(mask) if words.ndim == 0 else mask
+
+
+def point_to_area29(word):
+    """Order-29 AREA twin(s) of point word(s); area words pass through.
+
+    Spec §1 suffix arithmetic on the same body: point ``48 + t28*4 + t29``
+    -> area ``28 + t28*5 + (t29 + 1)``. The twin shares the point's full
+    path, so containment arithmetic (§4: membership of a point at a coarser
+    level is ordinary truncation) runs uniformly in area space — the
+    normalization :func:`moczarr.coverage.aoi_mask` applies. Scalar in ->
+    int; array in -> ``uint64`` array.
+    """
+    words = np.asarray(word, dtype=np.uint64)
+    # Suffix arithmetic in int64 (values <= 63): negative intermediates for
+    # area words are discarded by the where, without uint64 wrap warnings.
+    suffix = (words & _SUFFIX_MASK).astype(np.int64)
+    r2 = suffix - _POINT_SUFFIX_MIN
+    area_suffix = (29 + (r2 >> 2) * 5 + (r2 & 3)).astype(np.uint64)
+    twins = np.where(suffix >= _POINT_SUFFIX_MIN, (words & ~_SUFFIX_MASK) | area_suffix, words)
+    return int(twins) if twins.ndim == 0 else twins.astype(np.uint64)
+
+
+def area29_to_point(word):
+    """Max-encoded POINT twin(s) of order-29 AREA word(s) — the ``p`` parse.
+
+    Inverse of :func:`point_to_area29`: area ``28 + t28*5 + (t29 + 1)`` ->
+    point ``48 + t28*4 + t29`` (spec §1). Raises on any word that is not an
+    order-29 area encoding — points exist only at order 29 (§2/§4).
+    """
+    words = np.asarray(word, dtype=np.uint64)
+    suffix = (words & _SUFFIX_MASK).astype(np.int64)  # int64: no wrap on invalid input
+    r = suffix - 28
+    # Order-29 area suffixes are 28 + t28*5 + (t29+1), t29 in 0..3 -> r % 5 != 0.
+    ok = (suffix > 27) & (suffix < _POINT_SUFFIX_MIN) & (r % 5 != 0)
+    if not np.all(ok):
+        raise ValueError(
+            "not an order-29 area word: the point twin exists only at order 29 (spec §1/§4)"
+        )
+    point_suffix = (_POINT_SUFFIX_MIN + (r // 5) * 4 + (r % 5 - 1)).astype(np.uint64)
+    points = (words & ~_SUFFIX_MASK) | point_suffix
+    return int(points) if points.ndim == 0 else points.astype(np.uint64)
+
 
 def morton_word(label: str | int) -> int:
     """Packed ``uint64`` morton word of a decimal id (pass-through for ints).
 
-    Rides mortie's private-but-documented ``_decimal_to_word`` (numpy-only;
-    the public array classes require pandas — upstream ask for a public
-    export stands, same note as zagg's boundary helper).
+    Accepts the §2 ``p`` kind-suffix on full order-29 POINT ids: the stem
+    parses as the area word and the §1 point suffix is restored moczarr-side
+    (:func:`area29_to_point`) — mortie 0.9.0 predates the ``p`` grammar
+    (espg/mortie#120/#121). An UNMARKED order-29 string parses as the AREA
+    word, the normative §4 tie-break. Rides mortie's private-but-documented
+    ``_decimal_to_word`` (numpy-only; the public array classes require
+    pandas — upstream ask for a public export stands, same note as zagg's
+    boundary helper).
     """
     if isinstance(label, (int, np.integer)):
         return int(label)
     from mortie.morton_index import _decimal_to_word
 
-    return int(_decimal_to_word(str(label)))
+    text = str(label)
+    if text.endswith("p"):
+        stem = text[:-1]
+        if decimal_order(stem) != 29:
+            raise ValueError(
+                f"{label!r}: the 'p' kind-suffix is legal only on a full order-29 "
+                f"POINT id (points exist only at order 29; spec §2)"
+            )
+        return int(area29_to_point(int(_decimal_to_word(stem))))
+    return int(_decimal_to_word(text))
 
 
 def morton_decimal(word: str | int) -> str:
-    """Decimal morton string of a packed word (pass-through for strings)."""
+    """Decimal morton string of a packed word (pass-through for strings).
+
+    POINT words (§1 suffix ``48..=63``) render with the terminal ``p`` kind
+    marker — the §2 render/interchange form — via the order-29 area twin's
+    digits (same path; kind restored by the marker, so the round-trip is
+    lossless for BOTH kinds, pinned by goldens).
+    """
     if isinstance(word, str):
         return word
     from mortie import MortonIndexArray
 
-    return MortonIndexArray.from_words(np.asarray([int(word)], dtype=np.uint64)).decimal_repr()[0]
+    value, marker = int(word), ""
+    if is_point_word(value):
+        value, marker = point_to_area29(value), "p"
+    rendered = MortonIndexArray.from_words(np.asarray([value], dtype=np.uint64)).decimal_repr()[0]
+    return rendered + marker
 
 
 def decimal_order(decimal: str) -> int:
@@ -193,6 +278,11 @@ def leaf_path(shard: str | int, window: str | None = None, *, path_grouping: int
             f"packed morton word is required. Parse a decimal id by passing it "
             f"as a string (e.g. morton_word('-5112333')) instead."
         )
+    if is_point_word(word):
+        raise ValueError(
+            f"shard {shard!r} is an order-29 POINT word: points never live in "
+            f"hive paths (spec §2/§6.6)"
+        )
     if path_grouping == 1:
         rel = MortonIndexArray.from_words(np.asarray([word], dtype=np.uint64)).hive_path()[0]
         if window is not None:
@@ -229,6 +319,12 @@ def check_node_invariant(rel_path: str, *, path_grouping: int = 1) -> None:
             full_id, _window = split_leaf_name(leaf)
         except ValueError:
             full_id = None  # malformed window label -> not a legal leaf
+        if full_id is not None and full_id.endswith("p"):
+            raise ValueError(
+                f"path {rel_path!r} carries the 'p' point kind-suffix: paths never "
+                f"do (spec §2/§6.6 — an order-29 path component reads as AREA per "
+                f"the §4 tie-break; kind rides the packed words)"
+            )
         ok = is_base_component(head)
         ok = ok and all(1 <= len(d) <= path_grouping and set(d) <= set("1234") for d in digits)
         # Only the LAST component may be short (the remainder rides last).
