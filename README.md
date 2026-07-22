@@ -1,5 +1,6 @@
 # moczarr
 
+[![Docs](https://github.com/espg/moczarr/actions/workflows/docs.yml/badge.svg)](https://espg.github.io/moczarr/)
 [![Binder](https://mybinder.org/badge_logo.svg)](https://mybinder.org/v2/gh/espg/moczarr/main?labpath=docs%2Fexamples%2Fquickstart.ipynb)
 
 Sparse-DGGS xarray reader for **morton-hive** zarr stores: MOC-declared
