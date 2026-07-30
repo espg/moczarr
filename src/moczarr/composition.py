@@ -139,6 +139,12 @@ def counts_from_composition(words, n_signal) -> np.ndarray:
     """
     lanes = unpack_composition(words).astype(np.float64)
     n = np.atleast_1d(np.asarray(n_signal, dtype=np.float64))
+    if n.ndim != 1:
+        raise ValueError(
+            f"n_signal must be a scalar or 1-D per-cell weight, got shape {n.shape} — "
+            "a (N, 1) column (e.g. weights.sum(axis=1, keepdims=True)) would broadcast "
+            "to a 3-D result instead of (N, 8)"
+        )
     if n.shape[0] not in (1, lanes.shape[0]):
         raise ValueError(f"n_signal has {n.shape[0]} cells, words has {lanes.shape[0]}")
     n = np.maximum(n, 0.0)  # n <= 0 is the empty stratum: zero counts, never negative
