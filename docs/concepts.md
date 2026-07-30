@@ -210,9 +210,9 @@ becomes a second node level under the product:
   > source domain; `role` = per-object classification.
 
   So the attr lives on each **leaf**, a closed two-value vocabulary:
-  `"source"` — the writer's native cell order, exactly one per product;
-  `"overview"` — a sweep-generated coarsening of the source (regenerable,
-  D9 cache class). It never rides alone: #201/D11 make the **source
+  `"source"` — writer-native data at that order; `"overview"` — a
+  sweep-generated coarsening of the source (regenerable, D9 cache class).
+  It never rides alone: #201/D11 make the **source
   order** and the **aggregation method** mandatory companions in the same
   attrs, and those are what an "is this comparable to my source data?"
   check actually reads. An order node is in general a *mixture* of both
@@ -223,6 +223,26 @@ becomes a second node level under the product:
   one. Selection helpers (source-vs-overview, "finest at or above order
   k") key on per-leaf `role`, never on node names and never on a
   node-level attr.
+- **Source is not a single order — uniqueness is per (shard, window).**
+  D24 makes resolution heterogeneity *regional*, so `"source"` leaves can
+  sit at several orders in one product tree
+  ([zagg D24](https://github.com/englacial/zagg/blob/main/docs/design/sparse_coverage.md),
+  §7):
+
+  > one product tree may carry **regionally heterogeneous resolution**
+  > (e.g. o19 cells in polar shards, o17 mid-latitude)
+
+  > (2) Per (shard, window) there is **one resolution at a time**:
+  > heterogeneity is regional, across shards.
+
+  A product with o19 polar shards and o17 mid-latitude shards therefore
+  has `{product}/19` *and* `{product}/17` carrying `role: "source"`
+  leaves — "the source node" is not a well-formed request. Helpers are
+  defined over the *set* of source orders: "the finest source order at or
+  above k", "every order carrying source", never "the one source node".
+  This is the same fact the computed-compose rule below rests on (a
+  D24-heterogeneous product has no complete single-order Dataset precisely
+  because its source spans orders).
 - **Roster absence is legal per node** (zagg#201's option-A ruling):
   overview nodes carry only the variables the sweep's aggregation roster
   rolls up, so sibling order nodes have **heterogeneous variable sets** —
