@@ -210,13 +210,50 @@ class TestAoiMask:
         keep = coverage.aoi_mask(cells, _words("-5111114", "-5121"))
         np.testing.assert_array_equal(cells[keep], np.sort(_words("-5111114", "-5121111")))
 
-    def test_mixed_order_cells_raise(self):
-        # cells must be single-order; post mortie#116 (0.9.1) the raise is
-        # mortie's own — infer_order_from_morton names the distinct orders —
-        # so the expectation pins mortie's wording (issue #8).
-        mixed = np.sort(_words("-5111111", "-51111121"))  # order 6 + order 7
-        with pytest.raises(ValueError, match=r"Mixed orders in morton array: \[6, 7\]"):
-            coverage.aoi_mask(mixed, _words("-5"))
+    def test_mixed_order_cells_pyramid(self):
+        # The issue #8 capability unlock (mortie#116): a pyramid-shaped
+        # cells array — a parent, its four children, and a same-order
+        # cousin in ONE array (the zagg#262 overview-store shape) — masks
+        # correctly against AOIs at several orders. Previously raised.
+        parent = "-511111"  # order 6
+        cells = np.sort(_words(parent, *(parent + d for d in "1234"), "-5121111"))
+        # AOI = the parent itself: the parent (equal) + all four children.
+        keep = coverage.aoi_mask(cells, _words(parent))
+        assert keep.sum() == 5
+        assert not keep[np.isin(cells, _words("-5121111"))].any()
+        # AOI = one child: that child (equal) + the parent (contains it).
+        keep = coverage.aoi_mask(cells, _words(parent + "2"))
+        np.testing.assert_array_equal(np.sort(cells[keep]), np.sort(_words(parent, parent + "2")))
+        # AOI two orders finer than the children: containing child + parent.
+        keep = coverage.aoi_mask(cells, _words(parent + "231"))
+        np.testing.assert_array_equal(np.sort(cells[keep]), np.sort(_words(parent, parent + "2")))
+        # AOI coarser than every cell: the whole -5111 subtree, not the cousin.
+        keep = coverage.aoi_mask(cells, _words("-5111"))
+        assert keep.sum() == 5
+        assert not keep[np.isin(cells, _words("-5121111"))].any()
+        # Disjoint AOI keeps nothing.
+        assert coverage.aoi_mask(cells, _words("4331422")).sum() == 0
+
+    def test_mixed_order_cells_and_members(self):
+        # Mixed order on BOTH sides at once: one member equal to a child
+        # (keeps it + the containing parent), one finer than the cousin
+        # (keeps the cousin).
+        parent = "-511111"
+        cells = np.sort(_words(parent, *(parent + d for d in "1234"), "-5121111"))
+        keep = coverage.aoi_mask(cells, _words(parent + "3", "-51211112"))
+        np.testing.assert_array_equal(
+            np.sort(cells[keep]), np.sort(_words(parent, parent + "3", "-5121111"))
+        )
+
+    def test_mixed_order_cells_with_points(self):
+        # Point cells may ride alongside COARSER area cells in one array
+        # (previously a mixed-order reject; §4 + issue #8): the point keeps
+        # via its order-4 ancestor member, the disjoint area cell does not.
+        from test_convention import POINT_NORTH_WORD
+
+        cells = np.concatenate([_words("-511111"), np.asarray([POINT_NORTH_WORD], dtype=np.uint64)])
+        keep = coverage.aoi_mask(cells, _words("41234"))
+        np.testing.assert_array_equal(keep, [False, True])
 
     def test_pure_point_cells(self):
         # v1 posture (spec §4): points are order-29 members for containment,
