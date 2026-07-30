@@ -6,9 +6,11 @@ telemetry surface: ``atl06`` has ``stats.json`` sidecars (with O11
 golden-tested, not self-tested) and hand-folded ``stats.rollup.json``
 objects at the shard nodes and every ancestor; ``atl06_windows`` has
 ``stats_{window}.json`` sidecars in all three states (with hashes, without,
-absent). Name arithmetic is pinned across all three spec grammars,
-including the D23 ``{window}.stats.json`` / ``all`` form moczarr will meet
-on ``/3`` stores.
+absent); ``atl06_ragged`` carries the vlen (ragged) O11 surface — a
+``variable_length_bytes`` digest array plus its ``{field}_locations``
+sibling — so the length-prefixed vlen hash recipe is golden-pinned. Name
+arithmetic is pinned across all three spec grammars, including the D23
+``{window}.stats.json`` / ``all`` form moczarr will meet on ``/3`` stores.
 """
 
 import json
@@ -39,6 +41,11 @@ def atl06():
 @pytest.fixture()
 def windows():
     return str(FIXTURE / "atl06_windows")
+
+
+@pytest.fixture()
+def ragged():
+    return str(FIXTURE / "atl06_ragged")
 
 
 class TestSidecarNaming:
@@ -194,6 +201,72 @@ class TestVerifyArrays:
         a = {"x": "aa", "y": "bb"}
         b = {"y": "bb", "x": "aa"}
         assert combined_hash(a) == combined_hash(b)
+
+    def test_vlen_golden_match(self, ragged):
+        # The ragged (vlen-bytes) arrays are in O11's scope; the naive
+        # `values.tobytes()` on an object array hashes POINTER addresses, so
+        # this leaf would verify False (and nondeterministically) without
+        # the length-prefixed recipe.
+        result = verify_arrays(ragged, "4111")
+        assert result["match"] is True
+        assert set(result["computed"]) == {
+            "5/morton",
+            "5/h_li_tdigest",
+            "5/h_li_tdigest_locations",
+        }
+
+    def test_vlen_recipe_is_the_frozen_one(self, ragged):
+        # Hand-rolled, independent of hash_arrays: sha256 over
+        # uint64_le(len) || payload per cell, in flat C order. Cell i holds i
+        # float32s (cell 0 is empty, pinning the zero-length prefix).
+        import hashlib
+
+        import numpy as np
+
+        digest = hashlib.sha256()
+        for i in range(16):
+            payload = np.arange(i, dtype="<f4").tobytes()
+            digest.update(len(payload).to_bytes(stats.VLEN_LENGTH_PREFIX, "little"))
+            digest.update(payload)
+        hashes = hash_arrays(ragged, convention.leaf_path("4111"))
+        assert hashes["5/h_li_tdigest"] == digest.hexdigest()
+
+    def test_vlen_hash_is_stable_across_loads(self, ragged):
+        # Two fresh opens decode into freshly allocated objects at different
+        # addresses; a pointer-derived digest would differ here.
+        rel = convention.leaf_path("4111")
+        assert hash_arrays(ragged, rel) == hash_arrays(ragged, rel)
+
+    def test_vlen_length_prefix_defeats_concatenation_collisions(self):
+        # [b"ab", b"c"] and [b"a", b"bc"] share their concatenation; the
+        # prefix is what keeps the digest injective.
+        def recipe(payloads):
+            import hashlib
+
+            d = hashlib.sha256()
+            for p in payloads:
+                d.update(len(p).to_bytes(stats.VLEN_LENGTH_PREFIX, "little"))
+                d.update(p)
+            return d.hexdigest()
+
+        assert recipe([b"ab", b"c"]) != recipe([b"a", b"bc"])
+
+    def test_element_bytes_kinds(self):
+        # bytes-likes pass through; str/ndarray cover the vlen-utf8 and typed
+        # `vlen-array<T>` futures; an unhashable kind RAISES rather than
+        # digesting a repr.
+        import numpy as np
+
+        assert stats._element_bytes(b"ab") == b"ab"
+        assert stats._element_bytes(bytearray(b"ab")) == b"ab"
+        assert stats._element_bytes(memoryview(b"ab")) == b"ab"
+        assert stats._element_bytes(None) == b""
+        assert stats._element_bytes("ab") == b"ab"
+        assert (
+            stats._element_bytes(np.arange(2, dtype=">u8")) == np.arange(2, dtype="<u8").tobytes()
+        )
+        with pytest.raises(ValueError, match="no O11 byte recipe"):
+            stats._element_bytes(7)
 
     def test_hash_arrays_decoded_values(self, atl06):
         # Hashes are over decoded values (raw little-endian C-order bytes at

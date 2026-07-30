@@ -23,6 +23,10 @@ at the declared dtype, after decompression — never stored object bytes,
 which churn on codec/library upgrades. :func:`hash_arrays` recomputes it;
 :func:`verify_arrays` compares against the sidecar's recorded hashes
 ("intended identical" — the semantic hash — vs "actually byte-identical").
+O11's scope includes the ragged (vlen-bytes) arrays, whose decoded elements
+are Python objects rather than a flat buffer — see :func:`hash_arrays` for
+the length-prefixed vlen recipe this reader defines (there is no zagg O11
+writer yet, so the recipe is pinned here and by the committed fixture).
 """
 
 from __future__ import annotations
@@ -210,6 +214,38 @@ def read_stats_rollup(
     return envelope
 
 
+#: Width of the O11 vlen recipe's per-element length prefix (uint64, LE).
+VLEN_LENGTH_PREFIX = 8
+
+
+def _element_bytes(element: object) -> bytes:
+    """One vlen cell's decoded payload as raw little-endian bytes.
+
+    ``variable_length_bytes`` cells decode to :class:`bytes` (zagg's ragged
+    digest payloads and their ``{field}_locations`` sibling are both this
+    dtype — the location words are raw little-endian ``uint64`` bytes). The
+    other object-dtype element kinds are covered for the typed
+    ``vlen-array<T>`` / vlen-utf8 futures; anything else RAISES rather than
+    hashing a ``repr`` — a digest that is silently wrong is worse here than
+    no digest at all.
+    """
+    if element is None:
+        return b""  # an unwritten vlen cell can decode as None, not b""
+    if isinstance(element, bytes | bytearray | memoryview):
+        return bytes(element)
+    if isinstance(element, str):
+        return element.encode()
+    if isinstance(element, np.ndarray):
+        values = np.ascontiguousarray(element)
+        if values.dtype.byteorder == ">":
+            values = values.astype(values.dtype.newbyteorder("<"))
+        return values.tobytes()
+    raise ValueError(
+        f"vlen element of type {type(element).__name__} has no O11 byte recipe "
+        f"(expected bytes, str, ndarray, or None)"
+    )
+
+
 def hash_arrays(
     store_root: str,
     leaf: str,
@@ -220,14 +256,35 @@ def hash_arrays(
     """O11 per-array content hashes of one leaf, recomputed from decoded values.
 
     Opens the leaf as vanilla zarr v3 and hashes EVERY array beneath it
-    (data fields, ``morton``, every coordinate — the resolved O11 scope),
-    keyed by the array's path relative to the leaf root (e.g.
-    ``"8/morton"``). Each hash is sha256 over the array's full decoded
+    (data fields, the ragged vlen arrays, ``morton``, every coordinate — the
+    resolved O11 scope), keyed by the array's path relative to the leaf root
+    (e.g. ``"8/morton"``). Each hash is sha256 over the array's full decoded
     contents as raw **C-order little-endian** bytes at the declared dtype —
     decoded values, never stored object bytes, so codec/packaging changes
     (ShardingCodec inner chunks, compressor upgrades) are invisible by
     construction while any value change flips the hash (exact bytes, no
     float tolerance — the PR #282 class is meant to flip it).
+
+    **Vlen (ragged) recipe.** An object-dtype array (zagg's
+    ``variable_length_bytes`` ragged payloads, issue #209, and their
+    ``{field}_locations`` sibling, issue #87) has no flat buffer to hash —
+    ``ndarray.tobytes()`` on it serializes *pointer addresses*, which are
+    per-process garbage. Such an array is instead hashed as, in flat C order
+    over cells::
+
+        sha256( for each cell:  uint64_le(len(payload)) || payload )
+
+    where ``payload`` is that cell's decoded bytes (:func:`_element_bytes`)
+    — for zagg that is exactly the little-endian buffer
+    ``write._ragged_payload_bytes`` stores. The length prefix is what makes
+    the digest injective (without it ``[b"ab", b"c"]`` and ``[b"a", b"bc"]``
+    collide), and an empty cell contributes its zero length, so a ``b""``
+    fill is distinguishable from a missing cell only by position — which is
+    the intent: the digest covers the cell grid, not just the payloads.
+
+    zagg has **no O11 writer yet**, so this recipe (and the committed
+    fixture's golden) is the only artifact of the choice: zagg's writer must
+    adopt it verbatim when it lands (spec home: englacial/zagg#340).
     """
     import zarr
     from zarr.storage import ObjectStore
@@ -241,6 +298,14 @@ def hash_arrays(
         if not isinstance(node, zarr.Array):
             continue
         values = np.ascontiguousarray(node[...])
+        if values.dtype.kind == "O":  # vlen: length-prefixed payloads, C order
+            digest = hashlib.sha256()
+            for element in values.ravel(order="C"):
+                payload = _element_bytes(element)
+                digest.update(len(payload).to_bytes(VLEN_LENGTH_PREFIX, "little"))
+                digest.update(payload)
+            hashes[key] = digest.hexdigest()
+            continue
         if values.dtype.byteorder == ">":  # canonical form is little-endian
             values = values.astype(values.dtype.newbyteorder("<"))
         hashes[key] = hashlib.sha256(values.tobytes()).hexdigest()
@@ -338,6 +403,7 @@ __all__ = [
     "STATS_ROLLUP_NAME",
     "STATS_SIDECAR_NAME",
     "SWEEP_SPEC",
+    "VLEN_LENGTH_PREFIX",
     "combined_hash",
     "hash_arrays",
     "read_stats",

@@ -1,10 +1,11 @@
 """Multi-product roots (D19 / spec §6.5): discovery + the ``open_hive`` sugar.
 
 ``tests/data/multiproduct_hive`` is the committed golden from
-``tools/generate_multiproduct_fixture.py``: two named products under one
+``tools/generate_multiproduct_fixture.py``: three named products under one
 store root (``atl06`` — /1, ``aggregation.yaml`` + ``semantic_hash``;
-``atl06_windows`` — /2 windowed, neither) plus a name-shaped non-product
-child (``scratch/``). The bare single-product form is the existing
+``atl06_windows`` — /2 windowed, neither; ``atl06_ragged`` — /1 carrying the
+vlen O11 arrays) plus a name-shaped non-product child (``scratch/``). The
+bare single-product form is the existing
 ``serc_hive`` fixture — its whole suite is the "single-product unchanged"
 guard; the pins here are the two root forms' discrimination by content.
 """
@@ -55,7 +56,8 @@ class TestProductNameGrammar:
 class TestListProducts:
     def test_enumerates_named_products(self, multiroot):
         products = list_products(multiroot)
-        assert [p["name"] for p in products] == ["atl06", "atl06_windows"]  # sorted
+        names = [p["name"] for p in products]
+        assert names == ["atl06", "atl06_ragged", "atl06_windows"]  # sorted
 
     def test_surfaces_semantic_hash_and_core_presence(self, multiroot):
         by_name = {p["name"]: p for p in list_products(multiroot)}
