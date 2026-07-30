@@ -489,6 +489,21 @@ class TestDegradation:
         with pytest.raises(ValueError, match="order 7"):
             open_store(str(copy), products=["atl06"])
 
+    def test_all_time_token_is_refused(self, root):
+        # `all` passes validate_label, so it WAS reachable: it opened the
+        # all-time folds on the overview orders while the source order — which
+        # has no `{shard}_all` leaf — emptied. Refused loudly instead (§4.2:
+        # `all` is excluded from the window grammar forever), which keeps the
+        # all-time surface an open question rather than a misleading tree.
+        windows_manifest = json.loads((FIXTURE / "atl06_windows" / "morton_hive.json").read_text())
+        with pytest.raises(ValueError, match="reserved all-time token"):
+            open_overview_order(f"{root}/atl06_windows", windows_manifest, 4, window="all")
+        # (open_hive runs first and still warns its pre-8b "no coverage" line
+        # for the missing `{shard}_all` leaves; the raise is what wins.)
+        with pytest.warns(UserWarning, match="intersects no coverage"):
+            with pytest.raises(ValueError, match="reserved all-time token"):
+                open_store(root, products=["atl06_windows"], window="all")
+
     def test_windowed_overview_requires_window(self, root, manifest):
         windows_manifest = json.loads((FIXTURE / "atl06_windows" / "morton_hive.json").read_text())
         with pytest.raises(ValueError, match="pass window="):

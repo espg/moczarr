@@ -216,6 +216,13 @@ def open_overview_order(
     issue-#4 schema-correct empty dataset with a ``UserWarning``, exactly
     like :func:`moczarr.open.open_hive`.
 
+    ``window`` must be a declared label: the reserved all-time token
+    (``"all"``, §4.2) is **refused** on a windowed product. Its ``all.zarr``
+    folds exist on disk (``pyramid.overview.all_time``, §4.5) but have no
+    counterpart on the source axis, so surfacing them alone would report a
+    0-cell source node beside overview nodes summing every window — the
+    opt-in surface is deferred rather than half-built.
+
     ``anonymous`` skips request signing for public buckets, and remaining
     ``store_kwargs`` reach ``open_object_store`` — the same posture (and
     spelling) as :func:`moczarr.open.open_hive`, so the remote read path is
@@ -250,6 +257,22 @@ def open_overview_order(
                 f"orders are per-window (D23 naming) — pass window=..."
             )
         validate_label(window)
+        if window == ALL_TOKEN:
+            # `all` passes validate_label, so without this it would happily
+            # open the all-time folds while open_hive found no `{shard}_all`
+            # leaf and emptied the source node — one tree whose source order
+            # reports 0 cells beside overview orders summing EVERY window.
+            # Refusing is spec-aligned (§4.2 excludes `all` from the window
+            # grammar forever), and leaves the surface question open.
+            raise ValueError(
+                f"window={ALL_TOKEN!r} at {store_root}: {ALL_TOKEN!r} is the reserved "
+                f"all-time token (zagg spec §4.2 — excluded from the window grammar "
+                f"forever), not a window label. The all-time overview folds "
+                f"(pyramid.overview.all_time, §4.5) exist on disk but are not yet a "
+                f"reader surface: the source axis has no all-time leaf to pair them "
+                f"with, so opening them alone would mislead. Pass a declared window "
+                f"label (espg/moczarr#15 tracks the opt-in surface)"
+            )
         basename = f"{window}.zarr"
     else:
         basename = f"{ALL_TOKEN}.zarr"
