@@ -373,6 +373,24 @@ class TestVerifyArrays:
         hashes = hash_arrays(ragged, convention.leaf_path("4111"))
         assert hashes["5/h_li_tdigest"] == digest.hexdigest()
 
+    def test_in_leaf_debris_is_out_of_o11_scope(self, ragged, tmp_path):
+        """Non-zarr objects INSIDE the leaf (zagg's ``coverage.moc`` occupancy
+        bitmap, a ``.zarr.status/`` prefix, editor/OS files) are not arrays, so
+        they must neither raise nor move a hash. This is the class
+        ``Group.members`` choked on — and choked on asymmetrically: zarr's own
+        ``LocalStore`` warns and skips, obstore turns the same probe into a
+        hard error, so the key walk is what makes the two agree."""
+        rel = convention.leaf_path("4111")
+        pristine = hash_arrays(ragged, rel)
+        root = tmp_path / "store"
+        shutil.copytree(ragged, root)
+        leaf = root / rel
+        (leaf / "coverage.moc").write_bytes(b"\x28\xb5\x2f\xfd")
+        (leaf / ".zarr.status").mkdir()
+        (leaf / ".zarr.status" / "last_write.json").write_text('{"run": 1}')
+        (leaf / "5" / "notes.txt").write_text("scratch")
+        assert hash_arrays(str(root), rel) == pristine
+
     def test_vlen_hash_is_stable_across_loads(self, ragged):
         # Two fresh opens decode into freshly allocated objects at different
         # addresses; a pointer-derived digest would differ here.
