@@ -29,8 +29,12 @@ Three deliberate seams:
   (:func:`moczarr.coverage.decode_bitmap`), never through zagg.
 
 Mask semantics (the englacial/zagg#334 strata upgrade is data-driven): ``0``
-= unobserved, ``1`` = observed but no stored digest (the noise stratum of a
-signal field), ``2`` = observed with a stored digest. A store without exact
+= unobserved, ``1`` = observed but no stored digest on **the field being
+read**, ``2`` = observed with a stored digest. ``1`` is symmetric, not a
+statement about one stratum: reading a signal field it marks the cells whose
+photons were all noise, reading the noise field it marks the signal-only
+cells, and a cell that is observed with *both* strata empty reports ``1`` on
+both fields. A store without exact
 occupancy (no commit stamp — every flat store — or a box-only envelope, or
 a missing sidecar) degrades to the 2-state ``{0, 2}`` populated/not mask;
 the yielded mask does not say which regime it is in, so consumers keying on
@@ -348,7 +352,9 @@ def _block_mask(words: np.ndarray, occupancy: tuple | None, block_depth: int) ->
     """The block's ``(side, side)`` uint8 occupancy base (values 0/1).
 
     ``1`` marks a cell the leaf's occupancy sidecar records as observed; the
-    caller upgrades digest-bearing cells to ``2``. Without occupancy truth
+    caller upgrades digest-bearing cells to ``2``. The base is
+    stratum-agnostic — which is what makes ``1`` symmetric across the strata
+    fields, an observed cell with both strata empty included. Without occupancy truth
     the base stays ``0`` everywhere (the 2-state degrade — ``0`` then
     asserts nothing about observation; :func:`has_exact_occupancy` is the
     discriminator).
@@ -572,8 +578,9 @@ def has_exact_occupancy(store: Store) -> bool:
     per store before keying on the mask's semantics:
 
     - ``True`` — the leaf carries exact ``coverage.moc`` occupancy, so ``0``
-      really means *unobserved* and ``1`` (observed, no stored digest — a
-      signal field's noise stratum) is reported wherever it occurs.
+      really means *unobserved* and ``1`` (observed, but no digest stored on
+      the field being read — whichever stratum that is) is reported wherever
+      it occurs.
     - ``False`` — no exact occupancy (no commit stamp, i.e. every flat
       store; a box-only envelope; or a missing sidecar): the mask degrades
       to 2-state populated/not and ``0`` means only "no stored digest here".

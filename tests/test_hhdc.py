@@ -12,9 +12,12 @@ Parity is pinned two ways against the committed SERC strata fixture
 - **Live parity** (additionally needs zagg's post-#339 reader surface): the
   two readers run side by side on the same store and must agree exactly.
 
-The layout kernel, occupancy predicate, ``open_hive`` no-choke check, and
-the missing-extra error hint all run WITHOUT zagg — the hint test runs only
-in a core (no-zagg) environment, so moczarr-only CI exercises it.
+The layout kernel, the occupancy predicate and the whole mask channel, the
+``open_hive`` no-choke check, and the missing-extra error hint all run
+WITHOUT zagg — the mask is moczarr-owned (decoded through
+:mod:`moczarr.coverage`), so its contract is pinned in the core leg; the
+hint test runs only in a core (no-zagg) environment, so moczarr-only CI
+exercises it.
 """
 
 import importlib.util
@@ -24,15 +27,19 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from numcodecs import Zstd
 from zarr.storage import LocalStore
 
-from moczarr.convention import COMMIT_ATTR
+from moczarr.convention import COMMIT_ATTR, COVERAGE_SIDECAR
 from moczarr.hhdc import (
+    _block_mask,
+    _load_occupancy,
     has_exact_occupancy,
     rank_to_rowcol,
     read_tensors,
     rowcol_to_rank,
 )
+from moczarr.ragged import _morton_words, open_ragged
 
 DATA = Path(__file__).parent / "data"
 GOLDENS = DATA / "strata_goldens"
@@ -40,7 +47,10 @@ EXPECTED = json.loads((DATA / "strata_hive.expected.json").read_text())
 LEAF = DATA / "strata_hive" / EXPECTED["leaf"]
 GROUP = EXPECTED["group"]
 SIGNAL = f"{GROUP}/h_tdigest_signal"
+NOISE = f"{GROUP}/h_tdigest_noise"
 BLOCK_ORDER = int(EXPECTED["goldens"]["params"]["block_order"])
+#: Cells-axis depth of the fixture leaf (16 cells = one order-4 shard subtree).
+LEAF_DEPTH = 2
 
 HAS_ZAGG = importlib.util.find_spec("zagg") is not None
 needs_zagg = pytest.mark.skipif(not HAS_ZAGG, reason="needs the moczarr[zagg] extra")
@@ -95,6 +105,91 @@ class TestLayoutKernel:
         ranks = np.arange(64)
         rows, cols = rank_to_rowcol(ranks, 3)
         np.testing.assert_array_equal(rowcol_to_rank(rows, cols, 3), ranks)
+
+
+def _occupied_leaf(tmp_path, ranks):
+    """A copy of the fixture leaf whose occupancy bitmap marks ``ranks``.
+
+    The sidecar is the frozen O8 encoding (MSB-first bits over the shard
+    subtree, zstd), written by hand like ``conftest``'s hive fixture — the
+    only way to reach an observed cell that stores NO digest in either
+    stratum, which the generated fixture has none of.
+    """
+    root = tmp_path / "occupied"
+    shutil.copytree(LEAF, root)
+    bits = np.zeros(4**LEAF_DEPTH, dtype=np.uint8)
+    bits[list(ranks)] = 1
+    payload = bytes(Zstd(level=3).encode(np.packbits(bits).tobytes()))
+    (root / COVERAGE_SIDECAR).write_bytes(payload)
+    meta_path = root / "zarr.json"
+    meta = json.loads(meta_path.read_text())
+    coverage = meta["attributes"][COMMIT_ATTR]["coverage"]
+    coverage["nbytes"], coverage["raw_nbytes"] = len(payload), 4**LEAF_DEPTH // 8
+    meta_path.write_text(json.dumps(meta))
+    return LocalStore(root)
+
+
+def _cells_axis(store, field=SIGNAL):
+    """``(payload array, the cells axis' morton words)`` of an opened leaf."""
+    arr, _element = open_ragged(store, field)
+    return arr, np.asarray(_morton_words(store, field, 3)[0 : int(arr.shape[0])])
+
+
+class TestMaskChannel:
+    """The mask channel WITHOUT the digest algebra.
+
+    ``read_tensors`` reaches the mask through ``chunk_z_range``, so every
+    mask assertion in the parity classes needs the ``zagg`` extra — but
+    occupancy decode and placement need no digest algebra at all, and the
+    mask is the piece moczarr owns (:func:`moczarr.coverage.decode_bitmap`,
+    never zagg's hive path). The ratified englacial/zagg#321/#336 contract is
+    pinned here, in the core leg.
+    """
+
+    def test_load_occupancy_decodes_the_leaf_sidecar(self):
+        store = _store()
+        arr, words = _cells_axis(store)
+        kind, occupied = _load_occupancy(store, arr, words, SIGNAL)
+        assert kind == "bitmap"
+        expected = np.sort(np.array([int(c["morton"]) for c in EXPECTED["cells"]], dtype=np.uint64))
+        np.testing.assert_array_equal(occupied, expected)
+
+    def test_stripped_stamp_has_no_occupancy(self, tmp_path):
+        store = _stripped_leaf(tmp_path)
+        arr, words = _cells_axis(store)
+        assert _load_occupancy(store, arr, words, SIGNAL) is None
+        assert not _block_mask(words, None, LEAF_DEPTH).any()  # the 2-state degrade
+
+    def test_block_mask_places_observed_cells_by_deinterleave(self):
+        """Placement is the Z-order deinterleave, spelled out: the fixture's
+        observed cells are ranks 0, 2, 5, 13, 15, whose ``(row, col)`` are
+        ``(0,0) (1,0) (0,3) (2,3) (3,3)`` — a row-major reshape would put
+        them at ``(0,0) (0,2) (1,1) (3,1) (3,3)`` instead."""
+        store = _store()
+        arr, words = _cells_axis(store)
+        mask = _block_mask(words, _load_occupancy(store, arr, words, SIGNAL), LEAF_DEPTH)
+        expected = np.zeros((4, 4), dtype=np.uint8)
+        for row, col in [(0, 0), (1, 0), (0, 3), (2, 3), (3, 3)]:
+            expected[row, col] = 1
+        np.testing.assert_array_equal(mask, expected)
+        # Same footprint as the committed zagg-computed golden (whose observed
+        # cells are 1 or 2 depending on whether the signal digest is stored).
+        golden = np.load(GOLDENS / "signal_block_mask.npy")
+        np.testing.assert_array_equal(mask.astype(bool), golden.astype(bool))
+
+    def test_observed_cell_with_no_digest_reads_one_on_either_field(self, tmp_path):
+        """``1`` is symmetric — "observed, no stored digest on the field being
+        read", not "the noise stratum". The fixture pins the crossed case both
+        ways already (the golden noise mask carries ``1`` at the signal-only
+        cell), and the mask base is stratum-agnostic by construction, so a
+        cell observed with BOTH strata empty reads ``1`` on both fields."""
+        occupied = [c["index"] for c in EXPECTED["cells"]] + [1]  # cell 1 stores nothing
+        store = _occupied_leaf(tmp_path, occupied)
+        for field in (SIGNAL, NOISE):
+            arr, words = _cells_axis(store, field)
+            base = _block_mask(words, _load_occupancy(store, arr, words, field), LEAF_DEPTH)
+            assert base[0, 1] == 1  # rank 1 -> (row, col) = (0, 1)
+            assert int(base.sum()) == len(occupied)
 
 
 class TestOccupancyPredicate:
@@ -154,6 +249,19 @@ class TestGoldenParity:
         assert has_exact_occupancy(store) is False
         for _t, mask, _w, _m in read_tensors(store, SIGNAL):
             assert set(np.unique(mask)) <= {0, 2}
+
+
+@needs_zagg
+class TestSymmetricMask:
+    def test_both_strata_empty_cell_is_one_on_both_fields(self, tmp_path):
+        """End to end through ``read_tensors``: an observed cell that stores no
+        digest in EITHER stratum yields ``1`` on both fields (the symmetric
+        reading of the ``1`` state, which the generated fixture cannot show)."""
+        occupied = [c["index"] for c in EXPECTED["cells"]] + [1]
+        store = _occupied_leaf(tmp_path, occupied)
+        for field in (SIGNAL, NOISE):
+            (_t, mask, _w, _m) = next(iter(read_tensors(store, field, block_order=BLOCK_ORDER)))
+            assert mask[0, 1] == 1
 
 
 @needs_zagg
