@@ -18,6 +18,11 @@ What you get:
   `s3://bucket/prefix`) to a lazy `xarray.Dataset`, with AOI and
   time-window scoping resolved through coverage metadata, not object
   listings.
+- **`open_store()`** — a multi-product store root as one
+  `xarray.DataTree`: an empty root plus one child node per product —
+  each exactly that product's `open_hive` Dataset, so the read behavior
+  is `open_hive`'s (heterogeneous schemas welcome), with its kwargs
+  forwarded per node.
 - **A MOC-backed lazy index** (the default) — the row domain held as an
   interval set built from the same coverage arithmetic that selected the
   leaves; the on-disk cell arrays are never read, and the `morton`
@@ -82,5 +87,6 @@ moczarr is the *read* side of a convention owned elsewhere:
   (§4 coverage, §5 reader, §6 xarray extension).
 
 Plan and progress: [espg/moczarr#1](https://github.com/espg/moczarr/issues/1).
-Next up: a DataTree-shaped `open_store()` for multi-product stores
-([issue #15](https://github.com/espg/moczarr/issues/15)).
+Next up: resolution (pyramid-order) nodes under each product node —
+designed on the [concepts page](concepts.md), gated on zagg's overview
+sweep ([issue #15](https://github.com/espg/moczarr/issues/15)).

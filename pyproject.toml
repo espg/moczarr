@@ -32,7 +32,18 @@ dependencies = [
     # mortie's MortonIndexArray (.decimal_repr()/.hive_path()) imports pandas;
     # a direct runtime dep the reader calls into, not just transitive via xarray.
     "pandas",
-    "xarray",
+    # Floor is empirical, bisected against the suite (issue #15) — DataTree
+    # availability (2024.10.0) is NOT the binding constraint:
+    #   - xr.Coordinates.from_xindex (added 2025.03.0) is what the default
+    #     index_kind="moc" path is built on (open.py open_hive); below it
+    #     every open_hive/open_store call raises AttributeError.
+    #   - set_xindex over an already-indexed coordinate — MortonMocIndex's
+    #     documented adoption path (test_moc_index.py round-trip and
+    #     unknown-option behaviors) — only works from 2026.01.0; 2025.03.0
+    #     through 2025.10.1 raise "those coordinates already have an index".
+    # So 2026.01.0 is the lowest version at which the package's own
+    # contract holds. The package is not tested below it.
+    "xarray>=2026.01.0",
     "zarr>=3.1.5",
     "obstore>=0.8.2",
     # Zstd for the coverage-bitmap sidecar decode (O8 encoding).
