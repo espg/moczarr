@@ -174,6 +174,18 @@ class TestReadStatsRollup:
         target.write_text(json.dumps({"spec": "other/1", "payload": {}}))
         assert read_stats_rollup(str(root), "41") is None  # wrong spec: cache posture
 
+    def test_unstamped_generation_reads_none(self, atl06, tmp_path):
+        # Same depth as the sweep's own reader: n_leaves must be an int, so a
+        # `{"n_leaves": "2"}` stamp reads as absent here exactly as it would
+        # be rejected writer-side.
+        root = tmp_path / "store"
+        shutil.copytree(atl06, root)
+        target = root / "4" / "1" / "stats.rollup.json"
+        envelope = json.loads(target.read_text())
+        envelope["generation"]["n_leaves"] = "2"
+        target.write_text(json.dumps(envelope))
+        assert read_stats_rollup(str(root), "41") is None
+
 
 class TestPathGrouping:
     """The D21 generic path at ``path_grouping: 3`` (espg/moczarr#11 directive:
