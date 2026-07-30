@@ -48,6 +48,17 @@ def ragged():
     return str(FIXTURE / "atl06_ragged")
 
 
+def _rewrite_content_hashes(atl06, tmp_path, rewrite):
+    """Copy the atl06 product, reshaping leaf ``4111``'s recorded hashes."""
+    root = tmp_path / "store"
+    shutil.copytree(atl06, root)
+    sidecar = root / "4" / "1" / "1" / "1" / "stats.json"
+    record = json.loads(sidecar.read_text())
+    record["content_hashes"] = rewrite(record["content_hashes"])
+    sidecar.write_text(json.dumps(record))
+    return root
+
+
 class TestSidecarNaming:
     def test_legacy_bare(self):
         for spec in (None, convention.HIVE_SPEC, convention.HIVE_SPEC_V2):
@@ -187,15 +198,33 @@ class TestVerifyArrays:
     def test_flat_recorded_shape_accepted(self, atl06, tmp_path):
         # The O11 wording admits a flat {name: hash} record; the verifier
         # accepts it so whichever shape zagg's writer lands keeps verifying.
-        root = tmp_path / "store"
-        shutil.copytree(atl06, root)
-        sidecar = root / "4" / "1" / "1" / "1" / "stats.json"
-        record = json.loads(sidecar.read_text())
-        record["content_hashes"] = dict(record["content_hashes"]["arrays"])
-        sidecar.write_text(json.dumps(record))
+        root = _rewrite_content_hashes(atl06, tmp_path, lambda content: dict(content["arrays"]))
         result = verify_arrays(str(root), "4111")
         assert result["match"] is True
         assert result["recorded_combined"] is None
+
+    def test_flat_shape_with_combined_key_accepted(self, atl06, tmp_path):
+        # The likeliest flat encoding puts arrays and the combined hash in ONE
+        # mapping; `combined` is reserved, never read as a phantom array name
+        # (which reported this intact leaf as mismatched on 'combined').
+        root = _rewrite_content_hashes(
+            atl06,
+            tmp_path,
+            lambda content: {**content["arrays"], "combined": content["combined"]},
+        )
+        result = verify_arrays(str(root), "4111")
+        assert result["match"] is True
+        assert result["mismatched"] == []
+        assert result["recorded_combined"] == result["combined"]
+
+    def test_flat_combined_only_is_unverifiable(self, atl06, tmp_path):
+        # The degenerate combined-only record records no per-array hashes, so
+        # it is unverifiable — not "every array mismatched".
+        root = _rewrite_content_hashes(atl06, tmp_path, lambda content: {"combined": "x"})
+        result = verify_arrays(str(root), "4111")
+        assert result["match"] is None
+        assert result["recorded"] is None
+        assert result["mismatched"] == []
 
     def test_combined_hash_is_order_free(self):
         a = {"x": "aa", "y": "bb"}
