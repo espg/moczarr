@@ -157,6 +157,25 @@ class TestFabricateCellIds:
             ids = fabricate_cell_ids(words)
         assert ids.tolist() == [NESTED29_NORTH, NESTED24_NORTH, NESTED24_SOUTH, NESTED29_SOUTH]
 
+    def test_point_beside_coarser_area(self):
+        # The path the area-order guard deliberately lets through (issue #8
+        # fold): a point may ride alongside an AREA at ANY order, not just 29
+        # — the guard constrains the area words to ONE order, and one area is
+        # one order. The result is deliberately two-nside per §4: the point
+        # sits at the order-24 clip, the order-8 area keeps order 8.
+        words = [POINT_NORTH_WORD, GOLDEN_WORD]
+        ids = fabricate_cell_ids(words)
+        assert ids.tolist() == [NESTED24_NORTH, GOLDEN_NESTED]
+        # Composition: each kind fabricates exactly as it does alone.
+        assert ids[0] == fabricate_cell_ids([POINT_NORTH_WORD])[0]
+        assert ids[1] == fabricate_cell_ids([GOLDEN_WORD])[0]
+        # `level` cross-checks BOTH kinds, so in this shape it is satisfiable
+        # only when the areas are themselves at order 29 — omit it otherwise.
+        with pytest.raises(ValueError, match="point words' encoded order 29"):
+            fabricate_cell_ids(words, level=8)
+        with pytest.raises(ValueError, match=r"area words' order 8"):
+            fabricate_cell_ids(words, level=29)
+
     def test_point_level_cross_check(self):
         # level checks the ENCODED order: points are order-29 encodings even
         # though their NESTED view is the order-24 clip.
