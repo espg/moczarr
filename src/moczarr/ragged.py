@@ -171,6 +171,11 @@ def decode_cell(raw: object, element: RaggedElement) -> np.ndarray:
     *inner_shape)`` with the dtype read little-endian. ``None`` and ``b""``
     (an absent/empty cell) decode to the zero-length ``(0, *inner_shape)``
     array.
+
+    The result is a read-only, non-owning VIEW of those bytes
+    (``flags.writeable`` and ``flags.owndata`` both False — parity-faithful
+    with zagg's ``_decode_cell``): in-place work on a decoded payload raises,
+    and keeping one alive pins its span's buffer. Copy if you need either.
     """
     data = b"" if raw is None else bytes(raw)  # type: ignore[call-overload]
     return np.frombuffer(data, dtype=element.dtype).reshape((-1, *element.inner_shape))

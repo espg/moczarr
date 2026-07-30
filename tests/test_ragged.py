@@ -256,6 +256,16 @@ class TestDecodeCell:
         values = np.arange(6, dtype="<i2").reshape(2, 3)
         np.testing.assert_array_equal(decode_cell(values.tobytes(), element), values)
 
+    def test_payload_is_a_read_only_view(self):
+        """Documented posture (and zagg's): a decoded cell is a non-owning
+        ``frombuffer`` view — in-place work on it raises."""
+        values = decode_cell(
+            np.arange(6, dtype="<i2").tobytes(), RaggedElement(np.dtype("<i2"), (3,))
+        )
+        assert not values.flags.writeable and not values.flags.owndata
+        with pytest.raises(ValueError, match="read-only"):
+            values[0, 0] = 1
+
     def test_empty_and_none_decode_to_zero_length(self):
         element = RaggedElement(np.dtype("<u8"), ())
         assert decode_cell(b"", element).shape == (0,)
