@@ -11,7 +11,15 @@ Cell ids here are mortie's packed ``uint64`` morton words — NOT bare HEALPix
 nested ids (those ride along as the unindexed ``cell_ids`` coordinate). A
 word encodes its own order, so transforms that read cells (``mort2geo``,
 ``mort2polygon``, ``clip2order``) never consult ``level``; only the binning
-direction (``geographic2cell_ids``) and child generation do.
+direction (``geographic2cell_ids``) does.
+
+Two layers of order discipline follow from that (issue #8):
+:class:`MortonInfo` is a transform helper usable on any words — it stays
+level-tolerant on the read direction but takes ONE order per call
+(:func:`_single_order`); :class:`MortonIndex` binds ``level`` to an actual
+coordinate, so it validates once at construction that the domain is
+order-uniform *and* at ``level`` (:func:`_check_domain`), which is what makes
+"``level`` is a frozen parameter" true of an index.
 """
 
 from __future__ import annotations
@@ -74,6 +82,78 @@ def _words(cell_ids) -> np.ndarray:
     return np.ascontiguousarray(cell_ids, dtype=np.uint64)
 
 
+def _single_order(words: np.ndarray, surface: str) -> int | None:
+    """The one order ``words`` share — ``None`` for an empty array.
+
+    The :class:`MortonInfo` cell-reading contract: ONE order per call. This is
+    a requirement of the surface, NOT a claim about ``level`` — the words are
+    self-describing and ``level`` is not consulted on this direction (see the
+    module docstring), so a uniform off-``level`` array is fine while a
+    mixed-order one is ambiguous *here* whatever ``level`` says. mortie 0.9.1+
+    converts mixed orders natively (mortie#116), so nothing below is an
+    upstream limitation: it is that these surfaces have one order-keyed answer
+    to give (one lon/lat per cell at its own order is fine; one trailing
+    children dimension, or one boundary set, is not).
+
+    The domain-wide version of the same idea is :func:`_check_domain` — an
+    *index* pins its order to ``grid_info.level`` once at construction, so
+    index-backed calls satisfy this for free.
+    """
+    from mortie import orders_of
+
+    if words.size == 0:
+        return None
+    distinct = np.unique(orders_of(words))
+    if distinct.size > 1:
+        raise ValueError(
+            f"mixed-order cell_ids (orders {[int(o) for o in distinct]}): "
+            f"MortonInfo.{surface} reads one order per call. Split by mortie.orders_of "
+            f"and call per order — a pyramid/overview coordinate (zagg#262) is a stack "
+            f"of grids, not one."
+        )
+    return int(distinct[0])
+
+
+def _check_domain(words: np.ndarray, level: int) -> None:
+    """The :class:`MortonIndex` domain contract: ONE order, and it is ``level``.
+
+    Validated once at construction — the single place ``level`` is bound to
+    data — so every read surface (``cell_centers``, ``cell_boundaries``,
+    ``zoom_to``, ``sel_latlon``) inherits it instead of each guarding
+    separately (PR #22 Question 2; issue #8). Both halves are load-bearing:
+
+    * one order, because an xdggs index is single-level by construction and a
+      mixed-order coordinate is a stack of grids, not one;
+    * *that* order, because ``geographic2cell_ids`` bins at ``level`` and
+      ``sel_latlon`` then looks the result up in this coordinate — an
+      off-``level`` domain matches nothing, silently.
+
+    ``MortonRanges.from_cell_words`` already enforced exactly this for the
+    ``"moc"`` kind; the ``"pandas"`` kind was the laxer half.
+    """
+    from mortie import orders_of
+
+    if words.size == 0:
+        return
+    distinct = np.unique(orders_of(words))
+    if distinct.size > 1:
+        raise ValueError(
+            f"mixed-order morton domain (orders {[int(o) for o in distinct]}): a "
+            f"MortonIndex carries ONE order — an xdggs index is single-level by "
+            f"construction (level is a frozen MortonInfo parameter). Decode each level "
+            f"separately (split by mortie.orders_of); a pyramid/overview coordinate "
+            f"(zagg#262) is a stack of grids, not one index."
+        )
+    order = int(distinct[0])
+    if order != level:
+        raise ValueError(
+            f"morton domain is at order {order}, not the declared level {level}: an "
+            f"index binds level to its coordinate (geographic2cell_ids bins at level and "
+            f"sel_latlon looks the result up here, so an off-level domain matches "
+            f"nothing). Pass level={order}, or omit level to read it from the words."
+        )
+
+
 @dataclass(frozen=True)
 class MortonInfo(DGGSInfo):
     """Grid info for packed-morton HEALPix cells (mortie encoding).
@@ -111,23 +191,19 @@ class MortonInfo(DGGSInfo):
         ``mort2geo`` reads each word's own order — ``level`` is not consulted —
         and returns lon in [0, 360); the xdggs surface is [-180, 180).
 
-        Mixed-order ``cell_ids`` reject here as the *index* contract, not a
-        kernel limitation (issue #8): mortie 0.9.1+ converts mixed orders
-        natively (mortie#116), but an xdggs index is single-level by
-        construction — ``level`` is a frozen :class:`MortonInfo` parameter —
-        so mixed input is a caller error at this surface. Decode each level
-        separately instead.
+        Mixed-order ``cell_ids`` reject here as this *surface's* one-order-
+        per-call contract, not as a kernel limitation and not as a claim about
+        ``level`` (issue #8): mortie 0.9.1+ converts mixed orders natively
+        (mortie#116), and this method deliberately ignores ``level``, so
+        citing a "frozen level" would describe an invariant it does not
+        enforce. The domain-wide contract (one order, *and* that order is
+        ``level``) is enforced once in :class:`MortonIndex` instead — see
+        :func:`_check_domain`. Decode each level separately.
         """
-        from mortie import mort2geo, orders_of
+        from mortie import mort2geo
 
         words = _words(cell_ids)
-        distinct = np.unique(orders_of(words))
-        if distinct.size > 1:
-            raise ValueError(
-                f"mixed-order cell_ids (orders {[int(o) for o in distinct]}): a morton "
-                f"xdggs index is single-level by construction (level is a frozen "
-                f"MortonInfo parameter) — decode each level separately"
-            )
+        _single_order(words, "cell_ids2geographic")
         lat, lon = mort2geo(words)
         lon = (np.atleast_1d(np.asarray(lon, dtype=np.float64)) + 180.0) % 360.0 - 180.0
         return lon, np.atleast_1d(np.asarray(lat, dtype=np.float64))
@@ -155,6 +231,12 @@ class MortonInfo(DGGSInfo):
         here. The four vertices are recentered around the prime meridian
         before ring construction so dateline-crossing and polar cells stay
         well-formed (same ``center_around_prime_meridian`` xdggs applies).
+
+        Mixed-order input rejects, same one-order-per-call contract as
+        :meth:`cell_ids2geographic` (issue #8 fold): ``mort2polygon`` would
+        happily emit rings at several orders, but a boundary set that silently
+        mixes cell sizes is the bypass that let a mixed-order coordinate reach
+        the accessor at all.
         """
         from mortie import mort2polygon
         from xdggs.healpix import polygons_geoarrow, polygons_shapely
@@ -163,7 +245,9 @@ class MortonInfo(DGGSInfo):
         backend_func = backends.get(backend)
         if backend_func is None:
             raise ValueError(f"invalid backend: {backend!r} (one of {sorted(backends)})")
-        rings = mort2polygon(_words(cell_ids))
+        words = _words(cell_ids)
+        _single_order(words, "cell_boundaries")
+        rings = mort2polygon(words)
         if np.asarray(cell_ids).size == 1:
             rings = [rings]
         if len(rings) == 0:
@@ -223,6 +307,17 @@ class MortonIndex(DGGSIndex):
     The ``"pandas"`` default here is the decode-a-materialized-coordinate
     convention (upstream parity); :func:`moczarr.open_hive` itself defaults
     to ``index_kind="moc"`` and passes the kind through explicitly.
+
+    The domain contract — one order, and that order is ``grid_info.level`` —
+    is checked HERE, once, whenever the words are handed in raw
+    (:func:`_check_domain`; issue #8, PR #22 Question 2). That covers every
+    read surface at once rather than guarding them one at a time, and it makes
+    "``level`` is a frozen parameter" literally true of an index. A passed
+    ``xr.Index`` is trusted for its words (an already-built index, or the
+    ``_replace`` a ``sel``/``isel`` makes from a validated one — revalidating
+    there would put an ``O(n)`` scan on every selection); a
+    :class:`~moczarr.moc_index.MortonMocIndex` still gets its ``O(1)``
+    ``cell_order`` cross-checked.
     """
 
     _grid: DGGSInfo
@@ -235,17 +330,28 @@ class MortonIndex(DGGSIndex):
         self._dim = dim
         self._name = name
         if isinstance(cell_ids, xr.Index):
+            from moczarr.moc_index import MortonMocIndex
+
+            if isinstance(cell_ids, MortonMocIndex) and cell_ids.level != grid_info.level:
+                raise ValueError(
+                    f"morton domain is at order {cell_ids.level}, not the declared level "
+                    f"{grid_info.level}: an index binds level to its coordinate. Pass "
+                    f"level={cell_ids.level}, or omit level to read it from the store."
+                )
             self._index = cell_ids
         elif index_kind == "pandas":
             from xarray.indexes import PandasIndex
 
+            _check_domain(_words(cell_ids), grid_info.level)
             self._index = PandasIndex(cell_ids, dim)
             self._index.index.name = name
         else:
             from moczarr.moc_index import MortonMocIndex
             from moczarr.ranges import MortonRanges
 
-            ranges = MortonRanges.from_cell_words(_words(cell_ids), grid_info.level)
+            words = _words(cell_ids)
+            _check_domain(words, grid_info.level)
+            ranges = MortonRanges.from_cell_words(words, grid_info.level)
             self._index = MortonMocIndex(ranges, dim=dim, name=name)
         self._kind = index_kind
         self._grid = grid_info
