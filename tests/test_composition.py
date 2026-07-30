@@ -233,6 +233,18 @@ class TestAttrsBinding:
         with pytest.raises(ValueError, match="composition.threshold"):
             composition.parse_composition_attrs(attrs)
 
+    @pytest.mark.parametrize("threshold", [None, [2], "2", 2.7, 2.0, True])
+    def test_malformed_threshold_raises_value_error(self, threshold):
+        # ValueError as documented, and never coerced: §3.3 requires each
+        # stratum digest's recorded signal_threshold to AGREE with this value,
+        # so int(2.7) -> 2 would fabricate agreement with a cut the store never
+        # declared. bool is rejected too (True would read as threshold=1).
+        with pytest.raises(ValueError, match="composition.threshold must be an int"):
+            composition.parse_composition_attrs(_attrs(threshold=threshold))
+
+    def test_threshold_passes_through_unconverted(self):
+        assert composition.parse_composition_attrs(_attrs(threshold=4))["threshold"] == 4
+
     def test_canonical_lanes_are_the_spec_table(self):
         # The order the /1 gate enforces IS §3.1's table: five per-surface
         # marginals in signal_conf_ph column order, then low/med/high.
