@@ -30,6 +30,11 @@ Postures, inherited from the spec's conformance rules:
   array; the unsharded flat path) layouts are self-describing in the
   array's own metadata, so the sweep derives the stored span from
   ``arr.shards`` when present, else ``arr.chunks``.
+- **Debris-tolerant listing.** The sweep LISTs the array's ``c/`` prefix,
+  so unlike zagg's own open-by-name readers it *does* meet the in-leaf
+  debris the spec's §5.1 posture names (a foreign array prefix, a
+  ``.zarr.status/`` prefix, editor/OS files). A key under ``c/`` that is not
+  a chunk ordinal is skipped with a warning — never coerced to an int.
 - **Store-scoped.** The readers never traverse the hive digit tree — leaf
   discovery stays with :func:`moczarr.open_hive` / the coverage MOC. Open
   the leaf store and pass the in-leaf array path (e.g. ``"6/h_tdigest"``).
@@ -37,6 +42,7 @@ Postures, inherited from the spec's conformance rules:
 
 from __future__ import annotations
 
+import warnings
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from typing import Literal, cast
@@ -184,6 +190,13 @@ def stored_chunk_spans(arr: zarr.Array) -> list[tuple[int, int]]:
     metadata, so the two §1.5 geometries share this path.
     ``zarr.core.sync.sync`` runs the store's async listing on zarr's own
     event loop (zarr 3 exposes no public sync listing).
+
+    Because this path LISTs, it meets in-leaf debris the spec's §5.1 posture
+    names as expected (a foreign array prefix, a ``.zarr.status/`` prefix,
+    editor/OS files): a key under ``c/`` that is not a chunk ordinal is
+    **skipped with a warning**, never coerced to an int. Debris is inert for
+    zagg's own readers because they open arrays by name; a LISTing reader has
+    to state the same tolerance in code.
     """
     from zarr.core.sync import sync
 
@@ -193,7 +206,17 @@ def stored_chunk_spans(arr: zarr.Array) -> list[tuple[int, int]]:
     span = int((arr.shards or arr.chunks)[0])
     prefix = f"{arr.path}/c/" if arr.path else "c/"
     keys = sync(_collect(arr.store_path.store.list_prefix(prefix)))
-    ordinals = sorted(int(k.rsplit("/", 1)[-1]) for k in keys)
+    ordinals = sorted(int(k[len(prefix) :]) for k in keys if k[len(prefix) :].isdigit())
+    debris = sorted(k for k in keys if not k[len(prefix) :].isdigit())
+    if debris:
+        warnings.warn(
+            f"skipping {len(debris)} object(s) under {prefix!r} that are not chunk "
+            f"ordinals ({', '.join(debris[:3])}): in-leaf debris (a foreign array "
+            f"prefix, a '.zarr.status/' prefix, editor/OS files) is not chunk data. "
+            f"Note a RENAMED data object reads as an absent chunk, i.e. dropped cells",
+            UserWarning,
+            stacklevel=2,
+        )
     return [(o * span, min((o + 1) * span, int(arr.shape[0]))) for o in ordinals]
 
 

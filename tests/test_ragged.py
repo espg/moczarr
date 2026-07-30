@@ -303,6 +303,21 @@ class TestReadRagged:
         with pytest.raises(ValueError, match="no written 'morton' coordinate"):
             list(read_ragged(LocalStore(grid), "g/field"))
 
+    def test_in_leaf_debris_is_skipped_with_a_warning(self, tmp_path, sharded):
+        """A LISTing reader meets the spec's §5.1 in-leaf debris classes: a
+        key under ``c/`` that is not a chunk ordinal must be skipped, not
+        coerced to an int (which took the whole sweep down)."""
+        grid, expected = build_store(tmp_path, sharded=sharded)
+        _write(grid, "g/field/c/.DS_Store", b"junk")  # an OS file
+        _write(grid, "g/field/c/foreign/zarr.json", {"node_type": "group"})  # a prefix
+        with pytest.warns(UserWarning, match="not chunk ordinals"):
+            out = dict(read_ragged(LocalStore(grid), "g/field"))
+        assert len(out) == len(CELLS)  # every payload still decoded
+        for word, values in out.items():
+            np.testing.assert_array_equal(
+                values, expected[{morton_word(SHARD + TAILS[c]): c for c in CELLS}[word]]
+            )
+
     def test_non_ragged_array_rejected(self, tmp_path, sharded):
         """The dense morton array carries no ragged block — hard refusal."""
         grid, _ = build_store(tmp_path, sharded=sharded)
