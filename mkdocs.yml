@@ -37,6 +37,7 @@ nav:
       - stats: api/stats.md
       - join: api/join.md
       - moc_index: api/moc_index.md
+      - ragged: api/ragged.md
       - ranges: api/ranges.md
       - fabricate: api/fabricate.md
       - dggs: api/dggs.md
