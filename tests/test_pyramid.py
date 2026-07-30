@@ -484,29 +484,50 @@ class TestDegradation:
         assert int(ds["count"].sum()) == int(want["count"].sum())
         assert ds.sizes["cells"] == want.sizes["cells"]
 
-    def test_third_role_value_raises(self, root, tmp_path):
+    # An UNINTERPRETABLE cache object is debris, not a fatal error: §4.1 makes
+    # overviews "regenerable caches, never load-bearing… a reader MUST NOT
+    # require them", so one malformed object is dropped (loudly) and the node
+    # — and above all the product's SOURCE node — survives. Contrast
+    # test_off_order_overview_raises: that one is interpretable and positively
+    # wrong, so it would mis-rank rows.
+    @pytest.mark.parametrize(
+        ("doctor", "match"),
+        [
+            (lambda a: a.__setitem__("role", "composite"), "closed two-value"),
+            (
+                lambda a: a["zagg_overview"].__setitem__("spec", "zagg-overview/2"),
+                "zagg-overview/2",
+            ),
+            (lambda a: a.pop("zagg_overview"), "lacks the 'zagg_overview'"),
+            (lambda a: a["zagg_overview"].pop("cell_order"), "no 'cell_order'"),
+        ],
+        ids=["third-role", "unknown-spec", "no-block", "no-cell-order"],
+    )
+    def test_malformed_overview_object_is_dropped(self, root, tmp_path, doctor, match):
+        copy, _ = _doctored(tmp_path)
+        path, meta = _overview_meta(copy, ATL06_OVERVIEW)
+        doctor(meta["attributes"])
+        path.write_text(json.dumps(meta))
+        with pytest.warns(UserWarning, match=match):
+            tree = open_store(str(copy), products=["atl06"])
+        # The other three objects of /6 stand, /4 is untouched, /8 is intact.
+        assert [e["node"] for e in node_objects(tree["atl06"]["6"])] == ["43314", "43321", "43323"]
+        assert tree["atl06"]["6"].ds.sizes["cells"] == 48
+        golden = GOLDEN["products"]["atl06"]["source"]["all"]
+        assert int(tree["atl06"]["8"].ds["count"].sum()) == golden["count_total"]
+
+    def test_malformed_overview_object_is_found_under_any_aoi(self, root, tmp_path):
+        # Validation runs on every STAMPED object, before the AOI scopes rows:
+        # otherwise the same store is an error or clean depending only on the
+        # query, which is neither an integrity gate nor a tolerant skip.
         copy, _ = _doctored(tmp_path)
         path, meta = _overview_meta(copy, ATL06_OVERVIEW)
         meta["attributes"]["role"] = "composite"
         path.write_text(json.dumps(meta))
-        with pytest.raises(ValueError, match="closed two-value"):
-            open_store(str(copy), products=["atl06"])
-
-    def test_unknown_overview_spec_raises(self, root, tmp_path):
-        copy, _ = _doctored(tmp_path)
-        path, meta = _overview_meta(copy, ATL06_OVERVIEW)
-        meta["attributes"]["zagg_overview"]["spec"] = "zagg-overview/2"
-        path.write_text(json.dumps(meta))
-        with pytest.raises(ValueError, match="zagg-overview/2"):
-            open_store(str(copy), products=["atl06"])
-
-    def test_missing_provenance_block_raises(self, root, tmp_path):
-        copy, _ = _doctored(tmp_path)
-        path, meta = _overview_meta(copy, ATL06_OVERVIEW)
-        del meta["attributes"]["zagg_overview"]
-        path.write_text(json.dumps(meta))
-        with pytest.raises(ValueError, match="zagg_overview"):
-            open_store(str(copy), products=["atl06"])
+        with pytest.warns(UserWarning, match="closed two-value"):
+            # aoi "43312" is exactly the node whose object was doctored out;
+            # "43314" excludes it — both must report it the same way.
+            open_store(str(copy), products=["atl06"], aoi=["43314"])
 
     def test_off_order_overview_raises(self, root, tmp_path):
         copy, _ = _doctored(tmp_path)

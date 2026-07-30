@@ -147,36 +147,68 @@ def _node_rel(decimal: str) -> str:
     return "/".join([base, *decimal[len(base) :]])
 
 
-def _object_entry(attrs: dict, decimal: str, window: str | None, target_order: int) -> dict:
-    """One stamped object's per-object entry; validates the §4.3 contract.
+def _skip(decimal: str, reason: str) -> None:
+    """Warn that one malformed cache object is being dropped (§4.1)."""
+    warnings.warn(
+        f"overview object at node {decimal} {reason}; the object is dropped and the "
+        f"order node keeps its remaining objects (overviews are regenerable caches "
+        f"a reader MUST NOT require — zagg spec §4.1; regenerate the sweep)",
+        UserWarning,
+        stacklevel=4,
+    )
 
-    ``role`` absence means source; ``role: "overview"`` requires the
-    ``zagg_overview`` provenance block (present exactly then), whose ``spec``
-    is strict-checked and whose ``cell_order`` must match this node's order —
-    an off-order overview under a node would mis-rank every row after it.
-    Any other ``role`` value breaks the closed two-value vocabulary and
-    raises rather than guessing.
+
+def _object_entry(attrs: dict, decimal: str, window: str | None, target_order: int) -> dict | None:
+    """One stamped object's per-object entry, or ``None`` to drop the object.
+
+    ``role`` absence means source; ``role: "overview"`` requires an
+    interpretable ``zagg_overview`` provenance block (present exactly then,
+    a known ``spec``, carrying ``cell_order``) whose ``cell_order`` matches
+    this node's order.
+
+    The two severities split on §4.1 — "overviews are **regenerable caches**,
+    never load-bearing… a reader MUST NOT require them":
+
+    * **Uninterpretable** — a ``role`` value outside the closed two-value
+      vocabulary, a missing or unknown-revision ``zagg_overview`` block, a
+      block without ``cell_order``. Warn and skip the object, the posture
+      §4.3 already MUSTs for unstamped debris. One malformed cache object
+      must not take the node's other objects, let alone the product's
+      **source** nodes, down with the whole ``open_store``.
+    * **Interpretable but wrong** — a block positively declaring a
+      ``cell_order`` other than this node's. Raises: those rows would be
+      mis-ranked under this node's §4.4 coordinate, which is a wrong answer
+      rather than a missing one, and an off-order fold indicts the sweep
+      rather than one object.
     """
     role = attrs.get(ROLE_ATTR)
     entry: dict[str, Any] = {"node": decimal, "window": window, "role": role or "source"}
     if role is None:
         return entry
     if role != "overview":
-        raise ValueError(
-            f"object at node {decimal} declares role {role!r}: the role vocabulary is "
-            f"closed two-value — 'overview', or no role key at all (source); zagg spec §4.3"
+        _skip(
+            decimal,
+            f"declares role {role!r}, outside the closed two-value vocabulary "
+            f"('overview', or no role key at all — source; zagg spec §4.3)",
         )
+        return None
     block = attrs.get(OVERVIEW_ATTR)
     if not isinstance(block, dict):
-        raise ValueError(
-            f"role: overview object at node {decimal} lacks the {OVERVIEW_ATTR!r} "
-            f"provenance block (present exactly when role is 'overview'; zagg spec §4.3)"
+        _skip(
+            decimal,
+            f"lacks the {OVERVIEW_ATTR!r} provenance block (present exactly when role "
+            f"is 'overview'; zagg spec §4.3)",
         )
+        return None
     if block.get("spec") != OVERVIEW_SPEC:
-        raise ValueError(
-            f"overview at node {decimal} declares spec {block.get('spec')!r}; this reader "
-            f"implements {OVERVIEW_SPEC!r} only (strict-check, fail loudly)"
+        _skip(
+            decimal,
+            f"declares spec {block.get('spec')!r}; this reader implements {OVERVIEW_SPEC!r} only",
         )
+        return None
+    if "cell_order" not in block:
+        _skip(decimal, f"has a {OVERVIEW_ATTR!r} block with no 'cell_order' (zagg spec §4.3)")
+        return None
     if int(block["cell_order"]) != target_order:
         raise ValueError(
             f"overview at node {decimal} stores cells at order {block['cell_order']}, "
@@ -348,8 +380,6 @@ def open_overview_order(
         stamp = _stamp_from_meta(meta)
         if stamp is None:
             continue  # absent object or unstamped debris (D4)
-        if schema_rel is None:
-            schema_rel = rel
         # The per-object roster (and its §4.3 validation) is recorded for
         # every STAMPED object, before any AOI filtering: `zagg_objects` is
         # what source_orders/overview_orders answer from, and those are
@@ -359,7 +389,11 @@ def open_overview_order(
         # shape (issue #4). This also makes the §4.3 checks AOI-independent.
         attrs = meta.get("attributes") if isinstance(meta, dict) else None
         entry = _object_entry(attrs or {}, dec, window if windowed else None, target_order)
+        if entry is None:
+            continue  # malformed cache object, warned and dropped (§4.1)
         entries.append(entry)
+        if schema_rel is None:
+            schema_rel = rel
         node_word = morton_word(dec)
         if index_kind == "moc":
             leaf_domain = MortonRanges.from_shards([node_word], target_order)
