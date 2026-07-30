@@ -6,17 +6,18 @@ A composition field is one dense ``uint64`` word per cell carrying eight
 digest, composition here). Lanes pack **LSB byte first**: lane ``i`` is bits
 ``8*i .. 8*i + 7``. An empty stratum packs to ``0``.
 
-**Precondition on the array, not on the words.** §3 says that ``0`` is also
-the array's *fill value*, which is what makes an unwritten cell read as "no
-flags occurred" rather than as data. Nothing in this module can check it: the
-functions here take words (and attrs), never the ``zarr.Array``, so a store
-declaring a nonzero ``fill_value`` for a composition field would hand every
-unoccupied cell to :func:`lane_presence` as spurious occurrences — under a
-``fill_value`` of 1, a phantom ``land``. The claims below hold **provided
-the array declares** ``fill_value: 0``, which §3 requires of a conforming
-writer (and which the §7 conformance fixture this package tests against
-does). Callers reading arrays from an untrusted writer should assert
-``array.fill_value == 0`` at the open, alongside the §3.3 attrs gate.
+**Precondition on the array, not on the words.** §3 requires a composition
+array to declare ``fill_value: 0`` (a **MUST**, enforced writer-side at zagg's
+config validation) so an *unwritten* cell decodes to the same word an empty
+stratum packs to. Nothing in this module can check it: the functions here take
+words (and attrs), never the ``zarr.Array``, so a store declaring a nonzero
+fill would hand every unoccupied cell to :func:`lane_presence` as spurious
+occurrences — a fill of 1 reads as a phantom ``land``. The claims below hold
+**provided the array declares** ``fill_value: 0``; the §7 conformance fixture
+this package tests against does, and that is asserted rather than assumed
+(``TestStoreReadBinding.test_fill_value_is_zero``). Callers opening arrays
+from an unverified writer should check ``array.fill_value == 0`` alongside the
+§3.3 attrs gate.
 
 Normative home: zagg ``docs/specification.md`` §3 — in review on
 englacial/zagg#346, and the section references here are read against
@@ -41,9 +42,11 @@ positional lanes only; name them via :func:`named_lanes`, which binds to a
 :func:`parse_composition_attrs`-validated block. The spec gate is strict on
 both halves — a future ``zagg-composition/2`` is adopted deliberately, never
 half-parsed, and for ``/1`` the declared ``lanes`` must be *exactly* the §3.1
-order (:data:`COMPOSITION_LANES`), since §3.3 permits no other. A permuted
-declaration is a non-conforming store, not a relabeling instruction: binding
-it would decode every lane under the wrong name.
+order (:data:`COMPOSITION_LANES`), which §3.3 makes writer-stamped rather than
+a product knob. A permuted declaration is a non-conforming store, not a
+relabeling instruction: binding it would decode every lane under the wrong
+name, and the store says nothing about whether the declaration or the packer
+is the side that is wrong.
 
 Deliberately absent: a read-side merge. The §3.4 merge law is symmetric and,
 **up to the bounded re-quantization error**, associative — every fold
@@ -65,9 +68,12 @@ import numpy as np
 COMPOSITION_SPEC = "zagg-composition/1"
 #: Spec §3.1 lane names in bit order (LSB byte first) — five per-surface
 #: marginals in ``signal_conf_ph`` column order, then the three level lanes.
-#: §3.3 makes this the *exact* value a ``/1`` block declares, so
-#: :func:`parse_composition_attrs` refuses any other order rather than bind a
-#: store whose declaration and packed bit order disagree.
+#: §3.3 makes this the *exact* value a ``/1`` block declares — lane order is
+#: not a product knob, the value is writer-stamped from the writer's own
+#: constants, and a permuted, truncated, or renamed ``lanes`` is out of
+#: contract for a writer to emit — so :func:`parse_composition_attrs` refuses
+#: any other value rather than bind a store whose declaration and packed bit
+#: order disagree.
 COMPOSITION_LANES = (
     "land",
     "ocean",
