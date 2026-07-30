@@ -5,7 +5,8 @@
 - `zagg-composition/1` decoding (zagg spec §3, englacial/zagg#346):
   `unpack_composition` (uint64 words to positional u8 lanes, LSB byte
   first), `counts_from_composition` (`round(k*N/255)` — exact for
-  `N <= 254`, bounded `±N/510` estimate above), `presence` (`lane > 0`,
+  `N <= 254`, bounded `±(N/510 + ½)` estimate above, the writer's
+  quantization plus this reader's own rounding), `presence` (`lane > 0`,
   exact at every N by the presence floor), plus the attrs binding —
   `parse_composition_attrs` (strict `zagg-composition/1` gate on both the
   `spec` marker and — per §3.3, which fixes the `/1` value — the declared
