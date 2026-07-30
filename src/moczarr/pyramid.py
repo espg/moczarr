@@ -265,8 +265,19 @@ def open_overview_order(
     # return needs a stamped object to read. Ancestor nodes are 4**(s-k)-fold
     # fewer than shards, so the unscoped stamp GETs stay cheap.
     shard_words = ranges_words(envelope)
+    # Ordered by PACKED WORD, never by decimal string: a leading "-" (southern
+    # base cell) sorts before every digit as a string but AFTER every northern
+    # base cell as a word, so on a store spanning both hemispheres a decimal
+    # sort lays rows down in an order the moc coordinate — accumulated in
+    # `domain`, word-ascending — disagrees with, and §4.4 makes the coordinate
+    # the truth for row identity. This is the invariant `_candidate_leaves`
+    # keeps by sorting words before naming leaves (open.py).
     ancestors = sorted(
-        {dec[: len(decimal_base(dec)) + k] for dec in (morton_decimal(int(w)) for w in shard_words)}
+        {
+            dec[: len(decimal_base(dec)) + k]
+            for dec in (morton_decimal(int(w)) for w in shard_words)
+        },
+        key=morton_word,
     )
     rels = [f"{_node_rel(dec, grouping)}/{basename}" for dec in ancestors]
     metas = read_leaf_metas(store_root, rels, store=obstore_store, concurrency=concurrency)

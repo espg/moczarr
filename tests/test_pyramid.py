@@ -32,6 +32,7 @@ from moczarr import (
     overview_orders,
     source_orders,
 )
+from moczarr.convention import morton_word
 from moczarr.pyramid import (
     OBJECTS_ATTR,
     open_overview_order,
@@ -68,6 +69,42 @@ def _overview_meta(copy: Path, rel: str) -> tuple[Path, dict]:
 
 #: One order-6 overview object of atl06 (an order-4 ancestor node path).
 ATL06_OVERVIEW = "atl06/4/3/3/1/2/all.zarr"
+#: A SOUTHERN order-4 ancestor node (base cell 5) and one order-6 shard under
+#: it — the committed fixture is single-base (``4``), so cross-hemisphere row
+#: ordering needs a synthetic graft (:func:`_two_base`).
+SOUTH_NODE = "-51111"
+SOUTH_SHARD = "-5111111"
+
+
+def _two_base(tmp_path: Path) -> Path:
+    """A fixture copy whose ``atl06`` spans northern AND southern base cells.
+
+    Grafts one southern order-4 ancestor node onto the product: its order-6
+    shard joins the root MOC (so the node is a named candidate) and the node
+    carries a copy of an existing overview object whose ``morton`` coordinate
+    is rewritten to its own 16 order-6 descendants — computed from the digit
+    grammar (:func:`rank_tail`), independently of ``moczarr.ranges``, so the
+    stored rows are an independent check on the fabricated coordinate.
+    """
+    import zarr
+
+    from moczarr.convention import rank_tail
+
+    copy, _ = _doctored(tmp_path)
+    product = copy / "atl06"
+    moc = json.loads((product / "coverage.moc").read_text())
+    moc["ranges"].append([SOUTH_SHARD, SOUTH_SHARD])
+    (product / "coverage.moc").write_text(json.dumps(moc))
+    node = product / "-5" / "1" / "1" / "1" / "1"
+    shutil.copytree(product / "4" / "3" / "3" / "1" / "2", node)
+    path, meta = _overview_meta(copy, "atl06/-5/1/1/1/1/all.zarr")
+    meta["attributes"]["zagg_overview"]["node"] = SOUTH_NODE
+    path.write_text(json.dumps(meta))
+    words = np.asarray(
+        [morton_word(SOUTH_NODE + rank_tail(rank, 2)) for rank in range(16)], dtype=np.uint64
+    )
+    zarr.open_array(str(node / "all.zarr" / "6" / "morton"), mode="r+")[:] = words
+    return copy
 
 
 class TestDeclarationBinding:
@@ -326,6 +363,41 @@ class TestScoping:
                 np.asarray(ds["cell_ids"].values),
                 fabricate_cell_ids(words, level=int(order)),
             )
+
+
+class TestMultiBaseOrdering:
+    """Cross-hemisphere row order: candidates ride PACKED WORDS, not decimals."""
+
+    def test_objects_follow_packed_word_order(self, tmp_path):
+        # A decimal-string sort would put the southern node FIRST (a leading
+        # "-" sorts before every digit); the packed-word order puts it last.
+        tree = open_store(str(_two_base(tmp_path)), products=["atl06"])
+        nodes = [entry["node"] for entry in node_objects(tree["atl06"]["6"])]
+        assert nodes == ["43312", "43314", "43321", "43323", SOUTH_NODE]
+        words = [morton_word(node) for node in nodes]
+        assert words == sorted(words)
+
+    def test_moc_coordinate_labels_the_right_rows(self, tmp_path):
+        # §4.4: the coordinate is row identity. The moc index fabricates it
+        # from the accumulated (word-ascending) domain while the pandas path
+        # reads the stored arrays in candidate order — they agree only if the
+        # candidate order IS word order, so this catches the mislabeling that
+        # a single-base fixture cannot see.
+        copy = str(_two_base(tmp_path))
+        moc = open_store(copy, products=["atl06"])
+        pandas = open_store(copy, products=["atl06"], index_kind="pandas")
+        stored = np.asarray(pandas["atl06"]["6"].ds["morton"].values, dtype=np.uint64)
+        fabricated = np.asarray(moc["atl06"]["6"].ds["morton"].values, dtype=np.uint64)
+        np.testing.assert_array_equal(stored, fabricated)
+        # The southern node's own 16 descendants are the LAST rows, and the
+        # data rides with them (its counts are the grafted object's).
+        from moczarr.convention import rank_tail
+
+        assert list(fabricated[-16:]) == [
+            morton_word(SOUTH_NODE + rank_tail(rank, 2)) for rank in range(16)
+        ]
+        north = moc["atl06"]["6"].ds["count"].values[:16]
+        np.testing.assert_array_equal(moc["atl06"]["6"].ds["count"].values[-16:], north)
 
 
 class TestDegradation:
