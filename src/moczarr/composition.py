@@ -11,7 +11,7 @@ the array's *fill value*, which is what makes an unwritten cell read as "no
 flags occurred" rather than as data. Nothing in this module can check it: the
 functions here take words (and attrs), never the ``zarr.Array``, so a store
 declaring a nonzero ``fill_value`` for a composition field would hand every
-unoccupied cell to :func:`presence` as spurious occurrences — under a
+unoccupied cell to :func:`lane_presence` as spurious occurrences — under a
 ``fill_value`` of 1, a phantom ``land``. The claims below hold **provided
 the array declares** ``fill_value: 0``, which §3 requires of a conforming
 writer (and which the §7 conformance fixture this package tests against
@@ -26,7 +26,7 @@ at merge). Narrative in zagg ``docs/signal_strata.md``; the writer is
 Quantization (§3.2) uses a **presence floor**: ``k = round(255 * c / N)``
 (round-half-even), except any nonzero count quantizes to at least 1. So
 ``lane > 0`` means "this flag occurred" *exactly, at every N*, through
-arbitrary merge chains (:func:`presence`); count recovery
+arbitrary merge chains (:func:`lane_presence`); count recovery
 ``round(k * N / 255)`` is exact whenever ``N <= 254`` and within
 ``±(N/510 + ½)`` above (:func:`counts_from_composition`) — the writer's
 quantization costs ``N/510`` and the reader's own ``round`` adds up to
@@ -171,8 +171,8 @@ def counts_from_composition(words, n_signal) -> np.ndarray:
     return np.rint(lanes * n[:, None] / 255.0).astype(np.int64)
 
 
-def presence(words) -> np.ndarray:
-    """Per-lane occurrence flags — ``lane > 0``, ``(N, 8) bool``.
+def lane_presence(words) -> np.ndarray:
+    """Per-lane occurrence flags of a composition word — ``lane > 0``, ``(N, 8) bool``.
 
     Exact at **every** ``n_signal``, through arbitrary merge chains, by the
     presence floor (spec §3.2: any nonzero count quantizes to at least 1) —

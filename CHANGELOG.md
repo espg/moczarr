@@ -7,8 +7,9 @@
   first; a non-integer or negative `words` raises rather than coercing —
   §3/§7 fix the word as `uint64`), `counts_from_composition` (`round(k*N/255)` — exact for
   `N <= 254`, bounded `±(N/510 + ½)` estimate above, the writer's
-  quantization plus this reader's own rounding), `presence` (`lane > 0`,
-  exact at every N by the presence floor), plus the attrs binding —
+  quantization plus this reader's own rounding), `lane_presence` (`lane > 0`,
+  exact at every N by the presence floor, given the `fill_value: 0` §3
+  requires of a composition array), plus the attrs binding —
   `parse_composition_attrs` (strict `zagg-composition/1` gate on both the
   `spec` marker and — per §3.3, which fixes the `/1` value — the declared
   `lanes` against the §3.1 order `COMPOSITION_LANES`; extracts

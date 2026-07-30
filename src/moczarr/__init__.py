@@ -4,9 +4,9 @@ from moczarr.composition import (
     COMPOSITION_LANES,
     COMPOSITION_SPEC,
     counts_from_composition,
+    lane_presence,
     named_lanes,
     parse_composition_attrs,
-    presence,
     unpack_composition,
 )
 from moczarr.convention import (
@@ -105,6 +105,7 @@ __all__ = [
     "is_point_word",
     "is_product_name",
     "join_coarse",
+    "lane_presence",
     "leaf_path",
     "list_products",
     "load_root_coverage",
@@ -119,7 +120,6 @@ __all__ = [
     "parse_leaf_coverage",
     "parse_manifest",
     "parse_root_coverage",
-    "presence",
     "ranges_contain",
     "ranges_words",
     "read_commit",
