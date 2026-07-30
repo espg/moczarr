@@ -7,8 +7,11 @@
   product's `open_hive` Dataset, `semantic_hash` on the node attrs),
   kwargs forwarded per node with `window=` reaching only the windowed
   products, a `products=[...]` filter, and the bare single-product store
-  as a valid one-child tree. xarray floor is now `>=2024.10.0` (the first
-  release with official `xr.DataTree` support). Resolution (pyramid-order)
+  as a valid one-child tree. xarray floor is now `>=2026.01.0` — bisected,
+  not read off a changelog: `xr.Coordinates.from_xindex` (2025.03.0) is
+  what the default `index_kind="moc"` path needs to open at all, and
+  `set_xindex` over an already-indexed coordinate (`MortonMocIndex`'s
+  adoption path) only works from 2026.01.0. Resolution (pyramid-order)
   nodes are designed on the concepts page but **not implemented** — gated
   on englacial/zagg#201's first overview fixture
   ([#15](https://github.com/espg/moczarr/issues/15)).
