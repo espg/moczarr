@@ -26,6 +26,25 @@
   non-zarr sidecar objects inside a leaf (the in-leaf `coverage.moc`)
   ([#19](https://github.com/espg/moczarr/issues/19)).
 
+- `zagg-composition/1` decoding (zagg spec §3, englacial/zagg#346):
+  `unpack_composition` (uint64 words to positional u8 lanes, LSB byte
+  first; a non-integer or negative `words` raises rather than coercing —
+  §3/§7 fix the word as `uint64`), `counts_from_composition` (`round(k*N/255)` — exact for
+  `N <= 254`, bounded `±(N/510 + ½)` estimate above, the writer's
+  quantization plus this reader's own rounding), `lane_presence` (`lane > 0`,
+  exact at every N by the presence floor, given the `fill_value: 0` §3
+  requires of a composition array), plus the attrs binding —
+  `parse_composition_attrs` (strict `zagg-composition/1` gate on both the
+  `spec` marker and — per §3.3, which fixes the `/1` value — the declared
+  `lanes` against the §3.1 order `COMPOSITION_LANES`; extracts
+  `lanes`/`of`/`threshold`) and `named_lanes` (lanes keyed by the
+  attrs-declared names, never a hardcoded order). `open_hive` enforces §3's
+  `fill_value: 0` MUST on any array whose attrs carry a `composition.spec`
+  block — a nonzero fill makes every unwritten cell report spurious lane
+  presence, so it raises rather than degrading. No read-side merge:
+  the §3.4 merge law stays zagg-owned
+  ([#20](https://github.com/espg/moczarr/issues/20)).
+
 - `open_store`: a store root as one `xarray.DataTree` — empty root
   (store-level attrs), one child node per product (each exactly that
   product's `open_hive` Dataset — its laziness, no stronger promise — with

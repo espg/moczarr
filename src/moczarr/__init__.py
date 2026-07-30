@@ -1,5 +1,14 @@
 """moczarr: sparse-DGGS xarray reader for morton-hive zarr stores."""
 
+from moczarr.composition import (
+    COMPOSITION_LANES,
+    COMPOSITION_SPEC,
+    counts_from_composition,
+    lane_presence,
+    named_lanes,
+    parse_composition_attrs,
+    unpack_composition,
+)
 from moczarr.convention import (
     COMMIT_ATTR,
     COVERAGE_SIDECAR,
@@ -77,6 +86,8 @@ except ImportError:  # pragma: no cover - version file is generated at build tim
 
 __all__ = [
     "COMMIT_ATTR",
+    "COMPOSITION_LANES",
+    "COMPOSITION_SPEC",
     "COVERAGE_SIDECAR",
     "COVERAGE_SPEC",
     "FLOAT64_EXACT_MAX_ORDER",
@@ -98,6 +109,7 @@ __all__ = [
     "box_words",
     "check_node_invariant",
     "combined_hash",
+    "counts_from_composition",
     "decode_bitmap",
     "decode_cell",
     "fabricate_cell_ids",
@@ -106,15 +118,18 @@ __all__ = [
     "is_point_word",
     "is_product_name",
     "join_coarse",
+    "lane_presence",
     "leaf_path",
     "list_products",
     "load_root_coverage",
     "morton_decimal",
     "morton_word",
+    "named_lanes",
     "open_hive",
     "open_object_store",
     "open_store",
     "parent_cells",
+    "parse_composition_attrs",
     "parse_leaf_coverage",
     "parse_manifest",
     "parse_ragged_attrs",
@@ -134,6 +149,7 @@ __all__ = [
     "split_leaf_name",
     "stats_sidecar_key",
     "stats_sidecar_path",
+    "unpack_composition",
     "validate_product_name",
     "verify_arrays",
     "walk_leaves",

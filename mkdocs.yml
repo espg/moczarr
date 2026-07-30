@@ -44,6 +44,7 @@ nav:
       - dggs: api/dggs.md
       - convention: api/convention.md
       - coverage: api/coverage.md
+      - composition: api/composition.md
       - store: api/store.md
       - exceptions: api/exceptions.md
   - Development: development.md
