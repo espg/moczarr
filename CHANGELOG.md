@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `zagg-composition/1` decoding (zagg spec §3, englacial/zagg#346):
+  `unpack_composition` (uint64 words to positional u8 lanes, LSB byte
+  first), `counts_from_composition` (`round(k*N/255)` — exact for
+  `N <= 254`, bounded `±N/510` estimate above), `presence` (`lane > 0`,
+  exact at every N by the presence floor), plus the attrs binding —
+  `parse_composition_attrs` (strict `zagg-composition/1` spec gate;
+  extracts `lanes`/`of`/`threshold`) and `named_lanes` (lanes keyed by
+  the attrs-declared names, never a hardcoded order). No read-side merge:
+  the §3.4 merge law stays zagg-owned
+  ([#20](https://github.com/espg/moczarr/issues/20)).
+
 - `open_store`: a store root as one `xarray.DataTree` — empty root
   (store-level attrs), one child node per product (each exactly that
   product's `open_hive` Dataset — its laziness, no stronger promise — with
