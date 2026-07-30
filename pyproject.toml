@@ -30,7 +30,12 @@ dependencies = [
     # mortie's MortonIndexArray (.decimal_repr()/.hive_path()) imports pandas;
     # a direct runtime dep the reader calls into, not just transitive via xarray.
     "pandas",
-    "xarray",
+    # open_store returns xr.DataTree, which is core xarray (no separate
+    # datatree package). Floor 2024.10.0: the release whose changelog line
+    # is "official support for xarray.DataTree, and compatibility with
+    # zarr-python v3" (issue #15; the zarr>=3.1.5 pin below already implies
+    # a post-v3-compat xarray in any resolvable env).
+    "xarray>=2024.10.0",
     "zarr>=3.1.5",
     "obstore>=0.8.2",
     # Zstd for the coverage-bitmap sidecar decode (O8 encoding).

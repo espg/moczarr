@@ -22,6 +22,7 @@ source at all — raises, as :class:`moczarr.exceptions.NoCoverageError`.
 from __future__ import annotations
 
 import warnings
+from collections.abc import Sequence
 from typing import Any
 
 import numpy as np
@@ -43,6 +44,7 @@ from moczarr.coverage import (
 )
 from moczarr.exceptions import NoCoverageError
 from moczarr.fabricate import fabricate_cell_ids as _fabricate_cell_ids
+from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.store import (
     load_root_coverage,
     open_object_store,
@@ -475,3 +477,148 @@ def open_hive(
 
         result = dggs.decode(result, index_kind=index_kind)
     return result
+
+
+def _degenerate_node_name(manifest: dict) -> str:
+    """The one child's node name for a bare single-product store.
+
+    A bare store has no ``{name}/`` prefix to name its node, so the name
+    derives from the manifest's dataset ``short_name`` lowercased when that
+    yields a legal §6.5 product name (``"ATL06"`` → ``"atl06"``), else the
+    fixed fallback ``"product"``. Deterministic and content-derived — never
+    the store-root basename, which changes under copies and mounts.
+    """
+    dataset = manifest.get("dataset") or {}
+    name = str(dataset.get("short_name") or "").lower()
+    return name if is_product_name(name) else "product"
+
+
+def open_store(
+    store_root: str,
+    *,
+    products: Sequence[str] | None = None,
+    aoi=None,
+    window: str | None = None,
+    anonymous: bool = False,
+    fabricate_cell_ids: bool | str = "auto",
+    decode: bool = False,
+    index_kind: str = "moc",
+    concurrency: int | None = 32,
+    xr_kwargs: dict[str, Any] | None = None,
+    **store_kwargs: Any,
+):
+    """Open a store root — multi-product or bare — as one ``xarray.DataTree``.
+
+    The tree shape follows the zagg O14 rulings (issue #15): the **product
+    axis becomes child nodes** — one node per named product (D19, mortie
+    spec §6.5), each holding exactly the lazy Dataset :func:`open_hive`
+    returns for that product — and the root node is empty (store-level
+    attrs only; a multi-product root is manifest-less by design). The
+    window axis is **never** nodes (time stays a per-node dimension,
+    scoped by ``window=``), and the spatial digit axis is never nodes.
+    Resolution (pyramid-order) nodes are a designed, not-yet-implemented
+    second level — gated on zagg#201's first overview fixture; see the
+    concepts page's design section.
+
+    Named after its scope (the store), not its return type: the xarray-
+    native name ``open_datatree`` is reserved for zarr-native hierarchies,
+    which the hive tree deliberately is not (the D12 interop hierarchy is
+    ``xr.open_datatree``'s to open someday).
+
+    Parameters
+    ----------
+    store_root : str
+        Store root (local directory or ``s3://bucket/prefix``): a
+        multi-product root (named product children, no root manifest) or a
+        bare single-product store (manifest at the root), discriminated by
+        content per spec §6.5.
+    products : sequence of str, optional
+        Open only these products (a filter for stores with many). Unknown
+        names raise, listing what exists. Children stay in name-sorted
+        order regardless of the filter's order.
+    aoi, window, anonymous, fabricate_cell_ids, decode, index_kind, \
+concurrency, xr_kwargs, **store_kwargs
+        Forwarded to each node's :func:`open_hive` (see there), with one
+        tree-level refinement: ``window`` is forwarded only to the
+        time-windowed (``morton-hive/2``) products — an unwindowed
+        product's node holds the whole product (it has no window leaves to
+        select), so one call opens a store that mixes windowed and
+        unwindowed products. A ``window`` against a tree with *no*
+        windowed product raises, preserving :func:`open_hive`'s
+        typo-catching posture. Omitting ``window`` while a windowed
+        product is selected raises per-product with the labels that exist
+        (scope with ``products=`` to skip windowed products instead).
+
+    Returns
+    -------
+    xarray.DataTree
+        Root node: no data variables, no coordinates — only
+        ``attrs["morton_hive_store"]`` (``store_root`` plus the name-sorted
+        ``products`` roster the store carries, unfiltered). One child node
+        per opened product, named by its product name; each child is the
+        per-node ``open_hive`` Dataset unchanged (laziness, index posture,
+        and the issue-#4 empty-AOI contract all apply per node), plus
+        ``attrs["semantic_hash"]`` when the product's manifest carries the
+        D19 identity hash. Sibling schemas may differ freely — the
+        non-alignable-groups case is exactly what the tree is for.
+
+        A **bare single-product store** returns the valid degenerate form:
+        a one-child tree, the child named from the manifest's dataset
+        ``short_name`` lowercased (fallback ``"product"``).
+
+        Raises ``ValueError`` when the root has neither products nor a
+        manifest, and per-node errors (``NoCoverageError``, the windowed
+        ``window=`` requirement) propagate unchanged.
+    """
+    import xarray as xr
+
+    obstore_store = open_object_store(store_root, anonymous=anonymous, **store_kwargs)
+    records = list_products(store_root, store=obstore_store)
+    bare = not records
+    if bare:
+        manifest = read_manifest(store_root, store=obstore_store)
+        if manifest is None:
+            raise ValueError(
+                f"no products and no morton_hive.json at {store_root} — not a hive store root"
+            )
+        records = [
+            {
+                "name": _degenerate_node_name(manifest),
+                "spec": manifest["spec"],
+                "semantic_hash": manifest.get("semantic_hash"),
+            }
+        ]
+    roster = [record["name"] for record in records]
+    if products is not None:
+        wanted = {validate_product_name(name) for name in products}
+        missing = sorted(wanted - set(roster))
+        if missing:
+            raise ValueError(
+                f"products {missing} not found at {store_root} (products present: {roster})"
+            )
+        records = [record for record in records if record["name"] in wanted]
+    if window is not None and all(record["spec"] != HIVE_SPEC_V2 for record in records):
+        raise ValueError(
+            f"window={window!r} but no windowed ({HIVE_SPEC_V2}) product is selected at "
+            f"{store_root} (specs: { {r['name']: r['spec'] for r in records} })"
+        )
+    nodes: dict[str, Any] = {}
+    for record in records:
+        ds = open_hive(
+            store_root,
+            product=None if bare else record["name"],
+            aoi=aoi,
+            window=window if record["spec"] == HIVE_SPEC_V2 else None,
+            anonymous=anonymous,
+            fabricate_cell_ids=fabricate_cell_ids,
+            decode=decode,
+            index_kind=index_kind,
+            concurrency=concurrency,
+            xr_kwargs=xr_kwargs,
+            **store_kwargs,
+        )
+        if record.get("semantic_hash"):
+            ds.attrs["semantic_hash"] = record["semantic_hash"]
+        nodes[record["name"]] = ds
+    root = xr.Dataset(attrs={"morton_hive_store": {"store_root": store_root, "products": roster}})
+    return xr.DataTree.from_dict({"/": root, **nodes})

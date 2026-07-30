@@ -33,7 +33,7 @@ from moczarr.coverage import (
 from moczarr.exceptions import NoCoverageError
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.join import join_coarse, parent_cells
-from moczarr.open import open_hive
+from moczarr.open import open_hive, open_store
 from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.ranges import MortonRanges
 from moczarr.stats import (
@@ -100,6 +100,7 @@ __all__ = [
     "morton_word",
     "open_hive",
     "open_object_store",
+    "open_store",
     "parent_cells",
     "parse_leaf_coverage",
     "parse_manifest",
