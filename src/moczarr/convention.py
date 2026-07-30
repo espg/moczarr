@@ -80,9 +80,13 @@ def is_point_word(word) -> bool | np.ndarray:
     Kind is carried by the word's 6-bit suffix — ``48..=63`` is the point
     band; everything below (``0..=47``) is an AREA element, exact at its
     encoded order — never by store or array metadata (§4). Suffix-mask
-    implementation, golden-tested against the spec §1 table; swaps to
-    mortie's public kind predicate once released (espg/mortie#116 —
-    mortie 0.9.0 has none). Scalar in -> bool; array in -> bool array.
+    implementation, golden-tested against the spec §1 table. mortie's public
+    predicate (``mortie.is_point``) DID land in the new floor — espg/mortie#116
+    shipped it in 0.9.1 — and it is bit-identical across all 64 suffix values,
+    pinned in ``tests/test_convention.py``. The local mask stays anyway: it is
+    moczarr's independent read of the §1 table, and delegating would leave the
+    golden test asserting mortie against itself rather than against the spec.
+    Scalar in -> bool; array in -> bool array.
     """
     words = np.asarray(word, dtype=np.uint64)
     mask = (words & _SUFFIX_MASK) >= np.uint64(_POINT_SUFFIX_MIN)

@@ -104,10 +104,16 @@ Edges to know about:
   overlapping, interleaved, or reversed domains raise `NotImplementedError`
   pointing to `index_kind="pandas"`, whose materialized coordinate
   concatenates arbitrarily.
-- Mixed-order (pyramid) domains are out of scope v1: intervals-per-order
-  is the named seam
-  ([issue #8](https://github.com/espg/moczarr/issues/8), gated on
-  mortie#116).
+- Mixed-order (pyramid) domains are out of scope for the **lazy index**:
+  an interval set is a rank space, and rank is only defined at one order, so
+  intervals-per-order is the named seam. This is no longer an upstream wait —
+  mortie's mixed-order kernels shipped in 0.9.1 and
+  [issue #8](https://github.com/espg/moczarr/issues/8) adopted them without
+  taking the seam. The *values-level* surfaces did move: `coverage.aoi_mask`
+  resolves each cell at its own order, so an undecoded mixed-order dataset
+  masks correctly. What stays single-order is anything that binds a level —
+  the moc interval set, the `MortonIndex` domain contract (one order, and it
+  is `level`), and the fabricated NESTED `cell_ids` view.
 
 ## NESTED is fabricated, never stored
 
