@@ -774,6 +774,14 @@ concurrency, xr_kwargs, **store_kwargs
         nodes[name] = xr.Dataset(attrs=product_attrs)
         nodes[f"{name}/{int(manifest_rec['cell_order'])}"] = ds
         product_root = store_root if bare else f"{store_root.rstrip('/')}/{name}"
+        # ONE store construction and ONE root-MOC read for this product's whole
+        # order level (issue #5): the sidecar tier must not grow with the number
+        # of declared orders — on a 5-order pyramid over S3 that would be 5
+        # round-trips for one per-product envelope. A None envelope means "not
+        # supplied", so the degraded no-MOC case re-reads and warns per order
+        # exactly as before.
+        product_store = open_object_store(product_root, anonymous=anonymous, **store_kwargs)
+        product_envelope = load_root_coverage(product_root, store=product_store)
         for ancestor_order, target_order in cell_orders.items():
             overview_ds = pyramid.open_overview_order(
                 product_root,
@@ -781,13 +789,13 @@ concurrency, xr_kwargs, **store_kwargs
                 ancestor_order,
                 aoi=aoi,
                 window=node_window,
-                anonymous=anonymous,
                 fabricate_cell_ids=fabricate_cell_ids,
                 decode=decode,
                 index_kind=index_kind,
                 concurrency=concurrency,
                 xr_kwargs=xr_kwargs,
-                **store_kwargs,
+                store=product_store,
+                _envelope=product_envelope,
             )
             if overview_ds is None:
                 continue  # open_overview_order warned; the node is omitted

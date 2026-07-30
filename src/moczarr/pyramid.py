@@ -243,6 +243,7 @@ def open_overview_order(
     concurrency: int | None = 32,
     xr_kwargs: dict[str, Any] | None = None,
     store: Any = None,
+    _envelope: dict | None = None,
     **store_kwargs: Any,
 ):
     """Open one declared overview order of a product as a Dataset, or ``None``.
@@ -278,6 +279,10 @@ def open_overview_order(
     ``store_kwargs`` reach ``open_object_store`` — the same posture (and
     spelling) as :func:`moczarr.open.open_hive`, so the remote read path is
     declared in the signature rather than smuggled through ``store_kwargs``.
+    ``store`` shares one obstore handle across a product's order nodes and
+    the private ``_envelope`` shares that product's already-read root MOC
+    (issue #5: one store construction pair and one sidecar read per open, not
+    per declared order — how :func:`moczarr.open.open_store` calls this).
     """
     import xarray as xr
     from zarr.storage import ObjectStore
@@ -348,7 +353,9 @@ def open_overview_order(
         return None
 
     obstore_store = _resolve_store(store_root, store, store_kwargs)
-    envelope = load_root_coverage(store_root, store=obstore_store)
+    envelope = _envelope
+    if envelope is None:
+        envelope = load_root_coverage(store_root, store=obstore_store)
     if envelope is None:
         warnings.warn(
             f"no usable root coverage.moc at {store_root}: overview order nodes are "

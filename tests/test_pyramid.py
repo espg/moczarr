@@ -623,6 +623,32 @@ class TestLaziness:
             open_overview_order(f"{root}/atl06_windows", windows_manifest, order, window="2019")
         assert via_store == chunk_reads()
 
+    def test_order_level_costs_one_store_and_one_moc_read(
+        self, root, recorded, monkeypatch, manifest
+    ):
+        # Issue #5's rule at the order level: the store handle and the root
+        # MOC are per PRODUCT, not per declared order — otherwise the sidecar
+        # tier grows linearly in pyramid depth (5 S3 round-trips on a 5-order
+        # pyramid for one per-product envelope).
+        import moczarr.open as open_module
+        import moczarr.store as store_module
+
+        built: list[str] = []
+        real = store_module.open_object_store
+
+        def counting(path, **kwargs):
+            built.append(path)
+            return real(path, **kwargs)
+
+        monkeypatch.setattr(store_module, "open_object_store", counting)
+        monkeypatch.setattr(open_module, "open_object_store", counting)
+        open_store(root, products=["atl06"])
+        assert len(overview_cell_orders(manifest)) == 2  # two declared orders...
+        # ...and still: open_store's root handle, open_hive's product handle,
+        # one for the whole order level.
+        assert len(built) == 3
+        assert len([k for k in recorded if k.endswith("coverage.moc")]) == 2
+
     def test_single_object_order_node_stays_fully_lazy(self, root, recorded, manifest):
         # The order-2 declared overview folds to ONE object ("433"), so
         # nothing is concatenated: zero chunk objects at open, and the data
