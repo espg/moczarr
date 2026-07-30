@@ -33,6 +33,8 @@ nav:
   - Concepts: concepts.md
   - API reference:
       - open: api/open.md
+      - products: api/products.md
+      - stats: api/stats.md
       - join: api/join.md
       - moc_index: api/moc_index.md
       - ranges: api/ranges.md
