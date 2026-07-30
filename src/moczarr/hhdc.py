@@ -55,7 +55,7 @@ from zarr.abc.store import Store
 
 from moczarr.convention import COMMIT_ATTR, decimal_order, morton_decimal
 from moczarr.coverage import decode_bitmap, parse_leaf_coverage
-from moczarr.ragged import _open_morton, decode_cell, iter_populated_chunks, open_ragged
+from moczarr.ragged import _morton_words, decode_cell, iter_populated_chunks, open_ragged
 
 __all__ = [
     "chunk_z_range",
@@ -487,7 +487,7 @@ def read_tensors(
     is_float = np.issubdtype(out_dtype, np.floating)
 
     arr, element = open_ragged(store, field, zarr_format=zarr_format)
-    morton = _open_morton(store, field, zarr_format)
+    morton = _morton_words(store, field, zarr_format)
     side, depth = _tensor_side(arr, field)
     cells_per_chunk = side * side
 

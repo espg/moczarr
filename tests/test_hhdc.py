@@ -157,6 +157,27 @@ class TestGoldenParity:
 
 
 @needs_zagg
+class TestGetPosture:
+    """``read_tensors`` holds the module's one-GET-per-stored-object posture
+    on the ``morton`` coordinate too, not just the digest payload: the
+    coordinate is served from one cached window per stored coordinate object,
+    never re-sliced per block (which cost ~2 GETs per block — a shard-index
+    suffix plus an inner chunk — against one small ``uint64`` array)."""
+
+    @pytest.mark.parametrize("stratum", ["signal", "noise"])
+    @pytest.mark.parametrize("block_order", [None, BLOCK_ORDER])
+    def test_one_get_per_stored_object(self, stratum, block_order):
+        from test_ragged import CountingStore
+
+        field = f"{GROUP}/h_tdigest_{stratum}"
+        store = CountingStore(LEAF)
+        blocks = list(read_tensors(store, field, block_order=block_order))
+        assert blocks  # more than one block per sweep on the per-chunk leg
+        assert len([g for g in store.gets if f"{field}/c/" in g[0]]) == 1
+        assert len([g for g in store.gets if f"{GROUP}/morton/c/" in g[0]]) == 1
+
+
+@needs_zagg
 class TestFitPolicies:
     """All three behaviours when the trimmed range exceeds the window."""
 

@@ -370,3 +370,14 @@ class TestSweepGetPosture:
         assert len(out) == len(CELLS)
         data_gets = [g for g in store.gets if "field/c/" in g[0]]
         assert len(data_gets) == 1  # one stored object, fetched once
+
+    def test_sweep_reads_the_coordinate_once(self, tmp_path):
+        """The posture covers the sibling ``morton`` coordinate too: the
+        cached window is read once per stored coordinate object, never
+        re-sliced per payload span (which re-fetches the same object, plus a
+        shard-index suffix when the coordinate is sharded)."""
+        grid, _ = build_store(tmp_path, sharded=True)
+        store = CountingStore(grid)
+        store.gets.clear()
+        assert len(list(read_ragged(store, "g/field"))) == len(CELLS)
+        assert len([g for g in store.gets if "morton/c/" in g[0]]) == 1

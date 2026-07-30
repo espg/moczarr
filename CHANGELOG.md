@@ -5,7 +5,8 @@
 - Generic `zagg-ragged/1` decode layer (`moczarr.ragged`): strict-gated
   element attrs (`parse_ragged_attrs` — missing/foreign/newer spec raises,
   never half-parses), `read_ragged` whole-store sweep (sharded and flat
-  geometries through one code path, one GET per stored object,
+  geometries through one code path, one GET per stored object — the
+  sibling `morton` coordinate included,
   metadata-bound located siblings with the §1.1 row-alignment check),
   `read_cell` random access (2 ranged GETs on a sharded store), zero
   product knowledge. HHDC tensor profile (`moczarr.hhdc`): `read_tensors`

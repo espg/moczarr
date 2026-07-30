@@ -236,6 +236,43 @@ def _open_morton(store: Store, field: str, zarr_format: Literal[2, 3]) -> zarr.A
         ) from exc
 
 
+class _MortonWords:
+    """The sibling ``morton`` coordinate array, read ONE stored object at a time.
+
+    Cell identity comes from the dense ``morton`` coordinate, but the readers
+    walk the *payload* array's spans (and :mod:`moczarr.hhdc` its tensor
+    blocks) — and one coordinate object covers many of them, so slicing the
+    coordinate per span re-fetches the same object every time, plus a
+    shard-index suffix on every ``__getitem__`` when the coordinate is
+    sharded (measured at ~2 GETs per block). This serves the readers'
+    ascending spans out of one cached coordinate window, so the coordinate
+    array obeys the same "one GET per stored object" posture as the payload.
+    The held cost is that window — 8 bytes per cell over one stored object,
+    never the whole cells axis.
+    """
+
+    def __init__(self, arr: zarr.Array) -> None:
+        self._arr = arr
+        self._span = int((arr.shards or arr.chunks)[0])
+        self._cells = int(arr.shape[0])
+        self._lo = self._hi = 0
+        self._window = np.zeros(0, dtype=np.uint64)
+
+    def __getitem__(self, span: slice) -> np.ndarray:
+        start, stop = int(span.start), int(span.stop)
+        if not self._lo <= start < stop <= self._hi:
+            lo = start // self._span * self._span
+            hi = min(-(-stop // self._span) * self._span, self._cells)
+            self._window = np.asarray(self._arr[lo:hi])
+            self._lo, self._hi = lo, hi
+        return self._window[start - self._lo : stop - self._lo]
+
+
+def _morton_words(store: Store, field: str, zarr_format: Literal[2, 3]) -> _MortonWords:
+    """The field's sibling ``morton`` coordinate, as a span-cached reader."""
+    return _MortonWords(_open_morton(store, field, zarr_format))
+
+
 def _sibling_path(field: str, sibling: str) -> str:
     """A sibling array's path next to ``field`` (same group)."""
     parent, _, _name = field.rpartition("/")
@@ -253,7 +290,10 @@ def read_ragged(
 
     The generic whole-store sweep: one LIST of the array's stored data
     objects, then one slice per stored span (sharded and flat §1.5
-    geometries through the same path — no per-inner-chunk re-fetch). Yields
+    geometries through the same path — no per-inner-chunk re-fetch), with
+    the sibling ``morton`` coordinate served from one cached window per
+    stored coordinate object (:class:`_MortonWords`) rather than re-sliced
+    per span. Yields
     ``(morton_word, values)`` per populated cell — or ``(morton_word,
     values, location_words)`` with ``locations=True`` — where ``morton_word``
     is the cell's own packed ``uint64`` coordinate from the sibling
@@ -284,7 +324,7 @@ def read_ragged(
         field.
     """
     arr, element = open_ragged(store, field, zarr_format=zarr_format)
-    morton = _open_morton(store, field, zarr_format)
+    morton = _morton_words(store, field, zarr_format)
     loc_arr = loc_element = None
     if locations:
         if element.locations is None:
@@ -298,7 +338,7 @@ def read_ragged(
         )
     for span_start, span_stop in stored_chunk_spans(arr):
         span = cast(np.ndarray, arr[span_start:span_stop])
-        words = cast(np.ndarray, morton[span_start:span_stop])
+        words = morton[span_start:span_stop]
         loc_span = cast(np.ndarray, loc_arr[span_start:span_stop]) if loc_arr is not None else None
         for pos in range(span_stop - span_start):
             raw = span[pos]
