@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Generic `zagg-ragged/1` decode layer (`moczarr.ragged`): strict-gated
+  element attrs (`parse_ragged_attrs` — missing/foreign/newer spec raises,
+  never half-parses), `read_ragged` whole-store sweep (sharded and flat
+  geometries through one code path, one GET per stored object,
+  metadata-bound located siblings with the §1.1 row-alignment check),
+  `read_cell` random access (2 ranged GETs on a sharded store), zero
+  product knowledge. HHDC tensor profile (`moczarr.hhdc`): `read_tensors`
+  yields `(tensor, mask, (offset, gain), morton_index)` per coverage block
+  — the englacial/zagg#336 contract, bit-identical to zagg's
+  `readers.tdigest_tensor` (committed goldens + live parity) — with the
+  mortie spec §8 deinterleave layout, block assembly, the three fit
+  policies, and the 3-state occupancy mask decoded through moczarr's own
+  coverage machinery (`has_exact_occupancy` discriminates the 2-state
+  degrade). Digest algebra is imported from zagg via the new
+  `moczarr[zagg]` extra, never vendored; mortie floor is now `>=0.9.3`
+  (`rank_to_xy`/`xy_to_rank`). Conformance fixtures: the englacial/zagg#346
+  spec vectors (vendored, branch-sourced pending merge) plus a zagg-written
+  SERC strata fixture serving #19/#20/#21; `hash_arrays` now tolerates
+  non-zarr sidecar objects inside a leaf (the in-leaf `coverage.moc`)
+  ([#19](https://github.com/espg/moczarr/issues/19)).
+
 - `open_store`: a store root as one `xarray.DataTree` — empty root
   (store-level attrs), one child node per product (each exactly that
   product's `open_hive` Dataset — its laziness, no stronger promise — with

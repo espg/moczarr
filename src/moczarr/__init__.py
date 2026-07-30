@@ -32,6 +32,7 @@ from moczarr.coverage import (
 )
 from moczarr.exceptions import NoCoverageError
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
+from moczarr.hhdc import has_exact_occupancy, read_tensors
 from moczarr.join import join_coarse, parent_cells
 from moczarr.open import open_hive, open_store
 from moczarr.products import is_product_name, list_products, validate_product_name
@@ -100,6 +101,7 @@ __all__ = [
     "decode_bitmap",
     "decode_cell",
     "fabricate_cell_ids",
+    "has_exact_occupancy",
     "hash_arrays",
     "is_point_word",
     "is_product_name",
@@ -127,6 +129,7 @@ __all__ = [
     "read_ragged",
     "read_stats",
     "read_stats_rollup",
+    "read_tensors",
     "root_coverage_and",
     "split_leaf_name",
     "stats_sidecar_key",
