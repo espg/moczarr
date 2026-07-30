@@ -18,11 +18,14 @@ import pytest
 from numcodecs import Zstd
 from zarr.storage import LocalStore
 
+import moczarr.ragged
 from moczarr.convention import morton_word
 from moczarr.ragged import (
     RAGGED_SPEC,
     RaggedElement,
     decode_cell,
+    iter_populated_chunks,
+    open_ragged,
     parse_ragged_attrs,
     read_cell,
     read_ragged,
@@ -353,6 +356,54 @@ class TestReadRagged:
         _write(grid, "g/bogus/c/0", np.zeros(16, dtype="<u8").tobytes())
         with pytest.raises(ValueError, match="not variable-length bytes"):
             list(read_ragged(LocalStore(grid), "g/bogus"))
+
+
+class _NoneFillArray:
+    """Proxy of a real vlen array whose EMPTY cells read back as ``None``.
+
+    zarr's ``variable_length_bytes`` decode hands out ``b""`` for an
+    unwritten cell, so the ``None`` shape spec §5.2 admits (and
+    :func:`decode_cell` documents) has no store-level fixture. Wrapping the
+    real array is how the sweeps get to meet it.
+    """
+
+    def __init__(self, arr):
+        self._arr = arr
+
+    def __getattr__(self, name):
+        return getattr(self._arr, name)
+
+    def __getitem__(self, key):
+        out = np.array(self._arr[key], dtype=object)
+        out[[i for i, value in enumerate(out) if value == b""]] = None
+        return out
+
+
+class TestNoneCells:
+    """§5.2: an unwritten vlen cell may decode as ``None``, not ``b""`` — so
+    the sweeps must not ``len()`` it (``decode_cell`` already handles both)."""
+
+    def test_sweep_tolerates_none_cells(self, tmp_path, monkeypatch):
+        grid, expected = build_store(tmp_path, sharded=True)
+        real = moczarr.ragged.open_ragged
+
+        def patched(*args, **kwargs):
+            arr, element = real(*args, **kwargs)
+            return _NoneFillArray(arr), element
+
+        monkeypatch.setattr(moczarr.ragged, "open_ragged", patched)
+        out = dict(read_ragged(LocalStore(grid), "g/field"))
+        words = {morton_word(SHARD + TAILS[c]): c for c in CELLS}
+        assert set(out) == set(words)
+        for word, values in out.items():
+            np.testing.assert_array_equal(values, expected[words[word]])
+
+    def test_iter_populated_chunks_tolerates_none_cells(self, tmp_path):
+        grid, _ = build_store(tmp_path, sharded=True)
+        arr, _element = open_ragged(LocalStore(grid), "g/field")
+        chunks = dict(iter_populated_chunks(_NoneFillArray(arr)))
+        assert sorted(chunks) == [0, 12]  # cells 0/3 in chunk 0, cell 13 in chunk 3
+        assert [rank for rank, _raw in chunks[0]] == [0, 3]
 
 
 class TestReadCell:

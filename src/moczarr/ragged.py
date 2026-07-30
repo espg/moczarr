@@ -208,6 +208,17 @@ def _ragged2_error(field: str) -> ValueError:
     )
 
 
+def _is_empty(raw: object) -> bool:
+    """Whether a vlen cell carries no payload — ``b""`` **or** ``None``.
+
+    The §5.2 normalization :func:`decode_cell` documents (an unwritten vlen
+    cell may decode as ``None``, not ``b""``) as a predicate, so every
+    populated-cell test in this module honours the same contract instead of
+    calling ``len()`` on a value the decoder tolerates.
+    """
+    return raw is None or not len(raw)  # type: ignore[arg-type]
+
+
 def open_ragged(
     store: Store,
     field: str,
@@ -300,17 +311,20 @@ def iter_populated_chunks(arr: zarr.Array) -> Iterator[tuple[int, list[tuple[int
     ``__getitem__`` (~K redundant GETs per shard), while the full-span slice
     fetches the stored object once (zarr reads a whole outer chunk in a
     single GET and splits it locally). The held cost is one span's decoded
-    payload. Chunks whose cells are all absent (the ``b""`` fill — including
-    the §1.5 shard-index absence sentinel) are skipped. ``rank`` is the
-    cell's chunk-local NESTED rank — the same index the writer placed it at
-    on the nested-ordered cells axis, never a row-major position.
+    payload. Chunks whose cells are all absent are skipped — absence is
+    ``b""`` or ``None`` (:func:`_is_empty`, the §5.2 normalization), and
+    includes the §1.5 shard-index absence sentinel. ``rank`` is the cell's
+    chunk-local NESTED rank — the same index the writer placed it at on the
+    nested-ordered cells axis, never a row-major position.
     """
     cells_per_chunk = int(arr.chunks[0])
     for span_start, span_stop in stored_chunk_spans(arr):
         span = cast(np.ndarray, arr[span_start:span_stop])
         for offset in range(0, span_stop - span_start, cells_per_chunk):
             block = span[offset : offset + cells_per_chunk]
-            populated = [(pos, block[pos]) for pos in range(len(block)) if len(block[pos])]
+            populated = [
+                (pos, block[pos]) for pos in range(len(block)) if not _is_empty(block[pos])
+            ]
             if populated:
                 yield span_start + offset, populated
 
@@ -435,7 +449,7 @@ def read_ragged(
         loc_span = cast(np.ndarray, loc_arr[span_start:span_stop]) if loc_arr is not None else None
         for pos in range(span_stop - span_start):
             raw = span[pos]
-            if not len(raw):
+            if _is_empty(raw):
                 continue
             word = int(words[pos])
             if word == 0:
