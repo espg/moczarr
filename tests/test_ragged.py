@@ -324,6 +324,27 @@ class TestReadRagged:
         with pytest.raises(ValueError, match="no ragged element declaration"):
             list(read_ragged(LocalStore(grid), "g/morton"))
 
+    @pytest.mark.parametrize(
+        "data_type",
+        [
+            "vlen-ndarray",
+            {"name": "vlen-ndarray", "configuration": {"element_dtype": "int16"}},
+        ],
+        ids=["bare", "configured"],
+    )
+    def test_ragged2_array_named_by_revision(self, tmp_path, sharded, data_type):
+        """A ``/2`` array retires the ``ragged`` marker by design (spec
+        §1.6/§6.1), so the attrs gate would call it an unsignaled pre-spec
+        store. The dtype is the signal: name the revision, not a guess.
+        The typed dtype is unknown to this zarr stack, so this also covers
+        §6.3's "actionable failure without the extension installed"."""
+        grid, _ = build_store(tmp_path, sharded=sharded)
+        meta = _vlen_meta(16, 4, sharded=sharded, attrs={})
+        meta["data_type"] = data_type
+        _write(grid, "g/typed/zarr.json", meta)
+        with pytest.raises(ValueError, match="zagg-ragged/2"):
+            list(read_ragged(LocalStore(grid), "g/typed"))
+
     def test_ragged_attrs_on_fixed_dtype_rejected(self, tmp_path, sharded):
         grid, _ = build_store(tmp_path, sharded=sharded)
         meta = _uint64_meta(16)

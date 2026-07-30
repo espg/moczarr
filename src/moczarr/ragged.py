@@ -24,7 +24,10 @@ Postures, inherited from the spec's conformance rules:
   half-parse under a guessed layout (a mis-guessed element dtype
   misinterprets every payload). Contrast the coverage envelopes' tolerant
   ``None``: those are caches that degrade to the walk; ragged attrs are
-  truth.
+  truth. The one marker-absence carve-out is the ``/2`` revision, whose
+  typed dtype IS the signal (§1.6/§6.1): :func:`open_ragged` names it from
+  the declared data type *before* the attrs gate, so a ``/2`` array is
+  refused as a newer revision rather than mis-diagnosed as unsignaled.
 - **One code path for both storage geometries** (§1.5). Sharded
   (``sharding_indexed``; every hive leaf) and per-inner-chunk (regular
   array; the unsharded flat path) layouts are self-describing in the
@@ -42,6 +45,7 @@ Postures, inherited from the spec's conformance rules:
 
 from __future__ import annotations
 
+import json
 import warnings
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
@@ -52,6 +56,8 @@ import zarr
 from zarr.abc.store import Store
 
 __all__ = [
+    "RAGGED2_DATA_TYPE",
+    "RAGGED2_SPEC",
     "RAGGED_ATTR",
     "RAGGED_SPEC",
     "RaggedElement",
@@ -66,10 +72,16 @@ __all__ = [
 
 #: Attrs key of the versioned element declaration (spec §1.2).
 RAGGED_ATTR = "ragged"
-#: The one convention revision this layer decodes. ``zagg-ragged/2`` moves
-#: the declaration into a typed ``vlen-ndarray`` dtype and retires the attrs
-#: marker (spec §6) — a ``/2`` array never reaches this gate.
+#: The one convention revision this layer decodes.
 RAGGED_SPEC = "zagg-ragged/1"
+#: The successor revision (spec §6), signaled by the DATA TYPE rather than by
+#: an attrs marker: on a ``/2`` array the declaration lives in the typed
+#: :data:`RAGGED2_DATA_TYPE` dtype and the ``ragged`` marker is deliberately
+#: retired (§1.6/§6.1/§6.3), so marker-absence there is a newer revision — not
+#: an unsignaled array. :func:`open_ragged` names it before the attrs gate.
+RAGGED2_SPEC = "zagg-ragged/2"
+#: The registered zarr v3 extension data type that IS the ``/2`` signal.
+RAGGED2_DATA_TYPE = "vlen-ndarray"
 
 
 @dataclass(frozen=True)
@@ -100,7 +112,9 @@ def parse_ragged_attrs(attrs: Mapping | None, *, field: str = "<array>") -> Ragg
     ``ragged`` block is missing (not a ``zagg-ragged/1`` array — pre-spec CSR
     stores are a hard break), when ``spec`` is foreign or a future revision
     (never half-parse), or when the element declaration is malformed
-    (``shape`` must be ``[-1, *inner_shape]``).
+    (``shape`` must be ``[-1, *inner_shape]``). The missing-block branch
+    assumes the caller has already ruled out :data:`RAGGED2_SPEC`, whose
+    marker is retired by design — :func:`open_ragged` does that by dtype.
     """
     block = attrs.get(RAGGED_ATTR) if isinstance(attrs, Mapping) else None
     if not isinstance(block, Mapping):
@@ -153,6 +167,47 @@ def decode_cell(raw: object, element: RaggedElement) -> np.ndarray:
     return np.frombuffer(data, dtype=element.dtype).reshape((-1, *element.inner_shape))
 
 
+def _data_type_name(declared: object) -> str | None:
+    """The NAME of a declared zarr ``data_type`` (a bare string or named config)."""
+    if isinstance(declared, Mapping):
+        declared = declared.get("name")
+    return declared if isinstance(declared, str) else None
+
+
+def _declared_data_type(store: Store, field: str) -> str | None:
+    """The array's declared ``data_type`` name, read from its raw metadata.
+
+    The fallback diagnosis path for an array this zarr stack cannot open at
+    all: a ``/2`` typed dtype without the extension installed makes
+    ``zarr.open_array`` raise before any attrs or dtype are visible, so the
+    revision has to come from the metadata object itself.
+    """
+    from zarr.core.buffer import default_buffer_prototype
+    from zarr.core.sync import sync
+
+    key = f"{field}/zarr.json" if field else "zarr.json"
+    buf = sync(store.get(key, prototype=default_buffer_prototype()))
+    if buf is None:
+        return None
+    try:
+        meta = json.loads(buf.to_bytes())
+    except ValueError:
+        return None
+    return _data_type_name(meta.get("data_type") if isinstance(meta, Mapping) else None)
+
+
+def _ragged2_error(field: str) -> ValueError:
+    """The pointed ``/2`` refusal (spec §6.3: actionable, never a mis-decode)."""
+    return ValueError(
+        f"{field!r} is a {RAGGED2_SPEC!r} array: its declared data type is the typed "
+        f"{RAGGED2_DATA_TYPE!r} extension, which carries the element declaration and "
+        f"retires the {RAGGED_ATTR!r} attrs marker (spec §1.6/§6.1). This reader "
+        f"decodes {RAGGED_SPEC!r} only — reading a {RAGGED2_SPEC!r} store needs the "
+        f"'zarr-vlen-ndarray' dtype extension and a moczarr revision that dispatches "
+        f"on it (englacial/zagg#210); {RAGGED_SPEC!r} stores stay valid indefinitely"
+    )
+
+
 def open_ragged(
     store: Store,
     field: str,
@@ -161,11 +216,26 @@ def open_ragged(
 ) -> tuple[zarr.Array, RaggedElement]:
     """Open a ragged vlen array and its parsed element declaration, strictly.
 
-    Raises ``ValueError`` when the array is not a 1-D vlen-bytes cells axis
-    or fails the :func:`parse_ragged_attrs` gate.
+    Raises ``ValueError`` when the array is not a 1-D vlen-bytes cells axis,
+    fails the :func:`parse_ragged_attrs` gate, or is the :data:`RAGGED2_SPEC`
+    revision — which is ruled out BEFORE marker absence is blamed on a
+    pre-spec store, since a ``/2`` array retires the marker by design and
+    deserves the actionable error §6.3 mandates instead. The declared data
+    type is read from the metadata object only on those two paths (an
+    unopenable dtype, or a missing marker), never on the happy one.
     """
-    arr = zarr.open_array(store, path=field, mode="r", zarr_format=zarr_format)
-    element = parse_ragged_attrs(dict(arr.attrs), field=field)
+    try:
+        arr = zarr.open_array(store, path=field, mode="r", zarr_format=zarr_format)
+    except ValueError as exc:
+        # The typed ``/2`` dtype is unknown to a zarr stack without the
+        # extension, so zarr refuses the array before any attrs are visible.
+        if _declared_data_type(store, field) == RAGGED2_DATA_TYPE:
+            raise _ragged2_error(field) from exc
+        raise
+    attrs = dict(arr.attrs)
+    if RAGGED_ATTR not in attrs and _declared_data_type(store, field) == RAGGED2_DATA_TYPE:
+        raise _ragged2_error(field)  # marker absence is legal on ``/2`` only
+    element = parse_ragged_attrs(attrs, field=field)
     if arr.dtype.kind != "O":
         raise ValueError(
             f"{field!r} carries a ragged declaration but its zarr dtype is "
