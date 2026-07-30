@@ -1,10 +1,13 @@
 """D20 stats sidecars, D22 rollups, and the O11 verifier, against the goldens.
 
 The committed ``tests/data/multiproduct_hive`` fixture carries the full
-telemetry surface: ``atl06`` has ``stats.json`` sidecars (with O11
-``content_hashes`` computed independently by the generator — the verifier is
-golden-tested, not self-tested) and hand-folded ``stats.rollup.json``
-objects at the shard nodes and every ancestor; ``atl06_windows`` has
+telemetry surface: ``atl06`` has ``stats.json`` sidecars (with O11 per-array
+``content_hashes`` computed independently by the generator from the written
+chunk bytes — the verifier is golden-tested, not self-tested; the COMBINED
+digest, which the generator does take from ``combined_hash``, is pinned by
+the :data:`FROZEN_COMBINED_4111` literal instead) and hand-folded
+``stats.rollup.json`` objects at the shard nodes and every ancestor;
+``atl06_windows`` has
 ``stats_{window}.json`` sidecars in all three states (with hashes, without,
 absent); ``atl06_ragged`` carries the vlen (ragged) O11 surface — a
 ``variable_length_bytes`` digest array plus its ``{field}_locations``
@@ -31,6 +34,15 @@ from moczarr.stats import (
 )
 
 FIXTURE = Path(__file__).parent / "data" / "multiproduct_hive"
+
+#: The FROZEN O11 combined-hash serialization, as a literal: sha256 of the
+#: sorted per-array hex digests, ``"\n"``-joined, ASCII — for the ``atl06``
+#: fixture's ``4111`` leaf. A literal because both sides of the fixture's
+#: golden run through ``combined_hash`` (the generator records what the
+#: verifier recomputes), so changing the joiner, hashing raw digest bytes, or
+#: including array names would otherwise pass unnoticed — and this is the one
+#: O11 choice this PR asks zagg's future writer to adopt verbatim.
+FROZEN_COMBINED_4111 = "a5d44b9f2b35478e2f9d763c52146b14c8ab8934af64d40c4efa6400bf1c6670"
 
 
 @pytest.fixture()
@@ -256,6 +268,18 @@ class TestVerifyArrays:
         assert result["match"] is None
         assert result["recorded"] is None
         assert result["mismatched"] == []
+
+    def test_combined_serialization_is_frozen(self, atl06):
+        # Not self-tested: the literal is the pin, and the recipe is
+        # hand-rolled here rather than borrowed from combined_hash.
+        import hashlib
+
+        result = verify_arrays(atl06, "4111")
+        assert result["combined"] == FROZEN_COMBINED_4111
+        assert result["recorded_combined"] == FROZEN_COMBINED_4111
+        digests = sorted(result["recorded"].values())
+        hand_rolled = hashlib.sha256("\n".join(digests).encode("ascii")).hexdigest()
+        assert hand_rolled == FROZEN_COMBINED_4111
 
     def test_combined_hash_is_order_free(self):
         a = {"x": "aa", "y": "bb"}

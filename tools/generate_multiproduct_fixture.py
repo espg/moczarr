@@ -18,8 +18,13 @@ children — no root manifest (the §6.5 content discrimination) — with:
   (``morton`` + ``count``), ``aggregation.yaml`` present and the manifest's
   ``semantic_hash`` = sha256 of its bytes (the D19 self-consistency), D20
   ``stats.json`` sidecars carrying O11 ``content_hashes`` computed from the
-  written array bytes, and D22 ``stats.rollup.json`` objects at the shard
-  nodes and every ancestor (hand-folded with the D20 merge dispositions).
+  written array bytes (independently of ``stats.hash_arrays``), and D22
+  ``stats.rollup.json`` objects at the shard nodes and every ancestor
+  (hand-folded with the D20 merge dispositions). The COMBINED digest here
+  does come from ``stats.combined_hash``, so it is self-consistent by
+  construction — the serialization itself is pinned by the
+  ``FROZEN_COMBINED_4111`` literal in ``tests/test_stats.py``, which is what
+  a change of joiner/keying has to get past.
 - ``atl06_windows/`` — a ``morton-hive/2`` windowed product (``morton`` +
   ``height``), no ``aggregation.yaml`` and no ``semantic_hash`` (the pre-D19
   surface), ``stats_{window}.json`` sidecars: one WITH content hashes, one

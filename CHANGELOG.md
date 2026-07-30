@@ -13,7 +13,11 @@
   `stats_sidecar_key`/`stats_sidecar_path` (spec-keyed naming incl. the
   D23 `{window}.stats.json` / `all` grammar); O11 content verification —
   `hash_arrays`/`combined_hash`/`verify_arrays` recompute per-array sha256
-  over decoded values against the sidecar record
+  over decoded values against the sidecar record. Ragged (vlen-bytes) arrays
+  hash as `sha256(uint64_le(len) || payload)` per cell in flat C order — the
+  recipe zagg's future O11 writer must adopt; `verify_arrays` also reports
+  `combined_match` and never calls a leaf verified when its recorded
+  combined hash disagrees
   ([#11](https://github.com/espg/moczarr/issues/11)).
 
 ## 0.1.0
