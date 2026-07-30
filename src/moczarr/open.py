@@ -22,7 +22,7 @@ source at all — raises, as :class:`moczarr.exceptions.NoCoverageError`.
 from __future__ import annotations
 
 import warnings
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from typing import Any
 
 import numpy as np
@@ -157,6 +157,38 @@ def _schema_leaf(
     )
     stamps = read_commits(store_root, leaves, store=store, concurrency=concurrency)
     return next((r for r, s in zip(leaves, stamps) if s is not None), None)
+
+
+def _check_composition_fill(ds, rel: str) -> None:
+    """Refuse a composition array whose declared ``fill_value`` is not 0 (§3).
+
+    ``zagg-composition/1`` packs an empty signal stratum to ``0``, and spec §3
+    **MUST**s the array's fill value to be the same ``0`` so an *unwritten*
+    cell decodes to the same "no flags occurred" word. A nonzero fill makes
+    every unwritten cell report spurious lane presence — a fill of 1 reads as
+    "``land`` occurred exactly" — which is a wrong answer, not a degraded one,
+    so it raises rather than warning (the D9 line; contrast the tolerant
+    coverage caches). zagg enforces the same rule writer-side at config
+    validation, so a store tripping this is malformed, not merely old.
+
+    Costs nothing: both the attrs and the declared fill come from the leaf
+    metadata ``xarray`` has just read, so there is no extra object GET. The
+    lane algebra stays pure — :mod:`moczarr.composition` takes words and
+    attrs and never sees a ``zarr.Array``, which is why this check lives on
+    the open path instead.
+    """
+    for name, var in ds.variables.items():
+        block = var.attrs.get("composition")
+        if not isinstance(block, Mapping) or "spec" not in block:
+            continue
+        fill = var.encoding.get("fill_value")
+        if fill is None or fill != 0:
+            raise ValueError(
+                f"non-conforming composition array {name!r} at {rel}: spec §3 requires "
+                f"fill_value 0, so that an unwritten cell decodes to the same word an "
+                f"empty signal stratum packs to, but this array declares {fill!r} — "
+                f"every unwritten cell would report spurious lane presence"
+            )
 
 
 def open_hive(
@@ -351,6 +383,7 @@ def open_hive(
             zarr_format=3,
             **(xr_kwargs or {}),
         )
+        _check_composition_fill(ds, rel)
         coords = [name for name in ("morton", "cell_ids") if name in ds]
         ds = ds.set_coords(coords)
         if index_kind == "moc":
@@ -431,6 +464,7 @@ def open_hive(
             zarr_format=3,
             **(xr_kwargs or {}),
         )
+        _check_composition_fill(ds, schema_rel)
         coords = [name for name in ("morton", "cell_ids") if name in ds]
         ds = ds.set_coords(coords)
         empty_dim = ds["morton"].dims[0] if "morton" in ds.coords else "cells"

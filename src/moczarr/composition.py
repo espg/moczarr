@@ -13,11 +13,15 @@ stratum packs to. Nothing in this module can check it: the functions here take
 words (and attrs), never the ``zarr.Array``, so a store declaring a nonzero
 fill would hand every unoccupied cell to :func:`lane_presence` as spurious
 occurrences — a fill of 1 reads as a phantom ``land``. The claims below hold
-**provided the array declares** ``fill_value: 0``; the §7 conformance fixture
-this package tests against does, and that is asserted rather than assumed
-(``TestStoreReadBinding.test_fill_value_is_zero``). Callers opening arrays
-from an unverified writer should check ``array.fill_value == 0`` alongside the
-§3.3 attrs gate.
+**provided the array declares** ``fill_value: 0``.
+
+That precondition is **enforced on the open path**, not here: ``open_hive``
+raises on any array whose attrs carry a ``composition.spec`` block and whose
+declared fill is not 0 (``moczarr.open._check_composition_fill``), where the
+array metadata is already in hand. So a store reaching these functions through
+``open_hive`` has been checked, this module stays pure numpy over words and
+attrs, and a caller who opens an array by other means should check
+``array.fill_value == 0`` itself alongside the §3.3 attrs gate.
 
 Normative home: zagg ``docs/specification.md`` §3 — in review on
 englacial/zagg#346, and the section references here are read against

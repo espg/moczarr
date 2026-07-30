@@ -8,12 +8,13 @@ so the writer's quantizer is re-derived inline here from the §3.2 contract
 conventions fails the round-trip first.
 """
 
+import json
 from pathlib import Path
 
 import numpy as np
 import pytest
 
-from moczarr import composition
+from moczarr import composition, convention, open_hive
 
 FIXTURE = Path(__file__).parent / "data" / "composition"
 
@@ -385,3 +386,80 @@ class TestStoreReadBinding:
         present = composition.lane_presence(words[idx])
         for j, name in enumerate(DEFAULT_LANES):
             np.testing.assert_array_equal(named[name][idx] > 0, present[:, j])
+
+
+class TestOpenHiveFillGate:
+    """§3's ``fill_value: 0`` MUST, enforced where the array metadata is read.
+
+    :func:`moczarr.composition.lane_presence` is exact on *unwritten* cells
+    only if the array's fill is the same ``0`` an empty stratum packs to, and
+    the lane functions take words rather than arrays, so they structurally
+    cannot check it. ``open_hive`` does, on the metadata it already read
+    (``moczarr.open._check_composition_fill``). These tests drop the REAL §7
+    conformance array (``tests/data/composition/``, 16 cells — exactly the
+    16-cell subtree of a ``cell_order=8`` / ``shard_order=6`` leaf) into a
+    synthetic hive leaf, so the gate is exercised through the real open path
+    over real zagg-written bytes.
+    """
+
+    SHARD = "-5112333"
+
+    def _store_with_composition(self, tmp_path, *, fill_value=0):
+        import shutil
+
+        from conftest import build_many_leaf_store
+
+        root = tmp_path / "store"
+        build_many_leaf_store(root, [self.SHARD])
+        group_dir = root / convention.leaf_path(self.SHARD) / "8"
+        shutil.copytree(FIXTURE, group_dir / "composition")
+        if fill_value != 0:
+            meta_path = group_dir / "composition" / "zarr.json"
+            meta = json.loads(meta_path.read_text())
+            meta["fill_value"] = fill_value
+            meta_path.write_text(json.dumps(meta))
+        return str(root)
+
+    def test_nonzero_fill_raises_through_open_hive(self, tmp_path):
+        # A fill of 1 decodes an unwritten cell as lanes [1,0,0,0,0,0,0,0] —
+        # "land occurred exactly" — a wrong answer, not a degraded one, so the
+        # open refuses rather than warning. Verified load-bearing on this exact
+        # store: with the gate stubbed out it opens silently and cell 4 (in the
+        # one absent inner shard) comes back as word 1, i.e. lane_presence
+        # reports [True, False * 7] for a cell nothing was ever written to.
+        root = self._store_with_composition(tmp_path, fill_value=1)
+        with pytest.raises(ValueError, match="non-conforming composition array"):
+            open_hive(root)
+
+    def test_conforming_fill_opens_and_decodes(self, tmp_path):
+        # fill 0 (the vendored array unmodified) opens cleanly, and the words
+        # that come back through open_hive decode to the same golden lanes the
+        # standalone fixture test pins.
+        ds = open_hive(self._store_with_composition(tmp_path))
+        words = np.asarray(ds["composition"].values, dtype=np.uint64)
+        assert words.shape == (16,)
+        assert int(words[TestStoreReadBinding.GOLDEN_INDEX]) == GOLDEN_WORD
+        named = composition.named_lanes(words, ds["composition"].attrs)
+        assert [int(named[n][TestStoreReadBinding.GOLDEN_INDEX]) for n in DEFAULT_LANES] == (
+            GOLDEN_LANES
+        )
+
+    def test_store_without_a_composition_array_is_untouched(self, tmp_path):
+        # The gate keys off the composition.spec attrs block, so a store with
+        # no composition field opens exactly as before (and morton/count both
+        # legitimately declare fill_value 0 anyway — nothing else is checked).
+        from conftest import build_many_leaf_store
+
+        root = tmp_path / "plain"
+        build_many_leaf_store(root, [self.SHARD])
+        ds = open_hive(str(root))
+        assert "composition" not in ds
+        assert ds.sizes["cells"] == 16
+
+    def test_the_error_names_the_array_and_the_leaf(self, tmp_path):
+        root = self._store_with_composition(tmp_path, fill_value=255)
+        with pytest.raises(ValueError) as excinfo:
+            open_hive(root)
+        message = str(excinfo.value)
+        assert "'composition'" in message and self.SHARD in message
+        assert "spec §3 requires fill_value 0" in message and "255" in message
