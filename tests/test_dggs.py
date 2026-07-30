@@ -78,7 +78,10 @@ class TestMortonInfo:
 
     def test_geographic_ignores_level_but_rejects_mixed_orders(self):
         # Words carry their own depth: the info's level is not consulted on
-        # the ids->geo direction, but mortie rejects mixed orders per call.
+        # the ids->geo direction. Mixed orders reject as the INDEX contract
+        # (issue #8) — an xdggs index is single-level by construction (level
+        # is a frozen MortonInfo parameter) — not as a kernel limitation:
+        # mortie 0.9.1+ converts mixed-order input natively (mortie#116).
         info = dggs.MortonInfo(level=3)
         words = _golden_family()  # order 6, deliberately not the info's level
         lon, lat = info.cell_ids2geographic(words)
@@ -87,7 +90,7 @@ class TestMortonInfo:
             [convention.morton_word(GOLDEN), convention.morton_word(GOLDEN + "11")],
             dtype=np.uint64,
         )
-        with pytest.raises(ValueError, match="[Mm]ixed orders"):
+        with pytest.raises(ValueError, match=r"orders \[6, 8\].*single-level by construction"):
             info.cell_ids2geographic(mixed)
 
     def test_cell_boundaries_centroids(self):

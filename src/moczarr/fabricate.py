@@ -48,9 +48,12 @@ def fabricate_cell_ids(
     """Exact NESTED ``uint64`` cell ids of packed morton words.
 
     Pure function (mortie/numpy only): ``mort2healpix`` on the packed words.
-    The AREA words must share one order (mortie rejects mixed orders — fine
-    for hive stores, whose cell coordinates are single-order at the
-    manifest's ``cell_order``). POINT-kind words (spec §1 suffix
+    The AREA words must share one order — enforced here explicitly (issue
+    #8): NESTED has no mixed-order form, so a mixed-order coordinate (a
+    pyramid/overview store, zagg#262) cannot fabricate a single-nside view
+    at all; fabricate per level, or keep a multi-order encoding
+    (UNIQ-style) instead. Hive stores are fine: their cell coordinates are
+    single-order at the manifest's ``cell_order``. POINT-kind words (spec §1 suffix
     ``48..=63``) may ride alongside order-29 areas — mixed kinds are
     well-formed per §4 — and clip to order
     :data:`FLOAT64_EXACT_MAX_ORDER` for the NESTED view: a point has no
@@ -87,11 +90,24 @@ def fabricate_cell_ids(
         if level is not None and level > FLOAT64_EXACT_MAX_ORDER:
             _warn_above_float64_exact(level, _stacklevel)
         return np.empty(0, dtype=np.uint64)
-    from mortie import mort2healpix
+    from mortie import mort2healpix, orders_of
 
     from moczarr.convention import is_point_word, point_to_area29
 
     point_mask = np.asarray(is_point_word(words))
+    # Mixed-order AREA words reject explicitly (issue #8): mortie 0.9.1+
+    # converts mixed orders in its geo kernels (mortie#116), but a NESTED
+    # cell_ids view is single-nside — there IS no mixed-order NESTED form
+    # (the zagg#262 rationale for storing morton only). Point words are
+    # exempt: they are order-29 encodings that clip to 24 by design (§4).
+    area_orders = np.unique(orders_of(words[~point_mask]))
+    if area_orders.size > 1:
+        raise ValueError(
+            f"mixed-order area words (orders {[int(o) for o in area_orders]}): NESTED has "
+            f"no mixed-order form, so a single-nside cell_ids view cannot represent them. "
+            f"Fabricate each order separately (split by mortie.orders_of), or keep a "
+            f"multi-order encoding (UNIQ-style) instead of a NESTED view."
+        )
     if not point_mask.any():
         ids, order = mort2healpix(words)
         if level is not None and level != order:

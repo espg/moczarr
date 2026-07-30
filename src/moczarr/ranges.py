@@ -281,7 +281,8 @@ class MortonRanges:
         if other.cell_order != self.cell_order:
             raise ValueError(
                 f"mixed cell orders ({self.cell_order} vs {other.cell_order}); "
-                f"intervals-per-order is the deferred pyramid seam (issue #8)"
+                f"a MortonRanges domain is single-order by construction — "
+                f"intervals-per-order is the pyramid seam deferred out of issue #8"
             )
 
     # -- domain arithmetic ------------------------------------------------
