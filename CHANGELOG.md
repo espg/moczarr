@@ -14,7 +14,10 @@
   `spec` marker and — per §3.3, which fixes the `/1` value — the declared
   `lanes` against the §3.1 order `COMPOSITION_LANES`; extracts
   `lanes`/`of`/`threshold`) and `named_lanes` (lanes keyed by the
-  attrs-declared names, never a hardcoded order). No read-side merge:
+  attrs-declared names, never a hardcoded order). `open_hive` enforces §3's
+  `fill_value: 0` MUST on any array whose attrs carry a `composition.spec`
+  block — a nonzero fill makes every unwritten cell report spurious lane
+  presence, so it raises rather than degrading. No read-side merge:
   the §3.4 merge law stays zagg-owned
   ([#20](https://github.com/espg/moczarr/issues/20)).
 
