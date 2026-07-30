@@ -3,6 +3,8 @@
 from moczarr.composition import (
     COMPOSITION_SPEC,
     counts_from_composition,
+    named_lanes,
+    parse_composition_attrs,
     presence,
     unpack_composition,
 )
@@ -106,10 +108,12 @@ __all__ = [
     "load_root_coverage",
     "morton_decimal",
     "morton_word",
+    "named_lanes",
     "open_hive",
     "open_object_store",
     "open_store",
     "parent_cells",
+    "parse_composition_attrs",
     "parse_leaf_coverage",
     "parse_manifest",
     "parse_root_coverage",

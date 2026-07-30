@@ -22,8 +22,10 @@ above (:func:`counts_from_composition`).
 Lane *meaning* is attrs-bound, never positional: the array's ``composition``
 attrs block (§3.3) declares ``lanes`` (names in bit order), ``of`` (the
 sibling digest field whose total weight is ``N_signal``), and ``threshold``
-(the committed signal cut). The functions here therefore return positional
-lanes only; naming them is the attrs-binding step's job (issue #20 phase 2).
+(the committed signal cut). :func:`unpack_composition` therefore returns
+positional lanes only; name them via :func:`named_lanes`, which binds to a
+:func:`parse_composition_attrs`-validated block. The spec gate is strict —
+a future ``zagg-composition/2`` is adopted deliberately, never half-parsed.
 
 Deliberately absent: a read-side merge. The §3.4 merge law is a write/rollup
 monoid over ``(word, n_signal)`` pairs and stays zagg-owned; moczarr
@@ -31,6 +33,8 @@ consumes committed words.
 """
 
 from __future__ import annotations
+
+from collections.abc import Mapping
 
 import numpy as np
 
@@ -45,8 +49,9 @@ def unpack_composition(words) -> np.ndarray:
 
     Lane ``i`` is bits ``8*i .. 8*i + 7`` of the word (LSB byte first, spec
     §3.1). Columns are POSITIONAL: what a lane *means* comes from the
-    array's attrs (``composition.lanes``), never from a hardcoded order.
-    Scalars pass through ``np.atleast_1d``; the result is always 2-D.
+    array's attrs (``composition.lanes``), never from a hardcoded order —
+    use :func:`named_lanes` to bind names. Scalars pass through
+    ``np.atleast_1d``; the result is always 2-D.
     """
     w = np.atleast_1d(np.asarray(words, dtype=np.uint64))
     shifts = np.arange(COMPOSITION_LANE_COUNT, dtype=np.uint64) * np.uint64(8)
@@ -80,3 +85,58 @@ def presence(words) -> np.ndarray:
     Positional columns, as in :func:`unpack_composition`.
     """
     return unpack_composition(words) > 0
+
+
+def parse_composition_attrs(attrs: Mapping) -> dict:
+    """The validated ``composition`` block from an array's attrs — or raise.
+
+    Strict by design, unlike the tolerant coverage caches: the word is data,
+    not an index, so a reader that cannot bind it correctly must say so
+    rather than degrade. Raises ``ValueError`` on a missing/malformed block
+    and on any spec other than ``zagg-composition/1`` — a future revision is
+    adopted deliberately, never half-parsed (§3.3 conformance rule).
+
+    Returns ``{"lanes": tuple[str, ...], "of": str, "threshold": int}``:
+    ``lanes`` names the bit-order lanes (LSB byte first), ``of`` names the
+    sibling digest field whose total weight is ``N_signal`` (the word is
+    uninterpretable without it), ``threshold`` is the committed signal cut.
+    """
+    block = attrs.get("composition") if isinstance(attrs, Mapping) else None
+    if not isinstance(block, Mapping):
+        raise ValueError("array attrs carry no composition block (spec §3.3)")
+    spec = block.get("spec")
+    if spec != COMPOSITION_SPEC:
+        raise ValueError(
+            f"unsupported composition spec {spec!r}: this reader implements "
+            f"{COMPOSITION_SPEC!r} only and will not half-parse another revision"
+        )
+    lanes = block.get("lanes")
+    if not isinstance(lanes, list | tuple) or not (
+        len(lanes) == COMPOSITION_LANE_COUNT
+        and all(isinstance(name, str) for name in lanes)
+        and len(set(lanes)) == len(lanes)
+    ):
+        raise ValueError(
+            f"composition.lanes must be {COMPOSITION_LANE_COUNT} unique names in bit order, "
+            f"got {lanes!r}"
+        )
+    of = block.get("of")
+    if not isinstance(of, str) or not of:
+        raise ValueError(f"composition.of must name the sibling digest field, got {of!r}")
+    if "threshold" not in block:
+        raise ValueError("composition.threshold (the committed signal cut) is required")
+    return {"lanes": tuple(lanes), "of": of, "threshold": int(block["threshold"])}
+
+
+def named_lanes(words, attrs: Mapping) -> dict[str, np.ndarray]:
+    """Unpacked lanes keyed by their attrs-declared names — ``{name: (N,) uint8}``.
+
+    The binding step over :func:`unpack_composition`: lane order comes from
+    the validated ``composition.lanes`` attr (via
+    :func:`parse_composition_attrs`), so no caller ever indexes by a
+    hardcoded position — zagg's default lane order is the writer's, not a
+    reader assumption.
+    """
+    lanes = unpack_composition(words)
+    names = parse_composition_attrs(attrs)["lanes"]
+    return {name: lanes[:, i] for i, name in enumerate(names)}

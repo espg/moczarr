@@ -8,10 +8,14 @@ so the writer's quantizer is re-derived inline here from the §3.2 contract
 conventions fails the round-trip first.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from moczarr import composition
+
+FIXTURE = Path(__file__).parent / "data" / "composition"
 
 #: Spec §3.1 golden word: lanes [255, 0, 0, 255, 0, 0, 0, 255], LSB byte first.
 GOLDEN_WORD = 0xFF000000FF0000FF
@@ -127,3 +131,130 @@ class TestPresence:
         np.testing.assert_array_equal(
             composition.presence(words), composition.unpack_composition(words) > 0
         )
+
+
+#: The §3.3 attrs block (hand-built, conftest raw-object style).
+DEFAULT_LANES = ["land", "ocean", "sea_ice", "land_ice", "inland_water", "low", "med", "high"]
+
+
+def _attrs(**overrides):
+    block = {
+        "spec": composition.COMPOSITION_SPEC,
+        "lanes": list(DEFAULT_LANES),
+        "of": "h_tdigest_signal",
+        "threshold": 2,
+    }
+    block.update(overrides)
+    return {"composition": block}
+
+
+class TestAttrsBinding:
+    def test_parses(self):
+        parsed = composition.parse_composition_attrs(_attrs())
+        assert parsed == {"lanes": tuple(DEFAULT_LANES), "of": "h_tdigest_signal", "threshold": 2}
+
+    def test_future_spec_raises(self):
+        # Strict gate: a future revision is adopted deliberately, never
+        # half-parsed — /2 could re-mean the very same eight bytes.
+        with pytest.raises(ValueError, match="zagg-composition/2"):
+            composition.parse_composition_attrs(_attrs(spec="zagg-composition/2"))
+
+    @pytest.mark.parametrize("attrs", [{}, {"composition": None}, {"composition": "v1"}, None])
+    def test_missing_block_raises(self, attrs):
+        with pytest.raises(ValueError, match="no composition block"):
+            composition.parse_composition_attrs(attrs)
+
+    @pytest.mark.parametrize(
+        "overrides",
+        [
+            {"lanes": DEFAULT_LANES[:7]},  # wrong count
+            {"lanes": DEFAULT_LANES[:7] + ["land"]},  # duplicate name
+            {"lanes": "land,ocean"},  # not a sequence of names
+        ],
+    )
+    def test_malformed_lanes_raise(self, overrides):
+        with pytest.raises(ValueError, match="composition.lanes"):
+            composition.parse_composition_attrs(_attrs(**overrides))
+
+    def test_missing_of_raises(self):
+        with pytest.raises(ValueError, match="composition.of"):
+            composition.parse_composition_attrs(_attrs(of=None))
+
+    def test_missing_threshold_raises(self):
+        attrs = _attrs()
+        del attrs["composition"]["threshold"]
+        with pytest.raises(ValueError, match="composition.threshold"):
+            composition.parse_composition_attrs(attrs)
+
+    def test_named_lanes_follow_the_attrs_order(self):
+        # PERMUTED lanes: binding must key on the attrs order, not zagg's
+        # writer default — under the reversed declaration the golden word's
+        # byte 3 is named "inland_water" and "land_ice" moves to byte 4 (=0).
+        words = np.asarray([GOLDEN_WORD], dtype=np.uint64)
+        named = composition.named_lanes(words, _attrs(lanes=DEFAULT_LANES[::-1]))
+        assert set(named) == set(DEFAULT_LANES)
+        assert named["high"][0] == 255 and named["land"][0] == 255  # bytes 0 and 7
+        assert named["inland_water"][0] == 255  # byte 3 under the permutation
+        assert named["land_ice"][0] == 0  # 255 under the default order
+
+    def test_named_lanes_default_order(self):
+        named = composition.named_lanes(np.asarray([GOLDEN_WORD], dtype=np.uint64), _attrs())
+        assert [int(named[name][0]) for name in DEFAULT_LANES] == GOLDEN_LANES
+
+
+class TestStoreReadBinding:
+    """Bind a REAL zagg-written composition array to its ``of`` weights.
+
+    The array under ``tests/data/composition/`` is vendored from the zagg
+    spec-conformance ``kitchen_sink`` fixture (englacial/zagg#346, branch
+    ``claude/340-store-spec``, ``tests/data/spec/.../6/composition``) —
+    branch-sourced pending that PR's merge, at which point the copy is
+    re-checkable against the merged fixture byte-for-byte. The ``n_signal``
+    literals below are that fixture's recorded per-cell signal-digest
+    weights (``kitchen_sink.expected.json``).
+    """
+
+    #: (cell index in the 16-cell dense subtree, n_signal); other cells empty.
+    EXPECTED_N = {0: 24, 2: 1, 5: 0, 15: 180}
+    GOLDEN_INDEX = 2  # single-photon cell packing exactly the golden word
+    NOISE_INDEX = 5  # noise-only cell: empty signal stratum packs to 0
+
+    @pytest.fixture()
+    def fixture_array(self):
+        import zarr
+
+        return zarr.open_array(str(FIXTURE), mode="r")
+
+    def test_attrs_bind(self, fixture_array):
+        parsed = composition.parse_composition_attrs(fixture_array.attrs)
+        assert parsed["lanes"] == tuple(DEFAULT_LANES)
+        assert parsed["of"] == "h_tdigest_signal"
+        assert parsed["threshold"] == 2
+
+    def test_golden_and_noise_cells(self, fixture_array):
+        words = fixture_array[:]
+        assert int(words[self.GOLDEN_INDEX]) == GOLDEN_WORD
+        assert int(words[self.NOISE_INDEX]) == 0
+        empty = np.setdiff1d(np.arange(16), list(self.EXPECTED_N))
+        assert not words[empty].any()  # fill value everywhere unoccupied
+
+    def test_counts_bind_to_the_of_weights(self, fixture_array):
+        # threshold=2 ⇒ the three level lanes partition the signal stratum
+        # exactly (spec §3.1), and every n here is <= 254 ⇒ recovery is exact:
+        # low + med + high must reproduce each cell's n_signal on the nose.
+        words = fixture_array[:]
+        named = composition.named_lanes(words, fixture_array.attrs)
+        idx = sorted(self.EXPECTED_N)
+        n = np.asarray([self.EXPECTED_N[i] for i in idx])
+        counts = composition.counts_from_composition(words[idx], n)
+        levels = [DEFAULT_LANES.index(name) for name in ("low", "med", "high")]
+        np.testing.assert_array_equal(counts[:, levels].sum(axis=1), n)
+        # The single-photon cell's lanes ARE that photon's flags.
+        golden = counts[idx.index(self.GOLDEN_INDEX)]
+        np.testing.assert_array_equal(golden, np.asarray(GOLDEN_LANES) // 255)
+        # Surface lanes are overlapping marginals: each bounded by n, and the
+        # attrs-named view agrees with presence on occurrence.
+        assert (counts <= n[:, None]).all()
+        present = composition.presence(words[idx])
+        for j, name in enumerate(DEFAULT_LANES):
+            np.testing.assert_array_equal(named[name][idx] > 0, present[:, j])
