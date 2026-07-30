@@ -442,8 +442,10 @@ class TestReadCell:
         np.testing.assert_array_equal(values, expected[13])
         data_gets = [g for g in store.gets if "field/c/" in g[0]]
         assert len(data_gets) == 2
-        (key, _r0, n0), (_k1, _r1, n1) = data_gets
+        (_k0, range0, n0), (_k1, range1, n1) = data_gets
         obj_size = (grid / "g/field/c/0").stat().st_size
+        # Ranged-ness is the posture; the byte counts are only its symptom.
+        assert range0 is not None and range1 is not None
         assert n0 == 16 * 4 + 4  # the K=4 shard-index suffix
         assert n1 < obj_size  # one ranged inner chunk, not the object
 
