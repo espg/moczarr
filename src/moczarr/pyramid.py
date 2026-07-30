@@ -49,7 +49,6 @@ import numpy as np
 from moczarr.convention import (
     HIVE_SPEC_V2,
     decimal_base,
-    group_digits,
     manifest_path_grouping,
     morton_decimal,
     morton_word,
@@ -136,10 +135,16 @@ def overview_cell_orders(manifest: dict) -> dict[int, int]:
     return {k: cell_order - (shard_order - k) for k in orders}
 
 
-def _node_rel(decimal: str, path_grouping: int) -> str:
-    """A node decimal's relative digit path, chunked per the manifest (D21)."""
+def _node_rel(decimal: str) -> str:
+    """An ancestor node decimal's relative path — one component per digit.
+
+    The writer's convention verbatim (``zagg.sweep._node_rel``, which takes no
+    grouping): ``"-311"`` -> ``"-3/1/1"``. Only called on a ``path_grouping:
+    1`` store, where it is also the leaf tree's own node path; grouped stores
+    are refused in :func:`open_overview_order` rather than guessed at.
+    """
     base = decimal_base(decimal)
-    return "/".join([base, *group_digits(decimal[len(base) :], path_grouping)])
+    return "/".join([base, *decimal[len(base) :]])
 
 
 def _object_entry(attrs: dict, decimal: str, window: str | None, target_order: int) -> dict:
@@ -209,10 +214,13 @@ def open_overview_order(
     per object under ``attrs[OBJECTS_ATTR]``.
 
     Returns ``None`` when the order has no stamped object at all (declared
-    but not yet swept — the caller omits the node) or when the root MOC is
-    unusable (overviews are regenerable caches and never load-bearing, so
-    enumeration degrades by omission with a warning, never to a listing
-    walk). An ``aoi`` that excludes every stamped object returns the
+    but not yet swept — the caller omits the node), when the root MOC is
+    unusable, or when the store declares ``path_grouping > 1`` (the grouped
+    ancestor-path convention is unsettled writer-side). All three degrade by
+    omission with a warning, never to a listing walk or a guessed path:
+    overviews are regenerable caches and never load-bearing (§4.1), so the
+    source node stands in every case. An ``aoi`` that excludes every stamped
+    object returns the
     issue-#4 schema-correct empty dataset with a ``UserWarning``, exactly
     like :func:`moczarr.open.open_hive`.
 
@@ -276,6 +284,25 @@ def open_overview_order(
         basename = f"{window}.zarr"
     else:
         basename = f"{ALL_TOKEN}.zarr"
+    if grouping != 1:
+        # An ancestor order that is not a multiple of path_grouping has NO
+        # directory in a grouped tree (its component would be a truncated
+        # group — `4/33` where the tree's component is `331`), and zagg's
+        # sweep writes ancestor nodes per digit regardless of grouping
+        # (`zagg.sweep._node_rel` takes no grouping argument). Any guess here
+        # names a path that is neither the writer's nor a node of the leaf
+        # tree, so the order is omitted loudly and the source node stands —
+        # overviews are §4.1 regenerable caches a reader MUST NOT require.
+        warnings.warn(
+            f"{store_root} declares path_grouping {grouping}: the grouped-tree path of "
+            f"an overview ancestor node is not settled (zagg's sweep writes ancestor "
+            f"nodes one component per digit regardless of grouping), so declared order "
+            f"{k} is omitted rather than guessed at; the source node is unaffected "
+            f"(overviews are never load-bearing — zagg spec §4.1)",
+            UserWarning,
+            stacklevel=2,
+        )
+        return None
 
     obstore_store = _resolve_store(store_root, store, store_kwargs)
     envelope = load_root_coverage(store_root, store=obstore_store)
@@ -310,7 +337,7 @@ def open_overview_order(
         },
         key=morton_word,
     )
-    rels = [f"{_node_rel(dec, grouping)}/{basename}" for dec in ancestors]
+    rels = [f"{_node_rel(dec)}/{basename}" for dec in ancestors]
     metas = read_leaf_metas(store_root, rels, store=obstore_store, concurrency=concurrency)
     zarr_store = ObjectStore(obstore_store, read_only=True)
     opened, entries = [], []

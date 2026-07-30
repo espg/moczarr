@@ -489,6 +489,26 @@ class TestDegradation:
         with pytest.raises(ValueError, match="order 7"):
             open_store(str(copy), products=["atl06"])
 
+    def test_grouped_store_omits_order_nodes(self, tmp_path):
+        # path_grouping > 1: an ancestor order that is not a group boundary has
+        # no directory in the grouped tree, and zagg's sweep writes ancestor
+        # nodes per digit regardless — so there is no path to name. Omitted
+        # loudly (never guessed), and the SOURCE node still opens: §4.1's
+        # "a reader MUST NOT require them".
+        copy = tmp_path / "pg3"
+        shutil.copytree(Path(__file__).parent / "data" / "serc_hive_pg3", copy)
+        manifest = json.loads((copy / "morton_hive.json").read_text())
+        assert manifest["path_grouping"] == 3
+        manifest["pyramid"] = {
+            "spec": "zagg-pyramid/1",
+            "overview": {"orders": [6], "spacing": 2, "all_time": False, "fields": {}},
+        }
+        (copy / "morton_hive.json").write_text(json.dumps(manifest))
+        with pytest.warns(UserWarning, match="path_grouping 3"):
+            tree = open_store(str(copy))
+        assert list(tree["atl06"].children) == [str(manifest["cell_order"])]
+        assert tree["atl06"]["10"].ds.sizes["cells"] > 0
+
     def test_all_time_token_is_refused(self, root):
         # `all` passes validate_label, so it WAS reachable: it opened the
         # all-time folds on the overview orders while the source order — which
