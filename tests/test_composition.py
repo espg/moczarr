@@ -141,7 +141,7 @@ class TestCountRecovery:
         word = _pack(_quantize([1] + [0] * 7, n))
         recovered = composition.counts_from_composition(np.asarray([word], dtype=np.uint64), n)
         assert recovered[0, 0] == round(n / 255)
-        assert composition.presence(np.asarray([word], dtype=np.uint64))[0, 0]
+        assert composition.lane_presence(np.asarray([word], dtype=np.uint64))[0, 0]
 
     def test_n_signal_broadcasts_per_cell(self):
         words = np.asarray([GOLDEN_WORD, GOLDEN_WORD, 0], dtype=np.uint64)
@@ -189,16 +189,16 @@ class TestPresence:
         # where count recovery is only an estimate.
         for n in (1, 2, 254, 255, 10_000, 10_000_000):
             word = _pack(_quantize([1, 0, n], n))
-            present = composition.presence(np.asarray([word], dtype=np.uint64))[0]
+            present = composition.lane_presence(np.asarray([word], dtype=np.uint64))[0]
             assert present.tolist() == [True, False, True] + [False] * 5, f"n={n}"
 
     def test_zero_word_is_all_absent(self):
-        assert not composition.presence(np.zeros(2, dtype=np.uint64)).any()
+        assert not composition.lane_presence(np.zeros(2, dtype=np.uint64)).any()
 
     def test_agrees_with_unpack(self):
         words = np.asarray([GOLDEN_WORD, 0, _pack([0, 1, 0, 0, 255, 0, 0, 0])], dtype=np.uint64)
         np.testing.assert_array_equal(
-            composition.presence(words), composition.unpack_composition(words) > 0
+            composition.lane_presence(words), composition.unpack_composition(words) > 0
         )
 
 
@@ -372,6 +372,6 @@ class TestStoreReadBinding:
         # Surface lanes are overlapping marginals: each bounded by n, and the
         # attrs-named view agrees with presence on occurrence.
         assert (counts <= n[:, None]).all()
-        present = composition.presence(words[idx])
+        present = composition.lane_presence(words[idx])
         for j, name in enumerate(DEFAULT_LANES):
             np.testing.assert_array_equal(named[name][idx] > 0, present[:, j])
