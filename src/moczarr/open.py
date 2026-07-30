@@ -160,6 +160,7 @@ def _schema_leaf(
 def open_hive(
     store_root: str,
     *,
+    product: str | None = None,
     aoi=None,
     window: str | None = None,
     anonymous: bool = False,
@@ -175,7 +176,16 @@ def open_hive(
     Parameters
     ----------
     store_root : str
-        Store root (local directory or ``s3://bucket/prefix``).
+        Store root (local directory or ``s3://bucket/prefix``) — a bare
+        single-product store, or a multi-product store root when ``product``
+        is given.
+    product : str, optional
+        Named product of a multi-product store root (D19, spec §6.5): sugar
+        for opening the ``{store_root}/{product}`` subtree, which is a
+        complete morton-hive store in its own right. Omitted on a
+        multi-product root, the error lists the product names that exist
+        (see :func:`moczarr.products.list_products`). Single-product stores
+        are unaffected — the bare form is the valid degenerate case.
     aoi : array-like, optional
         Morton cover of the area of interest — packed ``uint64`` words or
         decimal strings, mixed orders allowed. Shards and rows outside the
@@ -275,6 +285,14 @@ def open_hive(
         raise ValueError(f"index_kind={index_kind!r}: expected 'pandas' or 'moc'")
     if anonymous:
         store_kwargs.setdefault("anonymous", True)
+    if product is not None:
+        # D19 sugar: a product subtree IS a complete morton-hive store, so
+        # the whole open simply re-roots on it (equivalent to opening the
+        # subtree path directly, pinned by a test).
+        from moczarr.products import validate_product_name
+
+        validate_product_name(product)
+        store_root = f"{store_root.rstrip('/')}/{product}"
     # ONE store construction pair for the whole open (issue #5): the obstore
     # handle serves every JSON/sidecar read; the zarr wrapper serves every
     # leaf open via deep paths through the parentless digit tree.
@@ -282,6 +300,18 @@ def open_hive(
     zarr_store = ObjectStore(obstore_store, read_only=True)
     manifest = read_manifest(store_root, store=obstore_store)
     if manifest is None:
+        if product is None:
+            # A multi-product root has no root manifest by design (§6.5
+            # content discrimination) — probe for named products so the
+            # error is pointed, not "not a hive store". Error path only.
+            from moczarr.products import list_products
+
+            names = [p["name"] for p in list_products(store_root, store=obstore_store)]
+            if names:
+                raise ValueError(
+                    f"{store_root} is a multi-product store root (products: {names}); "
+                    f"pass product=... to open one (D19, mortie spec §6.5)"
+                )
         raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
     aoi_words = _aoi_words(aoi) if aoi is not None else None
     group = str(manifest["cell_order"])
