@@ -192,7 +192,15 @@ def parse_composition_attrs(attrs: Mapping) -> dict:
         raise ValueError(f"composition.of must name the sibling digest field, got {of!r}")
     if "threshold" not in block:
         raise ValueError("composition.threshold (the committed signal cut) is required")
-    return {"lanes": tuple(lanes), "of": of, "threshold": int(block["threshold"])}
+    threshold = block["threshold"]
+    if not isinstance(threshold, int) or isinstance(threshold, bool):
+        raise ValueError(
+            f"composition.threshold must be an int (the committed signal cut), got "
+            f"{threshold!r} — §3.3 requires each stratum digest's recorded "
+            "signal_threshold to AGREE with this value, and coercing (2.7 -> 2) would "
+            "fabricate that agreement"
+        )
+    return {"lanes": tuple(lanes), "of": of, "threshold": threshold}
 
 
 def named_lanes(words, attrs: Mapping) -> dict[str, np.ndarray]:
