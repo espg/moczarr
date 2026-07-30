@@ -533,7 +533,9 @@ def open_store(
         bare single-product store (manifest at the root), discriminated by
         content per spec §6.5.
     products : sequence of str, optional
-        Open only these products (a filter for stores with many). Names are
+        Open only these products (a filter for stores with many). An empty
+        sequence raises — a childless tree is never the intended answer;
+        pass ``None`` (the default) for "all". Names are
         checked against the spec §6.5 grammar **before any I/O**; unknown
         (but well-formed) names raise once the roster is known, listing what
         exists. Children stay in name-sorted order regardless of the
@@ -581,8 +583,15 @@ concurrency, xr_kwargs, **store_kwargs
     import xarray as xr
 
     # Grammar before I/O: an off-spec product name is a caller bug, so it
-    # costs no LIST/GET to reject (spec §6.5 names are pure syntax).
+    # costs no LIST/GET to reject (spec §6.5 names are pure syntax). An
+    # empty filter is loud too — a childless tree is the module's one silent
+    # nonsense answer, and in practice it means the caller's filter list
+    # came out empty.
     wanted = {validate_product_name(name) for name in products} if products is not None else None
+    if wanted is not None and not wanted:
+        raise ValueError(
+            f"products=[] selects nothing at {store_root} — omit products= to open every product"
+        )
 
     obstore_store = open_object_store(store_root, anonymous=anonymous, **store_kwargs)
     records = list_products(store_root, store=obstore_store)

@@ -117,6 +117,12 @@ class TestOpenStoreProductsFilter:
         with pytest.raises(ValueError, match=r"atl07.*atl06.*atl06_windows"):
             open_store(multiroot, products=["atl07"])
 
+    def test_empty_products_raises(self, multiroot):
+        # Every other bad selection raises; an empty filter (a caller whose
+        # own filter list came out empty) must not silently open nothing.
+        with pytest.raises(ValueError, match=r"products=\[\] selects nothing"):
+            open_store(multiroot, products=[])
+
     def test_off_grammar_product_rejected_before_io(self, multiroot):
         # "Before I/O" is literal: the §6.5 grammar check runs ahead of the
         # object-store open, so no LIST/GET is spent on a caller typo.
