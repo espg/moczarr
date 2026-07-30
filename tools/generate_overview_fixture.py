@@ -186,8 +186,7 @@ def _write_product(root: Path, cfg, *, shard_windows: dict[int, list[str | None]
     )
     manifest = hive.read_manifest(store_root)
     by_shard = {
-        morton_decimal(shard): {w for w in windows}
-        for shard, windows in shard_windows.items()
+        morton_decimal(shard): {w for w in windows} for shard, windows in shard_windows.items()
     }
     counts = sweep_overviews(store_root, manifest, by_shard, store_kwargs={})
     assert counts["written"] and not counts["failed"], counts
@@ -346,8 +345,7 @@ def build(out: Path) -> None:
         "time_field": "delta_time",
         "epoch": EPOCH,
         "windows": [
-            {"label": label, "start": start, "end": end}
-            for label, (start, end) in WINDOWS.items()
+            {"label": label, "start": start, "end": end} for label, (start, end) in WINDOWS.items()
         ],
     }
     cfg = replace(cfg, data_source=data_source, output=output)
