@@ -458,24 +458,34 @@ class TestReadCell:
         assert len(data_gets) == 1  # the one inner-chunk object
 
 
+@pytest.mark.parametrize("sharded", [True, False], ids=["sharded", "flat"])
 class TestSweepGetPosture:
-    def test_sweep_reads_each_stored_object_once(self, tmp_path):
-        """The whole-store sweep slices each stored span ONCE — never a
-        per-inner-chunk re-fetch of a sharded object's index suffix."""
-        grid, _ = build_store(tmp_path, sharded=True)
+    """One GET per stored object — on BOTH §1.5 geometries.
+
+    The sharded fixture stores one object, so it pins "no per-inner-chunk
+    re-fetch"; the flat fixture stores TWO, which is where
+    one-GET-per-object is a multiplicity claim rather than a count of one.
+    """
+
+    #: Stored payload objects per geometry (the flat layout omits chunks 1-2).
+    STORED = {True: 1, False: 2}
+
+    def test_sweep_reads_each_stored_object_once(self, tmp_path, sharded):
+        grid, _ = build_store(tmp_path, sharded=sharded)
         store = CountingStore(grid)
         store.gets.clear()
         out = list(read_ragged(store, "g/field"))
         assert len(out) == len(CELLS)
         data_gets = [g for g in store.gets if "field/c/" in g[0]]
-        assert len(data_gets) == 1  # one stored object, fetched once
+        assert len(data_gets) == self.STORED[sharded]
+        assert len(set(key for key, _r, _n in data_gets)) == len(data_gets)  # distinct objects
 
-    def test_sweep_reads_the_coordinate_once(self, tmp_path):
-        """The posture covers the sibling ``morton`` coordinate too: the
-        cached window is read once per stored coordinate object, never
-        re-sliced per payload span (which re-fetches the same object, plus a
-        shard-index suffix when the coordinate is sharded)."""
-        grid, _ = build_store(tmp_path, sharded=True)
+    def test_sweep_reads_the_coordinate_once(self, tmp_path, sharded):
+        """The posture covers the sibling ``morton`` coordinate too: it is read
+        once per stored coordinate object, never re-sliced per payload span
+        (which re-fetched the same object — twice on the flat geometry, and
+        with a shard-index suffix each time when the coordinate is sharded)."""
+        grid, _ = build_store(tmp_path, sharded=sharded)
         store = CountingStore(grid)
         store.gets.clear()
         assert len(list(read_ragged(store, "g/field"))) == len(CELLS)
