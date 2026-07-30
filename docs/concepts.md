@@ -243,13 +243,37 @@ becomes a second node level under the product:
   This is the same fact the computed-compose rule below rests on (a
   D24-heterogeneous product has no complete single-order Dataset precisely
   because its source spans orders).
-- **Roster absence is legal per node** (zagg#201's option-A ruling):
-  overview nodes carry only the variables the sweep's aggregation roster
-  rolls up, so sibling order nodes have **heterogeneous variable sets** —
-  a variable present at the source order may be absent at coarser orders,
-  and readers must treat per-node schemas as independent (they already
-  are across products). Absence of a variable at an order is an answer,
-  not an error.
+- **Per-node variable sets differ in *both* directions.** Sibling order
+  nodes have **heterogeneous variable sets**, and readers must treat
+  per-node schemas as independent (they already are across products).
+  zagg#201 ratified two mechanisms, one per direction
+  ([ruling](https://github.com/englacial/zagg/issues/201#issuecomment-5025509889),
+  [full option space](https://github.com/englacial/zagg/issues/201#issuecomment-5025519604)):
+    - **Absent above its native order (option A — the default).**
+      Non-composable (`none`-class) fields, roster-kind ragged among them,
+      are excluded per field: "composable fields roll up, `none` fields
+      exist only at native resolution." A variable present at a source
+      order may simply not exist at coarser orders. Absence of a variable
+      at an order is an answer, not an error.
+    - **Present *only* above its native order (option B — the ratified
+      opt-in).** An
+      > **explicitly declared derived summary** is available as the
+      > opt-in: e.g. an auto-digest of a roster field's raw values **under
+      > a different field name** at overview orders, so overview schema
+      > never silently differs from source
+
+      so an overview node can carry `X_digest` / `X_hist` / `X_count`
+      that exist at **no** source order — plus, under the espg-flagged
+      opt-in Phase F, seeded-reservoir sample fields marked `sampled: k`
+      with their seed rule in attrs. `tree[product]["18"].ds` having a
+      variable `tree[product]["20"].ds` lacks is the expected case, not
+      corruption.
+
+  Reader-facing corollary: those declarations live in the manifest's
+  **pyramid block, never the semantic core** — "two products differing
+  only in overview-summary declarations are the same product" (D24) — so
+  the `semantic_hash` on a product node says nothing about which overview
+  variables exist. Ask the node, not the hash.
 - **The computed-compose rule.** A D24-heterogeneous product (regionally
   mixed cell orders) has *no complete single-order Dataset*: the seamless
   order-k view is a **computed compose** — coarsen-where-finer /
