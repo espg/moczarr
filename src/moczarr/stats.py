@@ -187,11 +187,16 @@ def read_stats_rollup(
     D20 stats record — the same shape :func:`read_stats` returns, folded
     over every leaf beneath the node.
 
-    Cache posture (matching the sweep's own reader): missing, unparsable,
-    wrong-spec/family, or stamp-less objects all read as ``None`` with a
-    debug log — a rollup is a regenerable derived artifact (D9), and its
-    generation stamp makes staleness *detectable, not prevented*; consumers
-    needing exactness fold leaf records themselves.
+    Cache posture (mirroring the sweep's own reader, ``zagg.sweep._read_rollup``):
+    missing, unparsable, wrong-spec/family, or stamp-less objects all read as
+    ``None`` with a debug log — a rollup is a regenerable derived artifact
+    (D9), and its generation stamp makes staleness *detectable, not
+    prevented*; consumers needing exactness fold leaf records themselves.
+    "Stamp-less" is checked to the same depth as the sweep (a ``generation``
+    dict with an integer ``n_leaves``), with one deliberate divergence: the
+    sweep requires only that ``payload`` be *present*, this requires it to be
+    a mapping — the documented ``envelope["payload"]`` contract, and cheaper
+    to enforce here than to guard at every consumer.
     """
     handle = _resolve_store(store_root, store, store_kwargs)
     manifest = read_manifest(store_root, store=handle)
@@ -202,10 +207,12 @@ def read_stats_rollup(
     envelope = _read_tolerant(handle, key, "stats rollup")
     if envelope is None:
         return None
+    generation = envelope.get("generation")
     usable = (
         envelope.get("spec") == SWEEP_SPEC
         and envelope.get("family") == "stats"
-        and isinstance(envelope.get("generation"), dict)
+        and isinstance(generation, dict)
+        and isinstance(generation.get("n_leaves"), int)
         and isinstance(envelope.get("payload"), dict)
     )
     if not usable:
