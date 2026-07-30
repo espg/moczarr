@@ -61,6 +61,26 @@ class TestUnpack:
         assert composition.unpack_composition(np.asarray([], dtype=np.uint64)).shape == (0, 8)
         assert not composition.unpack_composition(np.zeros(3, dtype=np.uint64)).any()
 
+    def test_negative_signed_words_raise_rather_than_wrap(self):
+        # int64 -1 would wrap to every lane at 255 — "all eight flags occurred
+        # in every photon", the most confidently wrong answer here. Refused.
+        with pytest.raises(ValueError, match="negative"):
+            composition.unpack_composition(np.asarray([-1], dtype=np.int64))
+
+    def test_non_integer_words_raise_rather_than_truncate(self):
+        # A float words array (an xarray path that promoted for a fill value)
+        # truncates under an unchecked cast; §3/§7 fix the word as uint64.
+        for bad in (np.asarray([1.5]), np.asarray([True]), np.asarray(["1"])):
+            with pytest.raises(ValueError, match="integer dtype"):
+                composition.unpack_composition(bad)
+
+    def test_non_negative_signed_and_python_ints_are_accepted(self):
+        # Strictness stops at what cannot be reinterpreted: a plain list, a
+        # non-negative int64 array, and a python int above 2**63 all decode.
+        for words in ([GOLDEN_WORD], np.asarray([1, 2], dtype=np.int64), GOLDEN_WORD):
+            assert composition.unpack_composition(words).dtype == np.uint8
+        assert composition.unpack_composition([GOLDEN_WORD])[0].tolist() == GOLDEN_LANES
+
 
 class TestCountRecovery:
     def test_exhaustive_round_trip_below_255(self):

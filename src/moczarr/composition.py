@@ -65,6 +65,35 @@ COMPOSITION_LANES = (
 COMPOSITION_LANE_COUNT = len(COMPOSITION_LANES)
 
 
+def _as_words(words) -> np.ndarray:
+    """``words`` as ``(N,) uint64`` — or raise rather than coerce a lie.
+
+    §3 fixes the word as ``uint64`` and §7's conformance criterion is
+    byte-exact ``uint64`` decoding with no tolerance, so the two coercions
+    ``np.asarray(..., dtype=np.uint64)`` would perform silently are refused
+    instead: a negative signed value wraps to "every lane at 255" (the most
+    confidently wrong answer this module can give), and a float array — what
+    an xarray path that promoted for a fill value hands back — truncates.
+    Python ints (including above ``2**63``), lists of them, and any unsigned
+    or non-negative signed array are accepted.
+    """
+    w = np.atleast_1d(np.asarray(words))
+    if w.dtype.kind == "u":
+        return w.astype(np.uint64, copy=False)
+    if w.dtype.kind == "i":
+        if w.size and int(w.min()) < 0:
+            raise ValueError(
+                f"composition words are uint64 (spec §3): {w.dtype} value {int(w.min())} "
+                "is negative and would wrap to every lane at 255"
+            )
+        return w.astype(np.uint64)
+    raise ValueError(
+        f"composition words must be an integer dtype, got {w.dtype} — a uint64 word "
+        "carries no NaN/fill channel, so a non-integer array can only be truncated "
+        "(spec §3; §7 requires byte-exact uint64 decoding, no tolerance)"
+    )
+
+
 def unpack_composition(words) -> np.ndarray:
     """Composition words as positional u8 lanes — ``(N,) uint64 -> (N, 8) uint8``.
 
@@ -72,9 +101,10 @@ def unpack_composition(words) -> np.ndarray:
     §3.1). Columns are POSITIONAL: what a lane *means* comes from the
     array's attrs (``composition.lanes``), never from a hardcoded order —
     use :func:`named_lanes` to bind names. Scalars pass through
-    ``np.atleast_1d``; the result is always 2-D.
+    ``np.atleast_1d``; the result is always 2-D. Raises ``ValueError`` on a
+    non-integer or negative ``words`` rather than coerce it (:func:`_as_words`).
     """
-    w = np.atleast_1d(np.asarray(words, dtype=np.uint64))
+    w = _as_words(words)
     shifts = np.arange(COMPOSITION_LANE_COUNT, dtype=np.uint64) * np.uint64(8)
     return ((w[:, None] >> shifts) & np.uint64(0xFF)).astype(np.uint8)
 
