@@ -268,18 +268,35 @@ class MortonInfo(DGGSInfo):
         """Cells at another order — the xdggs zoom semantics.
 
         Coarser: one parent per input cell (``clip2order``; length and
-        duplicates preserved). Finer: a ``(n, 4**(level - self.level))``
-        children array (extra trailing dimension, like the healpix backend).
-        Same order: the cells unchanged.
+        duplicates preserved). Finer: a ``(n, 4**(level - order))`` children
+        array (extra trailing dimension, like the healpix backend). Same
+        order: the cells unchanged.
+
+        ``order`` is the order the WORDS carry, not ``self.level`` (issue #8
+        fold). The kernels are per-word — ``clip2order`` truncates each word
+        from its own order and ``generate_morton_children`` fans out from its
+        own order — so keying the branch on ``self.level`` disagreed with the
+        kernel for words that are simply off-level: a coarsening request could
+        land in the finer branch (mortie then rejecting
+        ``target_order < parent_order``) and the trailing dimension could
+        count from the wrong base. Mixed-order input rejects up front, same
+        one-order-per-call contract as :meth:`cell_ids2geographic`: there is no
+        single trailing dimension to give it. An index-backed call always has
+        ``order == self.level`` (the domain contract, :func:`_check_domain`);
+        an empty array carries no order, so ``self.level`` is the only
+        reference left and the finer path counts from it.
         """
         if level not in self.valid_parameters["level"]:
             raise ValueError("level must be an integer between 0 and 29")
         words = _words(cell_ids)
-        if level == self.level:
+        order = _single_order(words, "zoom_to")
+        if order is None:  # empty: no words to read an order from
+            order = self.level
+        if level == order:
             return words
         from mortie import clip2order, generate_morton_children
 
-        if level < self.level:
+        if level < order:
             return np.asarray(clip2order(level, words), dtype=np.uint64)
         # Finer: one ``generate_morton_children`` call per parent — an O(n)
         # Python loop. Revisited at the mortie#116 adoption (issue #8):
@@ -289,7 +306,7 @@ class MortonInfo(DGGSInfo):
         # Empty input mirrors the coarser ``(0,)`` with a clean ``(0, 4**diff)``
         # rather than letting ``np.stack`` raise on an empty sequence.
         if words.size == 0:
-            return np.empty((0, 4 ** (level - self.level)), dtype=np.uint64)
+            return np.empty((0, 4 ** (level - order)), dtype=np.uint64)
         return np.stack([generate_morton_children(int(w), level) for w in words])
 
 

@@ -184,10 +184,47 @@ class TestMortonInfo:
             dggs.MortonInfo(level=6).zoom_to(_golden_family(), 30)
 
     def test_zoom_to_finer_empty(self):
-        # A zero-cell selection zooms cleanly to (0, 4**diff), not np.stack raising.
+        # A zero-cell selection zooms cleanly to (0, 4**diff), not np.stack
+        # raising. No words means no order to read, so the trailing dimension
+        # counts from self.level — the only reference left.
         empty = np.asarray([], dtype=np.uint64)
         children = dggs.MortonInfo(level=6).zoom_to(empty, 8)
         assert children.shape == (0, 16) and children.dtype == np.uint64
+
+    def test_zoom_to_rejects_mixed_orders(self):
+        # (a) of the review's zoom_to finding: mixed input used to die inside
+        # numpy ("all input arrays must have the same shape") because
+        # generate_morton_children fans out 4 children from the order-6 word
+        # and 64 from the order-8 one. Now it is the same one-order-per-call
+        # contract cell_ids2geographic states.
+        mixed = np.asarray(
+            [convention.morton_word(GOLDEN), convention.morton_word(GOLDEN + "11")],
+            dtype=np.uint64,
+        )
+        with pytest.raises(ValueError, match=r"zoom_to reads one order per call"):
+            dggs.MortonInfo(level=6).zoom_to(mixed, 9)
+
+    def test_zoom_to_keys_on_word_order_not_level(self):
+        # (b): the branch used to key on self.level while the kernel keyed on
+        # each word's own order, so off-level words took the wrong path. Both
+        # concrete cases from the review:
+        words = np.asarray(
+            [convention.morton_word(GOLDEN + "11"), convention.morton_word(GOLDEN + "12")],
+            dtype=np.uint64,
+        )  # order 8
+        # A COARSENING request no longer lands in the finer branch (mortie used
+        # to reject it: "target_order (5) must be >= parent_order (8)").
+        parents = dggs.MortonInfo(level=3).zoom_to(words, 5)
+        assert parents.shape == words.shape
+        assert _decimals(parents) == [d[:7] for d in _decimals(words)]  # "-5" + 5 digits
+        # And the trailing dimension counts from the words' order, so it agrees
+        # with the kernel's own fan-out instead of 4**(9 - self.level).
+        children = dggs.MortonInfo(level=6).zoom_to(words, 9)
+        assert children.shape == (2, 4)
+        for row, parent in zip(children, _decimals(words)):
+            assert all(d.startswith(parent) for d in _decimals(row))
+        # Same order as the words is the identity, whatever self.level says.
+        np.testing.assert_array_equal(dggs.MortonInfo(level=3).zoom_to(words, 8), words)
 
 
 class TestMortonIndex:
