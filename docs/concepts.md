@@ -174,28 +174,28 @@ a user because the answer is mostly *no*:
 - **The spatial digit axis is never nodes.** Mirroring the hive digit
   tree as tree levels would put millions of nodes of metadata client-side
   for zero query power the MOC arithmetic doesn't already give.
-- **Resolution (pyramid order) will be nodes** — designed below,
-  implemented once zagg's overview sweep ships — but the seamless
-  mixed-order composite is a *computed* view, never a node (next
-  section).
+- **Resolution (pyramid order) is nodes — when the manifest declares
+  them.** A product carrying sweep-generated overviews grows one child
+  per stored cell order (next section); the seamless mixed-order
+  composite stays a *computed* view, never a node.
 
 `open_store` is named for its scope, not its return type: `open_datatree`
 is xarray vocabulary for zarr-native hierarchies, which the hive tree
 deliberately is not (zagg's D12 interop hierarchy is `xr.open_datatree`'s
 to open, someday, as a derived cache — the MOC-first opener stays truth).
 
-## Resolution nodes: the design (ahead of implementation)
+## Resolution nodes
 
-> **Status: design only — not implemented.** Implementation is gated on
-> the first real overview fixture from zagg's second-pass sweep
-> ([englacial/zagg#201](https://github.com/englacial/zagg/issues/201);
-> its reader-facing decisions are ratified and recorded here so the tree
-> shape is stable before any code lands). The normative pyramid-block /
-> manifest declaration is a spec seam owned by
-> [englacial/zagg#340](https://github.com/englacial/zagg/issues/340) —
-> this reader plans against that spec, not against an implementation in
-> flight. Tracked on
-> [issue #15](https://github.com/espg/moczarr/issues/15) (phase 8b).
+> **Status: implemented** (phase 8b of
+> [issue #15](https://github.com/espg/moczarr/issues/15), against the
+> first real overview fixture from zagg's second-pass sweep —
+> [englacial/zagg#201](https://github.com/englacial/zagg/issues/201),
+> whose reader-facing rulings this section records — and the normative
+> pyramid-block declaration of the zagg store specification §4
+> ([englacial/zagg#340](https://github.com/englacial/zagg/issues/340)).
+> The committed fixture is zagg-written end to end:
+> `tools/generate_overview_fixture.py`, production write path plus the
+> `sweep_overviews` second pass, zagg sha recorded in the golden sidecar.)
 
 When a product carries sweep-generated overviews, the resolution axis
 becomes a second node level under the product:
@@ -208,10 +208,18 @@ becomes a second node level under the product:
 
 ### Node layout `{product}/{order}`
 
-Order nodes are named by the integer cell order they store. The product
-node itself stays what it is today; on an overview-carrying store the
-source data becomes the source-order child rather than the product node's
-own dataset, riding the multiscale-DataTree conventions.
+Order nodes are named by the integer cell order they store (the §4.4
+constant-depth rule maps each declared ancestor order `k` to cells at
+`c - (s - k)`). On an overview-carrying store the product node becomes an
+empty intermediate carrying the product's identity attrs (`semantic_hash`,
+the manifest summary); the source data becomes the source-order child —
+the same lazy `open_hive` Dataset, plus per-object role entries (below) —
+and each declared overview order with at least one stamped object becomes
+a sibling node, riding the multiscale-DataTree conventions. A product
+whose manifest declares no overview family keeps today's flat form,
+unchanged. Windowed products inherit window naming (D23): `window=` scopes
+each order node to that window's `{window}.zarr` overviews, so one call
+still opens a store mixing windowed and unwindowed products.
 
 ### `role` is per *object*, never per node
 
@@ -241,6 +249,16 @@ third `"mixed"` state; this reader will not synthesize one. Selection
 helpers (source-vs-overview, "finest at or above order k") key on per-leaf
 `role`, never on node names and never on a node-level attr.
 
+Concretely: every order node's dataset carries `attrs["zagg_objects"]` —
+one entry per stamped object the open admitted, with the object's own
+`role` (absence on disk reads as `"source"`, per the spec) and, for
+overviews, its full `zagg_overview` provenance block (the D11 companions:
+source cell order, per-field `class`/`method`/`nan_policy`). The contract
+is enforced strictly on open: a third `role` value, a missing provenance
+block, an unknown `zagg-overview` spec revision, or an off-order overview
+all raise rather than guess. Unstamped overview prefixes are debris and
+skipped (D4), exactly as for leaves.
+
 ### Source is not a single order — uniqueness is per (shard, window)
 
 D24 makes resolution heterogeneity *regional*, so `"source"` leaves can
@@ -257,11 +275,13 @@ sit at several orders in one product tree
 A product with o19 polar shards and o17 mid-latitude shards therefore has
 `{product}/19` *and* `{product}/17` carrying `role: "source"` leaves —
 "the source node" is not a well-formed request. Helpers are defined over
-the *set* of source orders: "the finest source order at or above k",
-"every order carrying source", never "the one source node". This is the
-same fact the computed-compose rule below rests on (a D24-heterogeneous
-product has no complete single-order Dataset precisely because its source
-spans orders).
+the *set* of source orders: `source_orders` / `overview_orders` (every
+stored order carrying at least one object of that role, keyed on the
+per-object entries) and `finest_source_at` ("the finest source order at or
+above order k" — at-or-coarser numerically), never "the one source node".
+This is the same fact the computed-compose rule below rests on (a
+D24-heterogeneous product has no complete single-order Dataset precisely
+because its source spans orders).
 
 ### Per-node variable sets differ in *both* directions
 
@@ -308,30 +328,39 @@ orders, built on the truncation-join arithmetic (`parent_cells` /
 `join_coarse`) — and is **never materialized as a tree node**. Nodes hold
 stored data; composed views are functions of the tree.
 
-### Node *discovery* is an open 8b question
+### Node *discovery* is manifest declaration
 
-Today's read path structurally cannot see overview nodes. The layout above
-pins where order nodes live, not where the list of them comes from, and
-that gap is real: `open_hive` discovers leaves arithmetically from the root
-MOC (`load_root_coverage` → `_candidate_leaves` → `leaf_path`), and per
-zagg#201's
+The once-open 8b question resolved with the
+[zagg#340](https://github.com/englacial/zagg/issues/340) store
+specification (§4.5): the reader binds **`pyramid.overview.orders`** and
+nothing else. `[]` — or no `pyramid` block at all (pre-pyramid manifests)
+— is the declared-off form and means no other key of the block may be
+assumed; when `orders` is non-empty, `spacing`/`all_time`/`fields` must
+all be present (additional keys are tolerated — the sweep's `materialized`
+actuals, per-field `nan_policy`, `summarize`). The other candidate
+mechanisms lost on spec-first grounds: a **listing walk** is what the
+whole convention exists to avoid, and a **MOC extension** (per-order
+coverage MOCs, the intervals-per-order seam of
+[issue #8](https://github.com/espg/moczarr/issues/8)) stays unbuilt.
+
+Declaration names the *orders*; the *objects* at each order are then named
+arithmetically. Per zagg#201's
 [ruling (5)](https://github.com/englacial/zagg/issues/201#issuecomment-4934715001)
-that MOC is the **source** domain —
+the root MOC is the **source** domain —
 
 > `coverage.moc` is built from the dispatcher's *source-shard* completion
 > list (D8), so arithmetic readers driven by manifest+MOC never visit
 > overview nodes at all — zero opens spent filtering.
 
-— which is a feature for arithmetic reads (no opens wasted on overviews)
-and a hole for enumerating `{order}` children. Candidate mechanisms,
-unresolved: (1) **manifest declaration** — read the pyramid block's
-per-family schedules, which the same ruling calls "a useful walker hint"
-and D22 populates sweep-side; (2) **a listing walk** of the product
-prefix, which the whole convention exists to avoid; (3) **a MOC
-extension** — per-order coverage MOCs alongside the source MOC, the
-deferred intervals-per-order seam already named in `ranges.py`
-([issue #8](https://github.com/espg/moczarr/issues/8)). This resolves with
-zagg#201's actual store shape and the
-[zagg#340](https://github.com/englacial/zagg/issues/340) pyramid-block
-spec, not before; whichever wins, it is a *different* code path from the
-MOC arithmetic phase 8a wraps.
+— which keeps arithmetic source reads overview-blind (a feature), and
+gives the order-node opener its candidates for free: the source shards
+coarsened to the declared ancestor prefix name every node that could hold
+an overview, one stamp GET each — a *different* code path from the leaf
+arithmetic phase 8a wraps, sharing its tiers (D4 stamps, the issue-#4
+empty posture per node, zero chunk reads on the moc default). Two
+consequences worth knowing: without a usable root MOC the order nodes are
+omitted with a warning (overviews are D9 regenerable caches, never
+load-bearing — the source child still opens via the discovery walk, which
+skips the non-decimal overview basenames); and a declared order with no
+stamped object anywhere (not yet swept, or deleted) is likewise omitted
+loudly rather than fabricated empty.

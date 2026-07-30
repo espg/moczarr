@@ -33,6 +33,7 @@ nav:
   - Concepts: concepts.md
   - API reference:
       - open: api/open.md
+      - pyramid: api/pyramid.md
       - products: api/products.md
       - stats: api/stats.md
       - join: api/join.md

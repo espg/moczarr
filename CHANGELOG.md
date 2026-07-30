@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- Resolution (pyramid-order) nodes in `open_store` (issue #15 phase 8b,
+  completing the DataTree reader model): a product whose manifest declares
+  sweep-generated overviews (zagg spec §4.5 — the reader binds
+  `pyramid.overview.orders` and nothing else; `[]`/absent keeps today's
+  flat product node, regression-pinned) opens as `{product}/{order}`
+  children named by stored cell order — the source data as the source-order
+  child (the same `open_hive` Dataset) and one node per declared overview
+  order with a stamped object, each opened by the new
+  `moczarr.pyramid.open_overview_order` (candidates = root-MOC source
+  shards coarsened to the ancestor prefix; D4 stamp admission; issue-#4
+  empty posture per node; zero chunk GETs on the moc default). `role` is
+  surfaced per object under `attrs["zagg_objects"]` (strict §4.3
+  enforcement: closed vocabulary, mandatory `zagg_overview` provenance,
+  spec revision and cell-order checks), per-node variable sets differ in
+  both directions by construction, and the selection helpers
+  (`source_orders`, `overview_orders`, `finest_source_at`, `node_objects`)
+  range over source-order sets keyed on per-object roles. The discovery
+  walk now skips non-decimal overview basenames (`all.zarr`/
+  `{window}.zarr` at ancestor nodes), so MOC-less pyramid stores still
+  open their source. Fixture: a zagg-written overview store
+  (`tools/generate_overview_fixture.py` — production write path + the
+  `sweep_overviews` second pass; zagg sha in the golden sidecar), two
+  overview orders plus per-window and all-time folds
+  ([#15](https://github.com/espg/moczarr/issues/15)).
+
 - `zagg-composition/1` decoding (zagg spec §3, englacial/zagg#346):
   `unpack_composition` (uint64 words to positional u8 lanes, LSB byte
   first; a non-integer or negative `words` raises rather than coercing —

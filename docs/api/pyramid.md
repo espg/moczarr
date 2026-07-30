@@ -1,0 +1,3 @@
+# moczarr.pyramid
+
+::: moczarr.pyramid
