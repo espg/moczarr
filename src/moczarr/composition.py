@@ -4,8 +4,19 @@ A composition field is one dense ``uint64`` word per cell carrying eight
 8-bit lanes of quantized fractions of the cell's **signal stratum**
 (``N_signal`` = the ``of`` digest's total weight — magnitude lives in the
 digest, composition here). Lanes pack **LSB byte first**: lane ``i`` is bits
-``8*i .. 8*i + 7``. An empty stratum packs to ``0`` (the array's fill
-value).
+``8*i .. 8*i + 7``. An empty stratum packs to ``0``.
+
+**Precondition on the array, not on the words.** §3 says that ``0`` is also
+the array's *fill value*, which is what makes an unwritten cell read as "no
+flags occurred" rather than as data. Nothing in this module can check it: the
+functions here take words (and attrs), never the ``zarr.Array``, so a store
+declaring a nonzero ``fill_value`` for a composition field would hand every
+unoccupied cell to :func:`presence` as spurious occurrences — under a
+``fill_value`` of 1, a phantom ``land``. The claims below hold **provided
+the array declares** ``fill_value: 0``, which §3 requires of a conforming
+writer (and which the §7 conformance fixture this package tests against
+does). Callers reading arrays from an untrusted writer should assert
+``array.fill_value == 0`` at the open, alongside the §3.3 attrs gate.
 
 Normative home: zagg ``docs/specification.md`` §3 — currently in review on
 englacial/zagg#346 (branch ``claude/340-store-spec``; references confirmed
@@ -138,7 +149,10 @@ def presence(words) -> np.ndarray:
     """Per-lane occurrence flags — ``lane > 0``, ``(N, 8) bool``.
 
     Exact at **every** ``n_signal``, through arbitrary merge chains, by the
-    presence floor (spec §3.2: any nonzero count quantizes to at least 1).
+    presence floor (spec §3.2: any nonzero count quantizes to at least 1) —
+    exact *for written cells*, and for unwritten ones only if the array
+    declares ``fill_value: 0`` as §3 requires (see the module docstring: this
+    function sees words, never the array, so it cannot check that itself).
     Positional columns, as in :func:`unpack_composition`.
     """
     return unpack_composition(words) > 0
