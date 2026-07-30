@@ -24,8 +24,12 @@ attrs block (§3.3) declares ``lanes`` (names in bit order), ``of`` (the
 sibling digest field whose total weight is ``N_signal``), and ``threshold``
 (the committed signal cut). :func:`unpack_composition` therefore returns
 positional lanes only; name them via :func:`named_lanes`, which binds to a
-:func:`parse_composition_attrs`-validated block. The spec gate is strict —
-a future ``zagg-composition/2`` is adopted deliberately, never half-parsed.
+:func:`parse_composition_attrs`-validated block. The spec gate is strict on
+both halves — a future ``zagg-composition/2`` is adopted deliberately, never
+half-parsed, and for ``/1`` the declared ``lanes`` must be *exactly* the §3.1
+order (:data:`COMPOSITION_LANES`), since §3.3 permits no other. A permuted
+declaration is a non-conforming store, not a relabeling instruction: binding
+it would decode every lane under the wrong name.
 
 Deliberately absent: a read-side merge. The §3.4 merge law is a write/rollup
 monoid over ``(word, n_signal)`` pairs and stays zagg-owned; moczarr
@@ -40,8 +44,23 @@ import numpy as np
 
 #: Spec string of the composition attrs block this module decodes.
 COMPOSITION_SPEC = "zagg-composition/1"
+#: Spec §3.1 lane names in bit order (LSB byte first) — five per-surface
+#: marginals in ``signal_conf_ph`` column order, then the three level lanes.
+#: §3.3 makes this the *exact* value a ``/1`` block declares, so
+#: :func:`parse_composition_attrs` refuses any other order rather than bind a
+#: store whose declaration and packed bit order disagree.
+COMPOSITION_LANES = (
+    "land",
+    "ocean",
+    "sea_ice",
+    "land_ice",
+    "inland_water",
+    "low",
+    "med",
+    "high",
+)
 #: Lane count of a ``/1`` word (eight u8 lanes in a uint64).
-COMPOSITION_LANE_COUNT = 8
+COMPOSITION_LANE_COUNT = len(COMPOSITION_LANES)
 
 
 def unpack_composition(words) -> np.ndarray:
@@ -92,9 +111,11 @@ def parse_composition_attrs(attrs: Mapping) -> dict:
 
     Strict by design, unlike the tolerant coverage caches: the word is data,
     not an index, so a reader that cannot bind it correctly must say so
-    rather than degrade. Raises ``ValueError`` on a missing/malformed block
-    and on any spec other than ``zagg-composition/1`` — a future revision is
-    adopted deliberately, never half-parsed (§3.3 conformance rule).
+    rather than degrade. Raises ``ValueError`` on a missing/malformed block,
+    on any spec other than ``zagg-composition/1`` — a future revision is
+    adopted deliberately, never half-parsed (§3.3 conformance rule) — and on
+    a ``/1`` block whose ``lanes`` are anything but :data:`COMPOSITION_LANES`,
+    which §3.3 fixes as the exact ``/1`` value.
 
     Returns ``{"lanes": tuple[str, ...], "of": str, "threshold": int}``:
     ``lanes`` names the bit-order lanes (LSB byte first), ``of`` names the
@@ -120,6 +141,14 @@ def parse_composition_attrs(attrs: Mapping) -> dict:
             f"composition.lanes must be {COMPOSITION_LANE_COUNT} unique names in bit order, "
             f"got {lanes!r}"
         )
+    if tuple(lanes) != COMPOSITION_LANES:
+        raise ValueError(
+            f"non-conforming {COMPOSITION_SPEC} store: §3.3 fixes composition.lanes at "
+            f"exactly the §3.1 order {list(COMPOSITION_LANES)}, but this array declares "
+            f"{list(lanes)}. The declaration and the packed bit order disagree and the "
+            f"store says nothing about which is wrong, so binding it would relabel every "
+            f"lane silently"
+        )
     of = block.get("of")
     if not isinstance(of, str) or not of:
         raise ValueError(f"composition.of must name the sibling digest field, got {of!r}")
@@ -134,8 +163,10 @@ def named_lanes(words, attrs: Mapping) -> dict[str, np.ndarray]:
     The binding step over :func:`unpack_composition`: lane order comes from
     the validated ``composition.lanes`` attr (via
     :func:`parse_composition_attrs`), so no caller ever indexes by a
-    hardcoded position — zagg's default lane order is the writer's, not a
-    reader assumption.
+    hardcoded position and a future revision that re-means the bytes needs no
+    change here. For ``/1`` that declaration is gated to the §3.1 order, so
+    the mechanism is order-driven while the accepted values are not
+    open-ended.
     """
     lanes = unpack_composition(words)
     names = parse_composition_attrs(attrs)["lanes"]

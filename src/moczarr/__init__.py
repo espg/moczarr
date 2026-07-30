@@ -1,6 +1,7 @@
 """moczarr: sparse-DGGS xarray reader for morton-hive zarr stores."""
 
 from moczarr.composition import (
+    COMPOSITION_LANES,
     COMPOSITION_SPEC,
     counts_from_composition,
     named_lanes,
@@ -76,6 +77,7 @@ except ImportError:  # pragma: no cover - version file is generated at build tim
 
 __all__ = [
     "COMMIT_ATTR",
+    "COMPOSITION_LANES",
     "COMPOSITION_SPEC",
     "COVERAGE_SIDECAR",
     "COVERAGE_SPEC",

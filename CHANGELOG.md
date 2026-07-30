@@ -7,9 +7,11 @@
   first), `counts_from_composition` (`round(k*N/255)` — exact for
   `N <= 254`, bounded `±N/510` estimate above), `presence` (`lane > 0`,
   exact at every N by the presence floor), plus the attrs binding —
-  `parse_composition_attrs` (strict `zagg-composition/1` spec gate;
-  extracts `lanes`/`of`/`threshold`) and `named_lanes` (lanes keyed by
-  the attrs-declared names, never a hardcoded order). No read-side merge:
+  `parse_composition_attrs` (strict `zagg-composition/1` gate on both the
+  `spec` marker and — per §3.3, which fixes the `/1` value — the declared
+  `lanes` against the §3.1 order `COMPOSITION_LANES`; extracts
+  `lanes`/`of`/`threshold`) and `named_lanes` (lanes keyed by the
+  attrs-declared names, never a hardcoded order). No read-side merge:
   the §3.4 merge law stays zagg-owned
   ([#20](https://github.com/espg/moczarr/issues/20)).
 
