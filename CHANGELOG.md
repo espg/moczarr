@@ -1,5 +1,21 @@
 # Changelog
 
+## Unreleased
+
+- Multi-product store roots (zagg D19, mortie spec §6.5): `list_products`
+  enumerates the named products of a store root (surfacing `semantic_hash`
+  and `aggregation.yaml` presence); `open_hive(..., product=...)` opens a
+  named product's subtree; a multi-product root opened without `product=`
+  errors with the product names. Bare single-product stores are unchanged
+  ([#11](https://github.com/espg/moczarr/issues/11)).
+- D20 stats sidecars + D22 rollups, read side: `read_stats` (per-leaf
+  record), `read_stats_rollup` (swept fold at any digit node),
+  `stats_sidecar_key`/`stats_sidecar_path` (spec-keyed naming incl. the
+  D23 `{window}.stats.json` / `all` grammar); O11 content verification —
+  `hash_arrays`/`combined_hash`/`verify_arrays` recompute per-array sha256
+  over decoded values against the sidecar record
+  ([#11](https://github.com/espg/moczarr/issues/11)).
+
 ## 0.1.0
 
 First release — the complete phase 0–7 reader from the plan issue
