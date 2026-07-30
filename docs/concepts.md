@@ -127,8 +127,94 @@ One seam: NESTED ids above order 24 exceed the float64-exact integer range
 Fabrication above order 24 currently warns; the 29→24 clip policy lands
 with the resolution-discriminator metadata on the zagg#262 thread.
 
-## Looking ahead
+## The DataTree view: `open_store`
 
-The next reader-model step is a DataTree-shaped `open_store()` — one child
-node per product of a multi-product store, each node an `open_hive`
-dataset ([issue #15](https://github.com/espg/moczarr/issues/15)).
+A multi-product store root (zagg D19, mortie spec §6.5) is a *directory of
+stores*: each product lives under its own named prefix, and every product
+subtree is a complete, unmodified morton-hive store. Two products of one
+store are heterogeneous-schemas-by-construction — different variables,
+different orders, different windows — which is exactly the
+non-alignable-groups case `xarray.DataTree` exists for. `open_store`
+returns that tree:
+
+- **The root node is empty** — no variables, no coordinates, only
+  store-level attrs (`morton_hive_store`: the store root and the product
+  roster). A multi-product root carries no manifest of its own by design.
+- **One child node per product**, named by its product name, each holding
+  exactly the lazy Dataset `open_hive` returns for that product — same
+  index posture, same laziness, same issue-#4 empty-AOI contract, applied
+  *per node*. The product's D19 `semantic_hash` rides on the node's attrs.
+- **A bare single-product store is the valid degenerate form**: a
+  one-child tree (the child named from the manifest's dataset
+  `short_name`), so tooling written against the tree shape works on any
+  store.
+
+Which axes become nodes is a design ruling (zagg's O14,
+[issue #15](https://github.com/espg/moczarr/issues/15)), worth knowing as
+a user because the answer is mostly *no*:
+
+- **Products → nodes.** The only axis that is nodes today.
+- **The window axis is never nodes.** Time stays a per-node dimension:
+  pass `window=` and it scopes the time-windowed (`morton-hive/2`)
+  products, while unwindowed products keep their whole (single) form —
+  one call opens a store that mixes both.
+- **The spatial digit axis is never nodes.** Mirroring the hive digit
+  tree as tree levels would put millions of nodes of metadata client-side
+  for zero query power the MOC arithmetic doesn't already give.
+- **Resolution (pyramid order) will be nodes** — designed below,
+  implemented once zagg's overview sweep ships — but the seamless
+  mixed-order composite is a *computed* view, never a node (next
+  section).
+
+`open_store` is named for its scope, not its return type: `open_datatree`
+is xarray vocabulary for zarr-native hierarchies, which the hive tree
+deliberately is not (zagg's D12 interop hierarchy is `xr.open_datatree`'s
+to open, someday, as a derived cache — the MOC-first opener stays truth).
+
+## Resolution nodes: the design (ahead of implementation)
+
+> **Status: design only — not implemented.** Implementation is gated on
+> the first real overview fixture from zagg's second-pass sweep
+> ([englacial/zagg#201](https://github.com/englacial/zagg/issues/201);
+> its reader-facing decisions are ratified and recorded here so the tree
+> shape is stable before any code lands). The normative pyramid-block /
+> manifest declaration is a spec seam owned by
+> [englacial/zagg#340](https://github.com/englacial/zagg/issues/340) —
+> this reader plans against that spec, not against an implementation in
+> flight. Tracked on
+> [issue #15](https://github.com/espg/moczarr/issues/15) (phase 8b).
+
+When a product carries sweep-generated overviews, the resolution axis
+becomes a second node level under the product:
+
+```
+/                       <- empty root (store-level attrs)
+  {product}/            <- today's product node
+    {order}/            <- one node per stored order, e.g. 8/, 6/, 4/
+```
+
+- **Node layout `{product}/{order}`.** Order nodes are named by the
+  integer cell order they store. The product node itself stays what it is
+  today; on an overview-carrying store the source data becomes the
+  source-order child rather than the product node's own dataset, riding
+  the multiscale-DataTree conventions.
+- **`role` attrs vocabulary.** Every order node declares its provenance
+  in `attrs["role"]`, a closed two-value vocabulary: `"source"` — the
+  writer's native cell order, exactly one per product; `"overview"` — a
+  sweep-generated coarsening of the source (regenerable, D9 cache class).
+  Selection helpers (source-vs-overview, "finest at or above order k")
+  key on `role`, never on node names.
+- **Roster absence is legal per node** (zagg#201's option-A ruling):
+  overview nodes carry only the variables the sweep's aggregation roster
+  rolls up, so sibling order nodes have **heterogeneous variable sets** —
+  a variable present at the source order may be absent at coarser orders,
+  and readers must treat per-node schemas as independent (they already
+  are across products). Absence of a variable at an order is an answer,
+  not an error.
+- **The computed-compose rule.** A D24-heterogeneous product (regionally
+  mixed cell orders) has *no complete single-order Dataset*: the seamless
+  order-k view is a **computed compose** — coarsen-where-finer /
+  passthrough-where-equal over the stored orders, built on the
+  truncation-join arithmetic (`parent_cells` / `join_coarse`) — and is
+  **never materialized as a tree node**. Nodes hold stored data; composed
+  views are functions of the tree.

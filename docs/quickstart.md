@@ -137,6 +137,25 @@ scope. Omitting it on a windowed store raises with the labels that exist:
 ds_2019 = moczarr.open_hive("s3://bucket/windowed-hive", window="2019")
 ```
 
+## Multi-product stores
+
+A multi-product root (one store, several named products) opens as an
+`xarray.DataTree` — an empty root and one lazy child node per product,
+with `open_hive`'s kwargs (`aoi=`, `window=`, ...) forwarded per node.
+`window=` scopes only the time-windowed products, so one call opens a
+store that mixes windowed and unwindowed products:
+
+```python
+tree = moczarr.open_store("tests/data/multiproduct_hive", window="2019")
+tree["atl06"].ds                  # each node = that product's open_hive
+products = moczarr.list_products("tests/data/multiproduct_hive")
+```
+
+A single product still opens flat: `open_hive(root, product="atl06")`.
+A bare single-product store opens as a valid one-child tree. See the
+[concepts page](concepts.md) for the tree's design (which axes become
+nodes — and which never do).
+
 ## Where next
 
 - [Concepts](concepts.md) — the hive tree, coverage tiers, and the lazy
