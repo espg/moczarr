@@ -22,7 +22,7 @@ parent order 6 / child order 8, 16 cells per leaf):
   fields), ``output.pyramid: {orders: [4, 2]}`` → overview cell orders 6 and
   4 under the constant-depth rule (spec §4.4: ``k_cell = c - (s - k)``). The
   D24 field classes split naturally: ``count``/``h_min``/``h_max`` are exact
-  (sum/min/min laws) and roll up; ``h_mean``/``h_sigma``/``h_variance``/
+  (sum/min/max laws) and roll up; ``h_mean``/``h_sigma``/``h_variance``/
   ``h_q25``/``h_q50``/``h_q75`` are ``none``-class and exist ONLY at native
   resolution (option A, the ruled default — the recorded absence lives in the
   manifest's ``pyramid.overview.fields``).
