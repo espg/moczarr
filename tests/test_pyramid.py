@@ -285,27 +285,39 @@ class TestRolesAndVariables:
         # summary / Phase F field, zagg-side) is the expected case, not
         # corruption: the node's schema comes from its own objects.
         copy, _ = _doctored(tmp_path)
-        target = copy / ATL06_OVERVIEW / "6" / "h_extra"
-        (target / "c").mkdir(parents=True)
-        (target / "zarr.json").write_text(
-            json.dumps(
-                {
-                    "zarr_format": 3,
-                    "node_type": "array",
-                    "shape": [16],
-                    "data_type": "float32",
-                    "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [16]}},
-                    "chunk_key_encoding": {"name": "default"},
-                    "fill_value": "NaN",
-                    "codecs": [{"name": "bytes", "configuration": {"endian": "little"}}],
-                    "dimension_names": ["cells"],
-                }
+        # Injected into ALL FOUR objects of node /6, not one: with a single
+        # object, "h_extra" in data_vars is satisfied by xr.concat broadcasting
+        # the variable over the other three as fill — which pins concat
+        # semantics, not option-B tolerance. All four makes the variable real
+        # at every cell of the node, and the finite count says so.
+        for node_rel in ("4/3/3/1/2", "4/3/3/1/4", "4/3/3/2/1", "4/3/3/2/3"):
+            target = copy / "atl06" / node_rel / "all.zarr" / "6" / "h_extra"
+            (target / "c").mkdir(parents=True)
+            (target / "zarr.json").write_text(
+                json.dumps(
+                    {
+                        "zarr_format": 3,
+                        "node_type": "array",
+                        "shape": [16],
+                        "data_type": "float32",
+                        "chunk_grid": {"name": "regular", "configuration": {"chunk_shape": [16]}},
+                        "chunk_key_encoding": {"name": "default"},
+                        "fill_value": "NaN",
+                        "codecs": [{"name": "bytes", "configuration": {"endian": "little"}}],
+                        "dimension_names": ["cells"],
+                    }
+                )
             )
-        )
-        (target / "c" / "0").write_bytes(np.arange(16, dtype="<f4").tobytes())
+            (target / "c" / "0").write_bytes(np.arange(16, dtype="<f4").tobytes())
         tree = open_store(str(copy), window="2019")
-        assert "h_extra" in tree["atl06"]["6"].ds.data_vars
+        extra = tree["atl06"]["6"].ds["h_extra"]
+        assert extra.sizes["cells"] == 64
+        assert int(np.isfinite(extra.values).sum()) == 64
         assert "h_extra" not in tree["atl06"]["8"].ds.data_vars
+        # ...and it is a DECLARED-derived case, not a manifest-filtered one:
+        # the manifest's pyramid.overview.fields never mentions h_extra.
+        declared = json.loads((copy / "atl06" / "morton_hive.json").read_text())
+        assert "h_extra" not in overview_declaration(declared)["fields"]
 
     def test_helpers_range_over_order_sets(self, root):
         tree = open_store(root, window="2019")
