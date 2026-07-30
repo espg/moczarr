@@ -179,6 +179,20 @@ class TestAoiMask:
     silently dropping exactly the dense regions.
     """
 
+    #: Pyramid fixture (the zagg#262 overview shape) at THREE distinct orders:
+    #: an order-5 parent, its four order-6 children, an order-6 cousin off a
+    #: sibling branch, and an order-3 cousin coarser than everything else —
+    #: so ``distinct_orders`` is ``{3, 5, 6}`` and the finer-direction inner
+    #: loop runs 3 orders for an order-8 member, not 2.
+    PARENT = "-511111"  # order 5
+    COUSIN = "-5121111"  # order 6, disjoint from PARENT's subtree
+    FAR_COUSIN = "-5211"  # order 3, disjoint from both
+
+    def _pyramid(self):
+        parent = self.PARENT
+        decimals = [parent, *[parent + d for d in "1234"], self.COUSIN, self.FAR_COUSIN]
+        return np.sort(_words(*decimals))
+
     def _cells(self, shard):
         # The full depth-1 subtree of `shard` plus one cousin.
         return np.sort(_words(*(shard + d for d in "1234"), "-5121111"))
@@ -212,38 +226,49 @@ class TestAoiMask:
 
     def test_mixed_order_cells_pyramid(self):
         # The issue #8 capability unlock (mortie#116): a pyramid-shaped
-        # cells array — a parent, its four children, and a same-order
-        # cousin in ONE array (the zagg#262 overview-store shape) — masks
-        # correctly against AOIs at several orders. Previously raised.
-        parent = "-511111"  # order 6
-        cells = np.sort(_words(parent, *(parent + d for d in "1234"), "-5121111"))
+        # cells array — a parent, its four children, and cousins at two
+        # OTHER orders in ONE array (the zagg#262 overview-store shape) —
+        # masks correctly against AOIs at several orders. Previously raised.
+        parent, cells = self.PARENT, self._pyramid()
+        from mortie import orders_of
+
+        assert sorted(int(o) for o in np.unique(orders_of(cells))) == [3, 5, 6]
         # AOI = the parent itself: the parent (equal) + all four children.
         keep = coverage.aoi_mask(cells, _words(parent))
         assert keep.sum() == 5
-        assert not keep[np.isin(cells, _words("-5121111"))].any()
+        assert not keep[np.isin(cells, _words(self.COUSIN, self.FAR_COUSIN))].any()
         # AOI = one child: that child (equal) + the parent (contains it).
         keep = coverage.aoi_mask(cells, _words(parent + "2"))
         np.testing.assert_array_equal(np.sort(cells[keep]), np.sort(_words(parent, parent + "2")))
         # AOI two orders finer than the children: containing child + parent.
         keep = coverage.aoi_mask(cells, _words(parent + "231"))
         np.testing.assert_array_equal(np.sort(cells[keep]), np.sort(_words(parent, parent + "2")))
-        # AOI coarser than every cell: the whole -5111 subtree, not the cousin.
+        # AOI coarser than every cell but ONE: the -5111 subtree at the same
+        # order as FAR_COUSIN — which is a different order-3 word, so it is
+        # excluded by the equal-order compare, not by the finer-direction loop.
         keep = coverage.aoi_mask(cells, _words("-5111"))
         assert keep.sum() == 5
-        assert not keep[np.isin(cells, _words("-5121111"))].any()
+        assert not keep[np.isin(cells, _words(self.COUSIN, self.FAR_COUSIN))].any()
+        # AOI = the order-3 far cousin itself: only that cell.
+        keep = coverage.aoi_mask(cells, _words(self.FAR_COUSIN))
+        np.testing.assert_array_equal(cells[keep], _words(self.FAR_COUSIN))
         # Disjoint AOI keeps nothing.
         assert coverage.aoi_mask(cells, _words("4331422")).sum() == 0
 
     def test_mixed_order_cells_and_members(self):
         # Mixed order on BOTH sides at once: one member equal to a child
         # (keeps it + the containing parent), one finer than the cousin
-        # (keeps the cousin).
-        parent = "-511111"
-        cells = np.sort(_words(parent, *(parent + d for d in "1234"), "-5121111"))
+        # (keeps the cousin). The order-8 member's finer-direction loop
+        # covers all three coarser cell orders {3, 5, 6}.
+        parent, cells = self.PARENT, self._pyramid()
         keep = coverage.aoi_mask(cells, _words(parent + "3", "-51211112"))
         np.testing.assert_array_equal(
-            np.sort(cells[keep]), np.sort(_words(parent, parent + "3", "-5121111"))
+            np.sort(cells[keep]), np.sort(_words(parent, parent + "3", self.COUSIN))
         )
+        # A member inside the order-3 far cousin selects it via the third
+        # inner-loop order.
+        keep = coverage.aoi_mask(cells, _words(self.FAR_COUSIN + "1234"))
+        np.testing.assert_array_equal(cells[keep], _words(self.FAR_COUSIN))
 
     def test_mixed_order_cells_with_points(self):
         # Point cells may ride alongside COARSER area cells in one array
