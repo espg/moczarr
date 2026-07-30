@@ -204,16 +204,22 @@ class TestJoinCoarse:
     def test_mixed_order_coarse_raises(self, ds):
         # A corrupted coarse morton coordinate at two orders must raise, not
         # silently derive the minimum order (5) and mis-attribute the join.
-        # Post mortie#116 (0.9.1) the raise is mortie's own —
-        # infer_order_from_morton names the distinct orders — so the former
-        # moczarr-side guard is gone and the expectation pins mortie's
-        # wording (issue #8).
+        # Post mortie#116 (0.9.1) the DETECTION is mortie's own
+        # (infer_order_from_morton names the distinct orders), re-raised
+        # moczarr-side so the message names the offending side and the remedy
+        # at this API level. The expectation pins MOCZARR's wording: mortie
+        # raises a bare ValueError with no structured type, and this repo's
+        # floor is open-ended, so pinning its prose would go red on a
+        # dependency reword (issue #8).
         o5 = np.asarray(parent_cells(ds, 5).values, dtype=np.uint64)
         o6 = np.asarray(parent_cells(ds, 6).values, dtype=np.uint64)
         mixed = np.array([o5[0], o6[0]], dtype=np.uint64)
         coarse = xr.Dataset({"count": ("cells", [1.0, 2.0])}, coords={"morton": ("cells", mixed)})
-        with pytest.raises(ValueError, match=r"Mixed orders in morton array: \[5, 6\]"):
+        with pytest.raises(ValueError, match=r"coarse 'morton' coordinate is mixed-order") as exc:
             join_coarse(ds, coarse)
+        # mortie's detection is chained, and the orders it named ride through.
+        assert isinstance(exc.value.__cause__, ValueError)
+        assert "5" in str(exc.value) and "6" in str(exc.value)
 
     @pytest.mark.parametrize("fine_kind", ["plain", "moc", "pandas"])
     @pytest.mark.parametrize("coarse_kind", ["plain", "moc", "pandas"])
