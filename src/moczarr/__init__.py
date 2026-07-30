@@ -34,6 +34,7 @@ from moczarr.exceptions import NoCoverageError
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.join import join_coarse, parent_cells
 from moczarr.open import open_hive
+from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.ranges import MortonRanges
 from moczarr.stats import (
     combined_hash,
@@ -90,8 +91,10 @@ __all__ = [
     "fabricate_cell_ids",
     "hash_arrays",
     "is_point_word",
+    "is_product_name",
     "join_coarse",
     "leaf_path",
+    "list_products",
     "load_root_coverage",
     "morton_decimal",
     "morton_word",
@@ -113,6 +116,7 @@ __all__ = [
     "split_leaf_name",
     "stats_sidecar_key",
     "stats_sidecar_path",
+    "validate_product_name",
     "verify_arrays",
     "walk_leaves",
     "warn_if_stale",
