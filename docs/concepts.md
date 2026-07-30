@@ -281,3 +281,29 @@ becomes a second node level under the product:
   truncation-join arithmetic (`parent_cells` / `join_coarse`) — and is
   **never materialized as a tree node**. Nodes hold stored data; composed
   views are functions of the tree.
+- **Node *discovery* is an open 8b question — today's path structurally
+  cannot see overview nodes.** The layout above pins where order nodes
+  live, not where the list of them comes from, and that gap is real:
+  `open_hive` discovers leaves arithmetically from the root MOC
+  (`load_root_coverage` → `_candidate_leaves` → `leaf_path`), and per
+  zagg#201's
+  [ruling (5)](https://github.com/englacial/zagg/issues/201#issuecomment-4934715001)
+  that MOC is the **source** domain —
+
+  > `coverage.moc` is built from the dispatcher's *source-shard*
+  > completion list (D8), so arithmetic readers driven by manifest+MOC
+  > never visit overview nodes at all — zero opens spent filtering.
+
+  — which is a feature for arithmetic reads (no opens wasted on
+  overviews) and a hole for enumerating `{order}` children. Candidate
+  mechanisms, unresolved: (1) **manifest declaration** — read the pyramid
+  block's per-family schedules, which the same ruling calls "a useful
+  walker hint" and D22 populates sweep-side; (2) **a listing walk** of the
+  product prefix, which the whole convention exists to avoid; (3) **a MOC
+  extension** — per-order coverage MOCs alongside the source MOC, the
+  deferred intervals-per-order seam already named in `ranges.py`
+  ([issue #8](https://github.com/espg/moczarr/issues/8)). This resolves
+  with zagg#201's actual store shape and the
+  [zagg#340](https://github.com/englacial/zagg/issues/340) pyramid-block
+  spec, not before; whichever wins, it is a *different* code path from the
+  MOC arithmetic phase 8a wraps.
