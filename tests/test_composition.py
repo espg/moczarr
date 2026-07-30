@@ -324,6 +324,15 @@ class TestStoreReadBinding:
         empty = np.setdiff1d(np.arange(16), list(self.EXPECTED_N))
         assert not words[empty].any()  # fill value everywhere unoccupied
 
+    def test_fill_value_is_zero(self, fixture_array):
+        # presence()'s exactness on UNWRITTEN cells is a precondition on the
+        # array, not a property of the words (module docstring): a nonzero
+        # fill_value would make every unoccupied cell read as spurious
+        # occurrences. §3 requires 0 of a conforming writer; pin that the §7
+        # fixture declares it, since the assertion above rests on it.
+        assert int(fixture_array.fill_value) == 0
+        assert fixture_array.dtype == np.uint64
+
     def test_counts_bind_to_the_of_weights(self, fixture_array):
         # threshold=2 ⇒ the three level lanes partition the signal stratum
         # exactly (spec §3.1), and every n here is <= 254 ⇒ recovery is exact:
