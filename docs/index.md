@@ -19,9 +19,10 @@ What you get:
   time-window scoping resolved through coverage metadata, not object
   listings.
 - **`open_store()`** — a multi-product store root as one
-  `xarray.DataTree`: an empty root plus one lazy child node per product
-  (heterogeneous schemas welcome), with `open_hive`'s kwargs forwarded
-  per node.
+  `xarray.DataTree`: an empty root plus one child node per product —
+  each exactly that product's `open_hive` Dataset, so the read behavior
+  is `open_hive`'s (heterogeneous schemas welcome), with its kwargs
+  forwarded per node.
 - **A MOC-backed lazy index** (the default) — the row domain held as an
   interval set built from the same coverage arithmetic that selected the
   leaves; the on-disk cell arrays are never read, and the `morton`

@@ -142,8 +142,12 @@ returns that tree:
   roster). A multi-product root carries no manifest of its own by design.
 - **One child node per product**, named by its product name, each holding
   exactly the lazy Dataset `open_hive` returns for that product — same
-  index posture, same laziness, same issue-#4 empty-AOI contract, applied
-  *per node*. The product's D19 `semantic_hash` rides on the node's attrs.
+  index posture, same read behavior, same issue-#4 empty-AOI contract,
+  applied *per node*. "Lazy" is `open_hive`'s laziness, not a stronger
+  promise: on the moc default the cell arrays are never read and `morton`
+  is fabricated on demand, while a node spanning several leaves
+  concatenates their data variables at open (the tree layer adds no reads
+  of its own). The product's D19 `semantic_hash` rides on the node's attrs.
 - **A bare single-product store is the valid degenerate form**: a
   one-child tree (the child named from the manifest's dataset
   `short_name`), so tooling written against the tree shape works on any

@@ -3,9 +3,10 @@
 ## Unreleased
 
 - `open_store`: a store root as one `xarray.DataTree` — empty root
-  (store-level attrs), one lazy child node per product (each exactly that
-  product's `open_hive` Dataset, `semantic_hash` on the node attrs),
-  kwargs forwarded per node with `window=` reaching only the windowed
+  (store-level attrs), one child node per product (each exactly that
+  product's `open_hive` Dataset — its laziness, no stronger promise —
+  with `semantic_hash` on the node attrs), kwargs forwarded per node
+  with `window=` reaching only the windowed
   products, a `products=[...]` filter, and the bare single-product store
   as a valid one-child tree. xarray floor is now `>=2026.01.0` — bisected,
   not read off a changelog: `xr.Coordinates.from_xindex` (2025.03.0) is

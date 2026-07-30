@@ -140,8 +140,9 @@ ds_2019 = moczarr.open_hive("s3://bucket/windowed-hive", window="2019")
 ## Multi-product stores
 
 A multi-product root (one store, several named products) opens as an
-`xarray.DataTree` — an empty root and one lazy child node per product,
-with `open_hive`'s kwargs (`aoi=`, `window=`, ...) forwarded per node.
+`xarray.DataTree` — an empty root and one child node per product, each
+exactly that product's `open_hive` Dataset, with `open_hive`'s kwargs
+(`aoi=`, `window=`, ...) forwarded per node.
 `window=` scopes only the time-windowed products, so one call opens a
 store that mixes windowed and unwindowed products:
 
