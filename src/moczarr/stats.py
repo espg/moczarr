@@ -23,6 +23,10 @@ at the declared dtype, after decompression — never stored object bytes,
 which churn on codec/library upgrades. :func:`hash_arrays` recomputes it;
 :func:`verify_arrays` compares against the sidecar's recorded hashes
 ("intended identical" — the semantic hash — vs "actually byte-identical").
+O11's scope includes the ragged (vlen-bytes) arrays, whose decoded elements
+are Python objects rather than a flat buffer — see :func:`hash_arrays` for
+the length-prefixed vlen recipe this reader defines (there is no zagg O11
+writer yet, so the recipe is pinned here and by the committed fixture).
 """
 
 from __future__ import annotations
@@ -183,11 +187,16 @@ def read_stats_rollup(
     D20 stats record — the same shape :func:`read_stats` returns, folded
     over every leaf beneath the node.
 
-    Cache posture (matching the sweep's own reader): missing, unparsable,
-    wrong-spec/family, or stamp-less objects all read as ``None`` with a
-    debug log — a rollup is a regenerable derived artifact (D9), and its
-    generation stamp makes staleness *detectable, not prevented*; consumers
-    needing exactness fold leaf records themselves.
+    Cache posture (mirroring the sweep's own reader, ``zagg.sweep._read_rollup``):
+    missing, unparsable, wrong-spec/family, or stamp-less objects all read as
+    ``None`` with a debug log — a rollup is a regenerable derived artifact
+    (D9), and its generation stamp makes staleness *detectable, not
+    prevented*; consumers needing exactness fold leaf records themselves.
+    "Stamp-less" is checked to the same depth as the sweep (a ``generation``
+    dict with an integer ``n_leaves``), with one deliberate divergence: the
+    sweep requires only that ``payload`` be *present*, this requires it to be
+    a mapping — the documented ``envelope["payload"]`` contract, and cheaper
+    to enforce here than to guard at every consumer.
     """
     handle = _resolve_store(store_root, store, store_kwargs)
     manifest = read_manifest(store_root, store=handle)
@@ -198,16 +207,50 @@ def read_stats_rollup(
     envelope = _read_tolerant(handle, key, "stats rollup")
     if envelope is None:
         return None
+    generation = envelope.get("generation")
     usable = (
         envelope.get("spec") == SWEEP_SPEC
         and envelope.get("family") == "stats"
-        and isinstance(envelope.get("generation"), dict)
+        and isinstance(generation, dict)
+        and isinstance(generation.get("n_leaves"), int)
         and isinstance(envelope.get("payload"), dict)
     )
     if not usable:
         logger.debug(f"stats rollup at {key} has an unknown spec/shape; reading as absent")
         return None
     return envelope
+
+
+#: Width of the O11 vlen recipe's per-element length prefix (uint64, LE).
+VLEN_LENGTH_PREFIX = 8
+
+
+def _element_bytes(element: object) -> bytes:
+    """One vlen cell's decoded payload as raw little-endian bytes.
+
+    ``variable_length_bytes`` cells decode to :class:`bytes` (zagg's ragged
+    digest payloads and their ``{field}_locations`` sibling are both this
+    dtype — the location words are raw little-endian ``uint64`` bytes). The
+    other object-dtype element kinds are covered for the typed
+    ``vlen-array<T>`` / vlen-utf8 futures; anything else RAISES rather than
+    hashing a ``repr`` — a digest that is silently wrong is worse here than
+    no digest at all.
+    """
+    if element is None:
+        return b""  # an unwritten vlen cell can decode as None, not b""
+    if isinstance(element, bytes | bytearray | memoryview):
+        return bytes(element)
+    if isinstance(element, str):
+        return element.encode()
+    if isinstance(element, np.ndarray):
+        values = np.ascontiguousarray(element)
+        if values.dtype.byteorder == ">":
+            values = values.astype(values.dtype.newbyteorder("<"))
+        return values.tobytes()
+    raise ValueError(
+        f"vlen element of type {type(element).__name__} has no O11 byte recipe "
+        f"(expected bytes, str, ndarray, or None)"
+    )
 
 
 def hash_arrays(
@@ -220,14 +263,35 @@ def hash_arrays(
     """O11 per-array content hashes of one leaf, recomputed from decoded values.
 
     Opens the leaf as vanilla zarr v3 and hashes EVERY array beneath it
-    (data fields, ``morton``, every coordinate — the resolved O11 scope),
-    keyed by the array's path relative to the leaf root (e.g.
-    ``"8/morton"``). Each hash is sha256 over the array's full decoded
+    (data fields, the ragged vlen arrays, ``morton``, every coordinate — the
+    resolved O11 scope), keyed by the array's path relative to the leaf root
+    (e.g. ``"8/morton"``). Each hash is sha256 over the array's full decoded
     contents as raw **C-order little-endian** bytes at the declared dtype —
     decoded values, never stored object bytes, so codec/packaging changes
     (ShardingCodec inner chunks, compressor upgrades) are invisible by
     construction while any value change flips the hash (exact bytes, no
     float tolerance — the PR #282 class is meant to flip it).
+
+    **Vlen (ragged) recipe.** An object-dtype array (zagg's
+    ``variable_length_bytes`` ragged payloads, issue #209, and their
+    ``{field}_locations`` sibling, issue #87) has no flat buffer to hash —
+    ``ndarray.tobytes()`` on it serializes *pointer addresses*, which are
+    per-process garbage. Such an array is instead hashed as, in flat C order
+    over cells::
+
+        sha256( for each cell:  uint64_le(len(payload)) || payload )
+
+    where ``payload`` is that cell's decoded bytes (:func:`_element_bytes`)
+    — for zagg that is exactly the little-endian buffer
+    ``write._ragged_payload_bytes`` stores. The length prefix is what makes
+    the digest injective (without it ``[b"ab", b"c"]`` and ``[b"a", b"bc"]``
+    collide), and an empty cell contributes its zero length, so a ``b""``
+    fill is distinguishable from a missing cell only by position — which is
+    the intent: the digest covers the cell grid, not just the payloads.
+
+    zagg has **no O11 writer yet**, so this recipe (and the committed
+    fixture's golden) is the only artifact of the choice: zagg's writer must
+    adopt it verbatim when it lands (spec home: englacial/zagg#340).
     """
     import zarr
     from zarr.storage import ObjectStore
@@ -241,6 +305,14 @@ def hash_arrays(
         if not isinstance(node, zarr.Array):
             continue
         values = np.ascontiguousarray(node[...])
+        if values.dtype.kind == "O":  # vlen: length-prefixed payloads, C order
+            digest = hashlib.sha256()
+            for element in values.ravel(order="C"):
+                payload = _element_bytes(element)
+                digest.update(len(payload).to_bytes(VLEN_LENGTH_PREFIX, "little"))
+                digest.update(payload)
+            hashes[key] = digest.hexdigest()
+            continue
         if values.dtype.byteorder == ">":  # canonical form is little-endian
             values = values.astype(values.dtype.newbyteorder("<"))
         hashes[key] = hashlib.sha256(values.tobytes()).hexdigest()
@@ -258,20 +330,37 @@ def combined_hash(hashes: dict[str, str]) -> str:
     return hashlib.sha256("\n".join(sorted(hashes.values())).encode()).hexdigest()
 
 
+#: Reserved (non-array) key of a FLAT ``content_hashes`` mapping. O11's
+#: wording is "``{array_name: hash}`` plus one combined hash", so the flat
+#: encoding a writer reaches for is arrays and combined in one mapping;
+#: ``combined`` is not a legal zarr array name in any zagg output, so
+#: reserving it costs nothing.
+_COMBINED_KEY = "combined"
+
+
 def _recorded_hashes(sidecar: dict | None) -> tuple[dict[str, str] | None, str | None]:
     """``(per-array, combined)`` recorded in a sidecar's ``content_hashes``.
 
     Accepts both shapes the D20/O11 wording admits — the nested
     ``{"arrays": {name: hash}, "combined": hash}`` envelope (what the
-    committed fixture pins) and a flat ``{name: hash}`` mapping — so the
-    verifier keeps working whichever zagg's writer lands.
+    committed fixture pins) and a flat ``{name: hash, "combined": hash}``
+    mapping — so the verifier keeps working whichever zagg's writer lands.
+    In the flat shape the reserved :data:`_COMBINED_KEY` is popped rather
+    than read as a phantom array name (which would report an intact leaf as
+    mismatched on ``combined``); a flat record carrying ONLY that key has no
+    per-array hashes, so it reads as unverifiable (``None``), not tampered.
+    An EMPTY ``arrays`` mapping reads the same way, for the same reason: the
+    docstring's own framing is that unverifiable is distinct from verified,
+    so "nothing was recorded" must not report as "tampered".
     """
     content = (sidecar or {}).get("content_hashes")
     if not isinstance(content, dict) or not content:
         return None, None
     if isinstance(content.get("arrays"), dict):
-        return dict(content["arrays"]), content.get("combined")
-    return dict(content), None
+        return (dict(content["arrays"]) or None), content.get(_COMBINED_KEY)
+    flat = dict(content)
+    combined = flat.pop(_COMBINED_KEY, None)
+    return (flat or None), combined
 
 
 def verify_arrays(
@@ -299,6 +388,7 @@ def verify_arrays(
             "recorded": ...,          # sidecar's per-array hashes (or None)
             "recorded_combined": .,   # sidecar's combined hash (or None)
             "match": ...,             # True/False; None = nothing recorded
+            "combined_match": ...,    # True/False; None = none recorded
             "mismatched": [...],      # array names differing (either side)
         }
 
@@ -306,6 +396,15 @@ def verify_arrays(
     ``content_hashes`` — "nothing to verify against" is a distinct answer
     from "verified" (the conservative posture zagg's dedup takes: an
     unverifiable leaf is never a hit).
+
+    ``combined_match`` is the recorded-vs-recomputed combined-hash verdict,
+    kept as its own greppable signal because it fails for a DIFFERENT reason
+    than a per-array mismatch: the combined hash is derived from the
+    per-array digests, so "every array matches but combined differs" is not
+    a data problem at all — it is proof the writer's combined serialization
+    diverges from :func:`combined_hash` (the choice this PR asks zagg to
+    freeze). A ``False`` there also forces ``match`` to ``False``: a leaf
+    whose recorded combined hash disagrees is never reported verified.
     """
     handle = _resolve_store(store_root, store, store_kwargs)
     manifest = read_manifest(store_root, store=handle)
@@ -317,19 +416,24 @@ def verify_arrays(
     sidecar = _read_tolerant(handle, stats_sidecar_path(rel, manifest["spec"]), "stats sidecar")
     recorded, recorded_combined = _recorded_hashes(sidecar)
     computed = hash_arrays(store_root, rel, store=handle)
+    combined = combined_hash(computed)
     mismatched: list[str] = []
     match: bool | None = None
     if recorded is not None:
         names = sorted(set(computed) | set(recorded))
         mismatched = [n for n in names if computed.get(n) != recorded.get(n)]
         match = not mismatched
+    combined_match = None if recorded_combined is None else recorded_combined == combined
+    if match and combined_match is False:
+        match = False  # a disagreeing combined hash is never "verified"
     return {
         "leaf": rel,
         "computed": computed,
-        "combined": combined_hash(computed),
+        "combined": combined,
         "recorded": recorded,
         "recorded_combined": recorded_combined,
         "match": match,
+        "combined_match": combined_match,
         "mismatched": mismatched,
     }
 
@@ -338,6 +442,7 @@ __all__ = [
     "STATS_ROLLUP_NAME",
     "STATS_SIDECAR_NAME",
     "SWEEP_SPEC",
+    "VLEN_LENGTH_PREFIX",
     "combined_hash",
     "hash_arrays",
     "read_stats",

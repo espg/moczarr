@@ -48,16 +48,26 @@ def fabricate_cell_ids(
     """Exact NESTED ``uint64`` cell ids of packed morton words.
 
     Pure function (mortie/numpy only): ``mort2healpix`` on the packed words.
-    The AREA words must share one order (mortie rejects mixed orders — fine
-    for hive stores, whose cell coordinates are single-order at the
-    manifest's ``cell_order``). POINT-kind words (spec §1 suffix
-    ``48..=63``) may ride alongside order-29 areas — mixed kinds are
-    well-formed per §4 — and clip to order
-    :data:`FLOAT64_EXACT_MAX_ORDER` for the NESTED view: a point has no
-    area claim, so coarser membership is ordinary truncation (§4), keeping
-    every fabricated id float64-exact. Area cells NEVER clip. Because
-    mortie's kernel takes one order per call, points (clipped to 24) and
-    areas fabricate separately and reassemble by position.
+    The AREA words must share one order — the invariant enforced here, and
+    the whole of it (issue #8): NESTED has no mixed-order form, so a
+    mixed-order area coordinate (a pyramid/overview store, zagg#262) cannot
+    fabricate a NESTED view at all; fabricate per level, or keep a
+    multi-order encoding (UNIQ-style) instead. Hive stores are fine: their
+    cell coordinates are single-order at the manifest's ``cell_order``.
+
+    POINT-kind words (spec §1 suffix ``48..=63``) are exempt from that
+    invariant and may ride alongside AREA words at ANY order (the pre-flip
+    uniformity guard happened to admit only order-29 areas; the area-order
+    check that replaced it does not care — same widening ``aoi_mask`` got).
+    Points clip to order :data:`FLOAT64_EXACT_MAX_ORDER` for the NESTED
+    view: a point has no area claim, so coarser membership is ordinary
+    truncation (§4), keeping every fabricated id float64-exact. Area cells
+    NEVER clip. A mixed-KIND result is therefore deliberately two-nside —
+    the points sit at the order-24 clip while the areas keep their own
+    order — which is the §4 posture, not an oversight; a consumer that
+    needs one nside fabricates the kinds separately. Because mortie's kernel
+    takes one order per call, points (clipped to 24) and areas fabricate
+    separately and reassemble by position anyway.
 
     Parameters
     ----------
@@ -67,7 +77,10 @@ def fabricate_cell_ids(
         Expected HEALPix order of the words' ENCODING. When given it is
         cross-checked against the order mortie derives from the area words
         (and against 29 for point words — their encoded order, not the
-        clipped NESTED order) and a mismatch raises ``ValueError``.
+        clipped NESTED order) and a mismatch raises ``ValueError``. Both
+        checks apply to a mixed-kind array, so ``level`` is only satisfiable
+        there when the areas are themselves at order 29; omit it when points
+        ride alongside coarser areas.
     _stacklevel : int, optional
         Frame depth for the above-order-24 ``UserWarning`` so it lands on
         user code. Defaults to ``3`` (a direct call); the ``open_hive`` path
@@ -87,11 +100,26 @@ def fabricate_cell_ids(
         if level is not None and level > FLOAT64_EXACT_MAX_ORDER:
             _warn_above_float64_exact(level, _stacklevel)
         return np.empty(0, dtype=np.uint64)
-    from mortie import mort2healpix
+    from mortie import mort2healpix, orders_of
 
     from moczarr.convention import is_point_word, point_to_area29
 
     point_mask = np.asarray(is_point_word(words))
+    # Mixed-order AREA words reject explicitly (issue #8): mortie 0.9.1+
+    # converts mixed orders in its geo kernels (mortie#116), but there IS no
+    # mixed-order NESTED form for AREA cells (the zagg#262 rationale for
+    # storing morton only). Point words are exempt and unconstrained in the
+    # order of the areas they ride with: they are order-29 encodings that clip
+    # to 24 by design (§4), so a mixed-KIND view is two-nside either way — the
+    # message therefore claims the area-order invariant, not single-nside.
+    area_orders = np.unique(orders_of(words[~point_mask]))
+    if area_orders.size > 1:
+        raise ValueError(
+            f"mixed-order area words (orders {[int(o) for o in area_orders]}): NESTED has "
+            f"no mixed-order form, so the AREA words of a cell_ids view must share one "
+            f"order. Fabricate each order separately (split by mortie.orders_of), or keep "
+            f"a multi-order encoding (UNIQ-style) instead of a NESTED view."
+        )
     if not point_mask.any():
         ids, order = mort2healpix(words)
         if level is not None and level != order:

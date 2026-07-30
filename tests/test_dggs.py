@@ -78,7 +78,12 @@ class TestMortonInfo:
 
     def test_geographic_ignores_level_but_rejects_mixed_orders(self):
         # Words carry their own depth: the info's level is not consulted on
-        # the ids->geo direction, but mortie rejects mixed orders per call.
+        # the ids->geo direction. Mixed orders reject as THIS SURFACE's
+        # one-order-per-call contract (issue #8) — not as a kernel limitation
+        # (mortie 0.9.1+ converts mixed-order input natively, mortie#116) and
+        # not as a level claim, since the very next line shows level being
+        # ignored. The domain-wide "one order, and it IS level" contract lives
+        # in MortonIndex (see TestMortonIndex::test_domain_contract).
         info = dggs.MortonInfo(level=3)
         words = _golden_family()  # order 6, deliberately not the info's level
         lon, lat = info.cell_ids2geographic(words)
@@ -87,8 +92,13 @@ class TestMortonInfo:
             [convention.morton_word(GOLDEN), convention.morton_word(GOLDEN + "11")],
             dtype=np.uint64,
         )
-        with pytest.raises(ValueError, match="[Mm]ixed orders"):
+        with pytest.raises(ValueError, match=r"orders \[6, 8\].*one order per call"):
             info.cell_ids2geographic(mixed)
+        # Same contract on the other cell-reading surface — the bypass the
+        # review found (issue #8 fold): mort2polygon would emit rings at both
+        # orders rather than refusing.
+        with pytest.raises(ValueError, match=r"cell_boundaries reads one order per call"):
+            info.cell_boundaries(mixed)
 
     def test_cell_boundaries_centroids(self):
         info = dggs.MortonInfo(level=6)
@@ -174,10 +184,47 @@ class TestMortonInfo:
             dggs.MortonInfo(level=6).zoom_to(_golden_family(), 30)
 
     def test_zoom_to_finer_empty(self):
-        # A zero-cell selection zooms cleanly to (0, 4**diff), not np.stack raising.
+        # A zero-cell selection zooms cleanly to (0, 4**diff), not np.stack
+        # raising. No words means no order to read, so the trailing dimension
+        # counts from self.level — the only reference left.
         empty = np.asarray([], dtype=np.uint64)
         children = dggs.MortonInfo(level=6).zoom_to(empty, 8)
         assert children.shape == (0, 16) and children.dtype == np.uint64
+
+    def test_zoom_to_rejects_mixed_orders(self):
+        # (a) of the review's zoom_to finding: mixed input used to die inside
+        # numpy ("all input arrays must have the same shape") because
+        # generate_morton_children fans out 4 children from the order-6 word
+        # and 64 from the order-8 one. Now it is the same one-order-per-call
+        # contract cell_ids2geographic states.
+        mixed = np.asarray(
+            [convention.morton_word(GOLDEN), convention.morton_word(GOLDEN + "11")],
+            dtype=np.uint64,
+        )
+        with pytest.raises(ValueError, match=r"zoom_to reads one order per call"):
+            dggs.MortonInfo(level=6).zoom_to(mixed, 9)
+
+    def test_zoom_to_keys_on_word_order_not_level(self):
+        # (b): the branch used to key on self.level while the kernel keyed on
+        # each word's own order, so off-level words took the wrong path. Both
+        # concrete cases from the review:
+        words = np.asarray(
+            [convention.morton_word(GOLDEN + "11"), convention.morton_word(GOLDEN + "12")],
+            dtype=np.uint64,
+        )  # order 8
+        # A COARSENING request no longer lands in the finer branch (mortie used
+        # to reject it: "target_order (5) must be >= parent_order (8)").
+        parents = dggs.MortonInfo(level=3).zoom_to(words, 5)
+        assert parents.shape == words.shape
+        assert _decimals(parents) == [d[:7] for d in _decimals(words)]  # "-5" + 5 digits
+        # And the trailing dimension counts from the words' order, so it agrees
+        # with the kernel's own fan-out instead of 4**(9 - self.level).
+        children = dggs.MortonInfo(level=6).zoom_to(words, 9)
+        assert children.shape == (2, 4)
+        for row, parent in zip(children, _decimals(words)):
+            assert all(d.startswith(parent) for d in _decimals(row))
+        # Same order as the words is the identity, whatever self.level says.
+        np.testing.assert_array_equal(dggs.MortonInfo(level=3).zoom_to(words, 8), words)
 
 
 class TestMortonIndex:
@@ -211,6 +258,36 @@ class TestMortonIndex:
         assert "cell_ids" in ds.coords and "cell_ids" not in ds.xindexes
         assert repr(index) == "<MortonIndex(level=8, kind=moc)>"
         assert index._repr_inline_(80) == "MortonIndex(level=8, kind=moc)"
+
+    def test_domain_contract(self):
+        # The bypass the review walked (issue #8 fold, PR #22 Question 2): an
+        # index used to BUILD fine on a mixed-order coordinate, and
+        # cell_boundaries then returned polygons at two cell sizes. Validated
+        # once at construction now — where level is bound to data — so every
+        # read surface inherits it instead of guarding one at a time.
+        mixed = np.asarray(
+            [convention.morton_word(GOLDEN), convention.morton_word(GOLDEN + "11")],
+            dtype=np.uint64,
+        )
+        ds = xr.Dataset(coords={"morton": ("cells", mixed)})
+        for kind in ("pandas", "moc"):
+            with pytest.raises(ValueError, match=r"mixed-order morton domain \(orders \[6, 8\]\)"):
+                dggs.decode(ds, level=6, index_kind=kind)
+        # The other half: uniform, but not at the declared level. An index
+        # binds level to its coordinate — geographic2cell_ids bins at level and
+        # sel_latlon looks the result up here — so an off-level domain would
+        # match nothing, silently.
+        uniform = xr.Dataset(coords={"morton": ("cells", _golden_family())})  # order 6
+        for kind in ("pandas", "moc"):
+            with pytest.raises(ValueError, match="order 6, not the declared level 7"):
+                dggs.decode(uniform, level=7, index_kind=kind)
+        assert dggs.decode(uniform, level=6).dggs.grid_info.level == 6
+
+    def test_moc_passthrough_level_cross_checked(self, serc):
+        # A pre-built MortonMocIndex passes through without a rescan, but its
+        # O(1) cell_order is still cross-checked against the declared level.
+        with pytest.raises(ValueError, match="order 8, not the declared level 7"):
+            dggs.decode(open_hive(serc), level=7, index_kind="moc")
 
     def test_isel_keeps_index(self, serc):
         ds = open_hive(serc, decode=True).isel(cells=[0, 1])
@@ -273,7 +350,19 @@ class TestDecode:
         assert dggs.decode(ds).dggs.grid_info.level == 8
 
     def test_level_option_wins(self, serc):
-        assert dggs.decode(open_hive(serc), level=7).dggs.grid_info.level == 7
+        # The explicit option beats attrs/manifest — its point being to
+        # CORRECT a declared level that disagrees with the stored words.
+        ds = open_hive(serc)
+        ds["morton"].attrs["level"] = 6  # wrong: the words are order 8
+        assert dggs.decode(ds, level=8).dggs.grid_info.level == 8
+
+    def test_level_option_contradicting_the_words_raises(self, serc):
+        # An override that disagrees with the coordinate used to be accepted
+        # silently, leaving an index whose sel/binning direction could never
+        # match its own domain — now the MortonIndex domain contract (issue #8
+        # fold, PR #22 Question 2).
+        with pytest.raises(ValueError, match="order 8, not the declared level 7"):
+            dggs.decode(open_hive(serc), level=7)
 
     def test_wrong_grid_name_raises(self, serc):
         ds = open_hive(serc)

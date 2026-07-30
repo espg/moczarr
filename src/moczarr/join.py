@@ -87,8 +87,10 @@ def _coarse_lookup(coarse) -> tuple[int, Callable]:
     The level derivation: a moc-indexed coarse answers from its interval set
     (``MortonMocIndex.level`` — and ``rank`` is exactly the phase-6b repeated-
     label lookup, no fabrication); any other morton dataset answers from the
-    words themselves (``infer_order_from_morton`` on the coordinate values,
-    positions via a pandas ``get_indexer``). Missing parents map to ``-1``.
+    words themselves (``infer_order_from_morton`` on the coordinate values —
+    which raises on a mixed-order coordinate, mortie#116, re-raised here with
+    the remedy scoped to this API — positions via a pandas ``get_indexer``).
+    Missing parents map to ``-1``.
     """
     import xarray as xr
 
@@ -104,25 +106,26 @@ def _coarse_lookup(coarse) -> tuple[int, Callable]:
     if isinstance(index, MortonMocIndex):
         return index.level, lambda parents: index.ranges.rank(parents, missing=-1)
     import pandas as pd
-    from mortie import clip2order, infer_order_from_morton
+    from mortie import infer_order_from_morton
 
     words = np.asarray(coarse["morton"].values, dtype=np.uint64)
     if words.size == 0:
         raise ValueError("coarse has zero cells — nothing to join")
-    # Single order is enforced, not assumed: infer_order_from_morton returns
-    # the *minimum* order of a mixed array, so an unguarded corrupted coarse
-    # coordinate would derive too coarse a level and silently mis-attribute
-    # (the aoi_mask guard mirrors this check).
-    level = int(infer_order_from_morton(words))
-    if (clip2order(level, words) != words).any():
-        orders = sorted(
-            int(infer_order_from_morton(np.asarray([w], dtype=np.uint64))) for w in np.unique(words)
-        )
+    # Single order is DETECTED by mortie itself (0.9.1+, mortie#116):
+    # infer_order_from_morton raises on a mixed-order array, naming the
+    # distinct orders — a corrupted coarse coordinate can no longer derive
+    # the minimum order silently, so the former moczarr-side clip2order
+    # round-trip guard is gone (issue #8). Only the diagnostic is ours: a
+    # thin re-raise (free on the happy path) names which side is at fault
+    # and the remedy at THIS level — join_coarse needs one order, not the
+    # per-element orders mortie's own message points at.
+    try:
+        level = int(infer_order_from_morton(words))
+    except ValueError as exc:
         raise ValueError(
-            f"coarse 'morton' coordinate is mixed-order (orders {orders}); "
-            f"join_coarse requires single-order coarse cells. Clip or split to "
-            f"one order first."
-        )
+            f"coarse 'morton' coordinate is mixed-order ({exc}); join_coarse requires "
+            f"single-order coarse cells — clip or split the coarse dataset to one order first"
+        ) from exc
     labels = pd.Index(words)
     return level, lambda parents: labels.get_indexer(parents)
 

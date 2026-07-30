@@ -103,11 +103,15 @@ class TestFabricateCellIds:
         assert ids.size == 0 and ids.dtype == np.uint64
 
     def test_mixed_orders_raise(self):
+        # moczarr's OWN error, raised before mortie's kernel sees the words
+        # (issue #8): mortie 0.9.1+ handles mixed orders in its geo kernels,
+        # but NESTED has no mixed-order form — the message must point at
+        # per-level fabrication / multi-order encodings, not a kernel limit.
         from mortie import clip2order
 
         words = np.asarray([GOLDEN_WORD], dtype=np.uint64)
         mixed = np.concatenate([words, clip2order(6, words)])
-        with pytest.raises(ValueError, match="[Mm]ixed"):
+        with pytest.raises(ValueError, match=r"orders \[6, 8\].*no mixed-order form"):
             fabricate_cell_ids(mixed)
 
     def test_order_above_float64_exact_warns(self):
@@ -152,6 +156,25 @@ class TestFabricateCellIds:
         with pytest.warns(UserWarning, match="float64"):  # the area half
             ids = fabricate_cell_ids(words)
         assert ids.tolist() == [NESTED29_NORTH, NESTED24_NORTH, NESTED24_SOUTH, NESTED29_SOUTH]
+
+    def test_point_beside_coarser_area(self):
+        # The path the area-order guard deliberately lets through (issue #8
+        # fold): a point may ride alongside an AREA at ANY order, not just 29
+        # — the guard constrains the area words to ONE order, and one area is
+        # one order. The result is deliberately two-nside per §4: the point
+        # sits at the order-24 clip, the order-8 area keeps order 8.
+        words = [POINT_NORTH_WORD, GOLDEN_WORD]
+        ids = fabricate_cell_ids(words)
+        assert ids.tolist() == [NESTED24_NORTH, GOLDEN_NESTED]
+        # Composition: each kind fabricates exactly as it does alone.
+        assert ids[0] == fabricate_cell_ids([POINT_NORTH_WORD])[0]
+        assert ids[1] == fabricate_cell_ids([GOLDEN_WORD])[0]
+        # `level` cross-checks BOTH kinds, so in this shape it is satisfiable
+        # only when the areas are themselves at order 29 — omit it otherwise.
+        with pytest.raises(ValueError, match="point words' encoded order 29"):
+            fabricate_cell_ids(words, level=8)
+        with pytest.raises(ValueError, match=r"area words' order 8"):
+            fabricate_cell_ids(words, level=29)
 
     def test_point_level_cross_check(self):
         # level checks the ENCODED order: points are order-29 encodings even

@@ -1,14 +1,21 @@
 """D20 stats sidecars, D22 rollups, and the O11 verifier, against the goldens.
 
 The committed ``tests/data/multiproduct_hive`` fixture carries the full
-telemetry surface: ``atl06`` has ``stats.json`` sidecars (with O11
-``content_hashes`` computed independently by the generator — the verifier is
-golden-tested, not self-tested) and hand-folded ``stats.rollup.json``
-objects at the shard nodes and every ancestor; ``atl06_windows`` has
-``stats_{window}.json`` sidecars in all three states (with hashes, without,
-absent). Name arithmetic is pinned across all three spec grammars,
-including the D23 ``{window}.stats.json`` / ``all`` form moczarr will meet
-on ``/3`` stores.
+telemetry surface: ``atl06`` has ``stats.json`` sidecars (with O11 per-array
+``content_hashes`` computed independently by the generator from the written
+chunk bytes — the verifier is golden-tested, not self-tested; the COMBINED
+digest, which the generator does take from ``combined_hash``, is pinned by
+the :data:`FROZEN_COMBINED_4111` literal instead) and hand-folded
+``stats.rollup.json`` objects at the shard nodes and every ancestor;
+``atl06_windows`` has ``stats_{window}.json`` sidecars in all three states
+(with hashes, without,
+absent); ``atl06_ragged`` carries the vlen (ragged) O11 surface — a
+``variable_length_bytes`` digest array plus its ``{field}_locations``
+sibling — so the length-prefixed vlen hash recipe is golden-pinned; and
+``atl06_pg3`` is a ``path_grouping: 3`` store, so the D21 grouped sidecar and
+rollup key arithmetic is exercised rather than only supported. Name
+arithmetic is pinned across all three spec grammars, including the D23
+``{window}.stats.json`` / ``all`` form moczarr will meet on ``/3`` stores.
 """
 
 import json
@@ -30,6 +37,15 @@ from moczarr.stats import (
 
 FIXTURE = Path(__file__).parent / "data" / "multiproduct_hive"
 
+#: The FROZEN O11 combined-hash serialization, as a literal: sha256 of the
+#: sorted per-array hex digests, ``"\n"``-joined, ASCII — for the ``atl06``
+#: fixture's ``4111`` leaf. A literal because both sides of the fixture's
+#: golden run through ``combined_hash`` (the generator records what the
+#: verifier recomputes), so changing the joiner, hashing raw digest bytes, or
+#: including array names would otherwise pass unnoticed — and this is the one
+#: O11 choice this PR asks zagg's future writer to adopt verbatim.
+FROZEN_COMBINED_4111 = "a5d44b9f2b35478e2f9d763c52146b14c8ab8934af64d40c4efa6400bf1c6670"
+
 
 @pytest.fixture()
 def atl06():
@@ -39,6 +55,27 @@ def atl06():
 @pytest.fixture()
 def windows():
     return str(FIXTURE / "atl06_windows")
+
+
+@pytest.fixture()
+def ragged():
+    return str(FIXTURE / "atl06_ragged")
+
+
+@pytest.fixture()
+def pg3():
+    return str(FIXTURE / "atl06_pg3")
+
+
+def _rewrite_content_hashes(atl06, tmp_path, rewrite):
+    """Copy the atl06 product, reshaping leaf ``4111``'s recorded hashes."""
+    root = tmp_path / "store"
+    shutil.copytree(atl06, root)
+    sidecar = root / "4" / "1" / "1" / "1" / "stats.json"
+    record = json.loads(sidecar.read_text())
+    record["content_hashes"] = rewrite(record["content_hashes"])
+    sidecar.write_text(json.dumps(record))
+    return root
 
 
 class TestSidecarNaming:
@@ -137,6 +174,57 @@ class TestReadStatsRollup:
         target.write_text(json.dumps({"spec": "other/1", "payload": {}}))
         assert read_stats_rollup(str(root), "41") is None  # wrong spec: cache posture
 
+    def test_unstamped_generation_reads_none(self, atl06, tmp_path):
+        # Same depth as the sweep's own reader: n_leaves must be an int, so a
+        # `{"n_leaves": "2"}` stamp reads as absent here exactly as it would
+        # be rejected writer-side.
+        root = tmp_path / "store"
+        shutil.copytree(atl06, root)
+        target = root / "4" / "1" / "stats.rollup.json"
+        envelope = json.loads(target.read_text())
+        envelope["generation"]["n_leaves"] = "2"
+        target.write_text(json.dumps(envelope))
+        assert read_stats_rollup(str(root), "41") is None
+
+
+class TestPathGrouping:
+    """The D21 generic path at ``path_grouping: 3`` (espg/moczarr#11 directive:
+    exercised, not theoretically supported). ``atl06_pg3`` is an order-5 shard
+    whose digit tail chunks 3+2, so both a full-width component and the short
+    remainder are covered.
+    """
+
+    def test_node_rel_chunks_the_tail(self):
+        # The remainder rides LAST — easy to get backwards.
+        assert stats._node_rel("411121", 3) == "4/111/21"
+        assert stats._node_rel("41111", 3) == "4/111/1"  # 4-digit tail: 3 + 1
+        assert stats._node_rel("4111", 3) == "4/111"  # exactly one component
+        assert stats._node_rel("4", 3) == "4"
+        assert stats._node_rel("-5111211", 3) == "-5/111/211"
+        assert stats._node_rel("411121", 1) == "4/1/1/1/2/1"
+
+    def test_sidecar_path_is_grouped(self):
+        leaf = convention.leaf_path("411121", path_grouping=3)
+        assert stats_sidecar_path(leaf, convention.HIVE_SPEC) == "4/111/21/stats.json"
+
+    def test_reads_grouped_sidecar(self, pg3):
+        record = read_stats(pg3, "411121")
+        assert record["n_obs"] == 40
+        assert record["shard_key"] == convention.morton_word("411121")
+
+    def test_reads_grouped_rollups(self, pg3):
+        # Component-boundary nodes are the grouped tree's real levels.
+        for node in ("411121", "4111", "4"):
+            envelope = read_stats_rollup(pg3, node)
+            assert envelope["payload"]["n_obs"] == 40
+            assert envelope["generation"]["n_leaves"] == 1
+        assert read_stats_rollup(pg3, "41112") is None  # mid-component: no node
+
+    def test_verifies_grouped_leaf(self, pg3):
+        result = verify_arrays(pg3, "411121")
+        assert result["match"] is True
+        assert set(result["computed"]) == {"6/morton", "6/count"}
+
 
 class TestVerifyArrays:
     def test_golden_match(self, atl06):
@@ -180,20 +268,147 @@ class TestVerifyArrays:
     def test_flat_recorded_shape_accepted(self, atl06, tmp_path):
         # The O11 wording admits a flat {name: hash} record; the verifier
         # accepts it so whichever shape zagg's writer lands keeps verifying.
-        root = tmp_path / "store"
-        shutil.copytree(atl06, root)
-        sidecar = root / "4" / "1" / "1" / "1" / "stats.json"
-        record = json.loads(sidecar.read_text())
-        record["content_hashes"] = dict(record["content_hashes"]["arrays"])
-        sidecar.write_text(json.dumps(record))
+        root = _rewrite_content_hashes(atl06, tmp_path, lambda content: dict(content["arrays"]))
         result = verify_arrays(str(root), "4111")
         assert result["match"] is True
         assert result["recorded_combined"] is None
+
+    def test_flat_shape_with_combined_key_accepted(self, atl06, tmp_path):
+        # The likeliest flat encoding puts arrays and the combined hash in ONE
+        # mapping; `combined` is reserved, never read as a phantom array name
+        # (which reported this intact leaf as mismatched on 'combined').
+        root = _rewrite_content_hashes(
+            atl06,
+            tmp_path,
+            lambda content: {**content["arrays"], "combined": content["combined"]},
+        )
+        result = verify_arrays(str(root), "4111")
+        assert result["match"] is True
+        assert result["mismatched"] == []
+        assert result["recorded_combined"] == result["combined"]
+
+    def test_flat_combined_only_is_unverifiable(self, atl06, tmp_path):
+        # The degenerate combined-only record records no per-array hashes, so
+        # it is unverifiable — not "every array mismatched".
+        root = _rewrite_content_hashes(atl06, tmp_path, lambda content: {"combined": "x"})
+        result = verify_arrays(str(root), "4111")
+        assert result["match"] is None
+        assert result["recorded"] is None
+        assert result["mismatched"] == []
+
+    def test_combined_disagreement_is_never_a_match(self, atl06, tmp_path):
+        # Per-array hashes all matching but the combined hash differing is
+        # writer-serialization drift, not tampering — a distinct signal, and
+        # never reported as verified.
+        root = _rewrite_content_hashes(
+            atl06, tmp_path, lambda content: {**content, "combined": "dead" * 16}
+        )
+        result = verify_arrays(str(root), "4111")
+        assert result["mismatched"] == []
+        assert result["combined_match"] is False
+        assert result["match"] is False
+
+    def test_combined_match_is_none_when_unrecorded(self, atl06, tmp_path):
+        # A record with per-array hashes but no combined: verified per-array,
+        # combined unverifiable.
+        root = _rewrite_content_hashes(
+            atl06, tmp_path, lambda content: {"arrays": content["arrays"]}
+        )
+        result = verify_arrays(str(root), "4111")
+        assert result["match"] is True
+        assert result["combined_match"] is None
+
+    def test_empty_arrays_mapping_is_unverifiable(self, atl06, tmp_path):
+        # {"arrays": {}} records nothing; reporting every array as mismatched
+        # would read "nothing recorded" as "tampered".
+        root = _rewrite_content_hashes(atl06, tmp_path, lambda content: {"arrays": {}})
+        result = verify_arrays(str(root), "4111")
+        assert result["match"] is None
+        assert result["recorded"] is None
+        assert result["mismatched"] == []
+
+    def test_combined_serialization_is_frozen(self, atl06):
+        # Not self-tested: the literal is the pin, and the recipe is
+        # hand-rolled here rather than borrowed from combined_hash.
+        import hashlib
+
+        result = verify_arrays(atl06, "4111")
+        assert result["combined"] == FROZEN_COMBINED_4111
+        assert result["recorded_combined"] == FROZEN_COMBINED_4111
+        digests = sorted(result["recorded"].values())
+        hand_rolled = hashlib.sha256("\n".join(digests).encode("ascii")).hexdigest()
+        assert hand_rolled == FROZEN_COMBINED_4111
 
     def test_combined_hash_is_order_free(self):
         a = {"x": "aa", "y": "bb"}
         b = {"y": "bb", "x": "aa"}
         assert combined_hash(a) == combined_hash(b)
+
+    def test_vlen_golden_match(self, ragged):
+        # The ragged (vlen-bytes) arrays are in O11's scope; the naive
+        # `values.tobytes()` on an object array hashes POINTER addresses, so
+        # this leaf would verify False (and nondeterministically) without
+        # the length-prefixed recipe.
+        result = verify_arrays(ragged, "4111")
+        assert result["match"] is True
+        assert set(result["computed"]) == {
+            "5/morton",
+            "5/h_li_tdigest",
+            "5/h_li_tdigest_locations",
+        }
+
+    def test_vlen_recipe_is_the_frozen_one(self, ragged):
+        # Hand-rolled, independent of hash_arrays: sha256 over
+        # uint64_le(len) || payload per cell, in flat C order. Cell i holds i
+        # float32s (cell 0 is empty, pinning the zero-length prefix).
+        import hashlib
+
+        import numpy as np
+
+        digest = hashlib.sha256()
+        for i in range(16):
+            payload = np.arange(i, dtype="<f4").tobytes()
+            digest.update(len(payload).to_bytes(stats.VLEN_LENGTH_PREFIX, "little"))
+            digest.update(payload)
+        hashes = hash_arrays(ragged, convention.leaf_path("4111"))
+        assert hashes["5/h_li_tdigest"] == digest.hexdigest()
+
+    def test_vlen_hash_is_stable_across_loads(self, ragged):
+        # Two fresh opens decode into freshly allocated objects at different
+        # addresses; a pointer-derived digest would differ here.
+        rel = convention.leaf_path("4111")
+        assert hash_arrays(ragged, rel) == hash_arrays(ragged, rel)
+
+    def test_vlen_length_prefix_defeats_concatenation_collisions(self):
+        # [b"ab", b"c"] and [b"a", b"bc"] share their concatenation; the
+        # prefix is what keeps the digest injective.
+        def recipe(payloads):
+            import hashlib
+
+            d = hashlib.sha256()
+            for p in payloads:
+                d.update(len(p).to_bytes(stats.VLEN_LENGTH_PREFIX, "little"))
+                d.update(p)
+            return d.hexdigest()
+
+        assert recipe([b"ab", b"c"]) != recipe([b"a", b"bc"])
+
+    def test_element_bytes_kinds(self):
+        # bytes-likes pass through; str/ndarray cover the vlen-utf8 and typed
+        # `vlen-array<T>` futures; an unhashable kind RAISES rather than
+        # digesting a repr.
+        import numpy as np
+
+        assert stats._element_bytes(b"ab") == b"ab"
+        assert stats._element_bytes(bytearray(b"ab")) == b"ab"
+        assert stats._element_bytes(memoryview(b"ab")) == b"ab"
+        assert stats._element_bytes(None) == b""
+        assert stats._element_bytes("ab") == b"ab"
+        assert (
+            stats._element_bytes(np.arange(2, dtype=">u8")) == np.arange(2, dtype="<u8").tobytes()
+        )
+        with pytest.raises(ValueError, match="no O11 byte recipe"):
+            stats._element_bytes(7)
 
     def test_hash_arrays_decoded_values(self, atl06):
         # Hashes are over decoded values (raw little-endian C-order bytes at

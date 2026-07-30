@@ -1,9 +1,11 @@
 """``open_store``: the DataTree-shaped opener (issue #15, phase 8a).
 
-Runs against the PR-B two-product fixture (``tests/data/multiproduct_hive``:
+Runs against the PR-B multi-product fixture (``tests/data/multiproduct_hive``:
 ``atl06`` — /1, ``count``, ``semantic_hash``; ``atl06_windows`` — /2
-windowed, ``height``, no hash) and the bare SERC fixture for the one-child
-degenerate form. The pins: one child per product holding exactly the
+windowed, ``height``, no hash; plus ``atl06_ragged`` and ``atl06_pg3``, the
+stats-sidecar products) and the bare SERC fixture for the one-child
+degenerate form. Assertions name the products they care about and take the
+roster from ``list_products`` — the fixture grows. The pins: one child per product holding exactly the
 per-node ``open_hive`` Dataset, an empty root, heterogeneous sibling
 schemas, per-node AOI scoping, and laziness (zero chunk GETs at open, the
 ``test_open.py`` zero-read style).
@@ -16,7 +18,7 @@ from pathlib import Path
 import pytest
 import xarray as xr
 
-from moczarr import open_hive, open_store
+from moczarr import list_products, open_hive, open_store
 
 FIXTURE = Path(__file__).parent / "data" / "multiproduct_hive"
 SERC = Path(__file__).parent / "data" / "serc_hive"
@@ -27,15 +29,21 @@ def multiroot():
     return str(FIXTURE)
 
 
+def _roster(store_root: str) -> list[str]:
+    """The name-sorted roster the store publishes (fixture-growth proof)."""
+    return sorted(record["name"] for record in list_products(store_root))
+
+
 def _semantic_hash(product_root: Path) -> str:
     return json.loads((product_root / "morton_hive.json").read_text())["semantic_hash"]
 
 
 class TestOpenStoreTree:
-    def test_two_product_tree(self, multiroot):
+    def test_one_child_per_product(self, multiroot):
         tree = open_store(multiroot, window="2019")
         assert isinstance(tree, xr.DataTree)
-        assert list(tree.children) == ["atl06", "atl06_windows"]  # name-sorted
+        assert list(tree.children) == _roster(multiroot)  # name-sorted, all of them
+        assert {"atl06", "atl06_windows"} <= set(tree.children)
 
     def test_root_is_empty_with_store_attrs(self, multiroot):
         # Root node: no data, no coords — store-level attrs only (the
@@ -46,7 +54,7 @@ class TestOpenStoreTree:
         assert not root.coords
         assert tree.attrs["morton_hive_store"] == {
             "store_root": multiroot,
-            "products": ["atl06", "atl06_windows"],
+            "products": _roster(multiroot),
         }
 
     @pytest.mark.parametrize(
@@ -111,7 +119,8 @@ class TestOpenStoreProductsFilter:
         # Filtered to the unwindowed product, no window= is needed at all.
         tree = open_store(multiroot, products=["atl06"])
         assert list(tree.children) == ["atl06"]
-        assert tree.attrs["morton_hive_store"]["products"] == ["atl06", "atl06_windows"]
+        # The roster attr stays unfiltered — what the store publishes.
+        assert tree.attrs["morton_hive_store"]["products"] == _roster(multiroot)
 
     def test_unknown_product_raises_with_roster(self, multiroot):
         with pytest.raises(ValueError, match=r"atl07.*atl06.*atl06_windows"):

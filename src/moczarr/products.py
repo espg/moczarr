@@ -13,12 +13,16 @@ URL-safe by construction) with the **base-component exclusion**: a name must
 never match the morton base-component grammar ``-?[1-6]``, so the walker's
 child classification stays unambiguous.
 
-Discovery is one delimiter-LIST of the store root plus one manifest GET per
-named child — the enumeration recipe the design fixes for every viewer
+Discovery is one delimiter-LIST of the store root, one manifest GET per
+name-shaped child, and one HEAD per product (the ``aggregation.yaml``
+probe) — the enumeration recipe the design fixes for every viewer
 ("list ``{store_root}/`` and read each ``{name}/morton_hive.json`` directly —
-no name↔hash translation layer"). The D19 ``semantic_hash`` (sha256 of the
-product's canonical semantic core) is surfaced from the manifest, and the
-presence of the derived ``aggregation.yaml`` convenience copy is probed —
+no name↔hash translation layer") — so one product this reader is too old for
+must never take down the enumeration: an unsupported-but-well-formed spec is
+listed with ``manifest: None``, not raised on. The D19 ``semantic_hash``
+(sha256 of the product's canonical semantic core) is surfaced from the
+manifest, and the presence of the derived ``aggregation.yaml`` convenience
+copy is probed —
 the hash is truth; the YAML is a regenerable cache (D9 class).
 """
 
@@ -28,7 +32,7 @@ import logging
 import re
 from typing import Any
 
-from moczarr.convention import MANIFEST_NAME, parse_manifest
+from moczarr.convention import HIVE_SPEC, HIVE_SPEC_V2, MANIFEST_NAME, parse_manifest
 from moczarr.store import _resolve_store, read_json
 
 logger = logging.getLogger(__name__)
@@ -41,6 +45,12 @@ PRODUCT_NAME_RE = re.compile(r"^[a-z0-9_-]{1,192}$")
 _BASE_COMPONENT_RE = re.compile(r"^-?[1-6]$")
 #: The D19 canonical-semantic-core convenience object at a product root.
 AGGREGATION_CORE_NAME = "aggregation.yaml"
+#: A well-formed ``morton-hive/N`` spec string. A product whose spec matches
+#: this but is not one this reader opens (``/3`` and up) is not *malformed* —
+#: it is a store this reader is too old for, so discovery lists it instead of
+#: taking down its siblings (see :func:`list_products`).
+_HIVE_SPEC_RE = re.compile(r"^morton-hive/\d+$")
+_SUPPORTED_SPECS = (HIVE_SPEC, HIVE_SPEC_V2)
 
 
 def is_product_name(name: str) -> bool:
@@ -71,11 +81,24 @@ def _has_object(store: Any, key: str) -> bool:
     return True
 
 
+def _unsupported_spec(payload: object) -> str | None:
+    """A well-formed hive spec this reader cannot open, else ``None``."""
+    spec = payload.get("spec") if isinstance(payload, dict) else None
+    if isinstance(spec, str) and spec not in _SUPPORTED_SPECS and _HIVE_SPEC_RE.match(spec):
+        return spec
+    return None
+
+
 def list_products(store_root: str, *, store: Any = None, **store_kwargs: Any) -> list[dict]:
     """Enumerate the named products of a multi-product store root (D19).
 
     One delimiter-LIST of the root, then one ``{name}/morton_hive.json`` GET
-    per name-shaped child. Returns one record per product, sorted by name::
+    per name-shaped child, then one HEAD per product for the
+    ``has_aggregation_yaml`` probe — two sequential round-trips per product,
+    measured on the committed fixture (1 LIST + 5 GET + 4 HEAD for its four
+    products plus the non-product ``scratch/`` child). Bounded, but stated
+    because ``list_products`` is a per-page-load call for a viewer. Returns
+    one record per product, sorted by name::
 
         {
             "name": ...,               # the {name}/ prefix (§6.5 grammar)
@@ -83,7 +106,8 @@ def list_products(store_root: str, *, store: Any = None, **store_kwargs: Any) ->
             "dataset": ...,            # manifest dataset block (or None)
             "semantic_hash": ...,      # D19 identity hash (or None, pre-D19)
             "has_aggregation_yaml": ., # derived semantic-core copy present?
-            "manifest": ...,           # the full parsed manifest
+            "manifest": ...,           # the full parsed manifest (None: the
+                                       # spec is one this reader can't open)
         }
 
     A **bare single-product store** (a manifest at the root — the §6.5
@@ -93,6 +117,16 @@ def list_products(store_root: str, *, store: Any = None, **store_kwargs: Any) ->
     carries one); a present-but-malformed product manifest raises, the
     :func:`moczarr.store.read_manifest` posture — a manifest is a bootstrap,
     never a degradable cache.
+
+    A product whose manifest carries a well-formed but **unsupported** hive
+    spec (``morton-hive/3`` and up — a store this reader is too old for, not
+    a broken one) is neither raised on nor hidden: it is listed with
+    ``manifest: None`` (and ``dataset``/``semantic_hash`` ``None``) plus a
+    warning, so a caller sees the product exists and why it can't be opened.
+    Raising instead would make one newer sibling erase every readable
+    product from an enumeration that D19 makes a viewer-facing contract.
+    Opening it is still loud — ``open_hive(root, product=...)`` raises the
+    spec error from the manifest bootstrap.
     """
     import obstore
 
@@ -109,6 +143,23 @@ def list_products(store_root: str, *, store: Any = None, **store_kwargs: Any) ->
         payload = read_json(handle, f"{name}/{MANIFEST_NAME}")
         if payload is None:
             logger.debug(f"{store_root}: name-shaped child {name!r} carries no manifest; skipping")
+            continue
+        unsupported = _unsupported_spec(payload)
+        if unsupported is not None:
+            logger.warning(
+                f"{store_root}: product {name!r} declares spec {unsupported!r}, which this "
+                f"reader cannot open; listing it with manifest=None"
+            )
+            products.append(
+                {
+                    "name": name,
+                    "spec": unsupported,
+                    "dataset": None,
+                    "semantic_hash": None,
+                    "has_aggregation_yaml": _has_object(handle, f"{name}/{AGGREGATION_CORE_NAME}"),
+                    "manifest": None,
+                }
+            )
             continue
         manifest = parse_manifest(payload)
         products.append(

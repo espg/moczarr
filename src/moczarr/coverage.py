@@ -170,26 +170,33 @@ def aoi_mask(cells, aoi) -> np.ndarray:
     NOT ``np.isin`` against ``moc_and``'s output — MOC intersection returns
     a *compacted* cover (a fully-occupied subtree compacts to its parent
     word), so identity tests against it silently drop exactly the dense
-    regions. ``cells`` must share one order (a store's cell coordinate does,
-    by convention); ``aoi`` members may be mixed-order.
+    regions.
 
-    Single order is *enforced*, not merely assumed: a mixed-order ``cells``
-    array raises ``ValueError``. ``infer_order_from_morton`` returns the
-    *minimum* order over an array, so a silent inference would clip finer
-    cells to the wrong (coarser) order and drop their rows — the module's
-    raise-on-ambiguity discipline forbids that. The check is one vectorized
-    ``clip2order`` compare (O(n), no per-cell Python loop): clipping to the
-    common order is identity iff every cell already sits at that order.
+    BOTH sides may be mixed-order (issue #8, on mortie#116's per-element
+    kernels): a pyramid/overview store (zagg#262) carries a parent and its
+    children in one cell coordinate, and each cell resolves containment at
+    its own order via ``orders_of``. The former single-order guard is gone —
+    the capability replaces the constraint. Per member, the coarser-or-equal
+    direction is ONE whole-array compare: ``clip2order`` is per-element
+    (finer cells clip to the member's order, coarser cells pass through
+    unchanged) and words at different orders can never be bit-equal (the
+    order lives in the word's suffix), so pass-throughs never false-match.
+    That same argument makes the compare *provably* false when the member is
+    finer than EVERY cell — nothing clips, so every word is a pass-through —
+    so it is skipped outright there: the fine-AOI-cover-against-a-coarse-
+    overview-level shape this PR unlocks, measured ~3.7x on 500k order-8
+    cells with 512 order-20 members.
+    The finer direction runs once per distinct coarser cell order present
+    (<= 30), comparing against the member's ancestor at that order.
 
     POINT-kind words (spec §1 suffix ``48..=63``) are first-class members on
     BOTH sides — the v1 posture: for containment a point counts as an
     order-29 member like any other, normalized to its order-29 area twin
-    (same path; §4 — membership at a coarser level is ordinary truncation).
-    A pure-point ``cells`` array is therefore uniform order 29 (the
-    single-order guard accepts it), and mixed order-29 area + point arrays
-    are well-formed per §4.
+    (same path; §4 — membership at a coarser level is ordinary truncation),
+    and may now ride alongside area cells at ANY order (previously only
+    order-29 areas kept a mixed-kind array uniform).
     """
-    from mortie import clip2order, infer_order_from_morton
+    from mortie import clip2order, orders_of
 
     from moczarr.convention import point_to_area29
 
@@ -200,20 +207,18 @@ def aoi_mask(cells, aoi) -> np.ndarray:
     # §4 normalization: containment arithmetic runs in area space (points
     # -> their order-29 twins on the same path; area words pass through).
     cells = np.asarray(point_to_area29(cells), dtype=np.uint64)
-    cell_order = int(infer_order_from_morton(cells))
-    if (clip2order(cell_order, cells) != cells).any():
-        raise ValueError(
-            f"aoi_mask requires single-order cells; got a mixed-order array "
-            f"(minimum order {cell_order}). Clip or split the cells to one order first."
-        )
+    distinct_orders = np.unique(orders_of(cells))
     members = np.atleast_1d(np.asarray(aoi, dtype=np.uint64))
-    for member in np.asarray(point_to_area29(members), dtype=np.uint64):
+    members = np.asarray(point_to_area29(members), dtype=np.uint64)
+    finest_cell_order = int(distinct_orders[-1])
+    for member, member_order in zip(members, orders_of(members)):
+        if member_order <= finest_cell_order:
+            # Coarser-or-equal: skipped when the member out-resolves every
+            # cell, where the compare cannot be true (see the docstring).
+            keep |= np.asarray(clip2order(int(member_order), cells), dtype=np.uint64) == member
         one = np.asarray([member], dtype=np.uint64)
-        member_order = int(infer_order_from_morton(one))
-        if member_order <= cell_order:
-            keep |= clip2order(member_order, cells) == member
-        else:
-            keep |= cells == clip2order(cell_order, one)[0]
+        for order in distinct_orders[distinct_orders < member_order]:
+            keep |= cells == np.asarray(clip2order(int(order), one), dtype=np.uint64)[0]
     return keep
 
 

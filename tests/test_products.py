@@ -1,10 +1,12 @@
 """Multi-product roots (D19 / spec §6.5): discovery + the ``open_hive`` sugar.
 
 ``tests/data/multiproduct_hive`` is the committed golden from
-``tools/generate_multiproduct_fixture.py``: two named products under one
+``tools/generate_multiproduct_fixture.py``: four named products under one
 store root (``atl06`` — /1, ``aggregation.yaml`` + ``semantic_hash``;
-``atl06_windows`` — /2 windowed, neither) plus a name-shaped non-product
-child (``scratch/``). The bare single-product form is the existing
+``atl06_windows`` — /2 windowed, neither; ``atl06_ragged`` — /1 carrying the
+vlen O11 arrays; ``atl06_pg3`` — /1 at ``path_grouping: 3``) plus a
+name-shaped non-product child (``scratch/``). The bare single-product form is
+the existing
 ``serc_hive`` fixture — its whole suite is the "single-product unchanged"
 guard; the pins here are the two root forms' discrimination by content.
 """
@@ -26,6 +28,16 @@ SERC = Path(__file__).parent / "data" / "serc_hive"
 @pytest.fixture()
 def multiroot():
     return str(FIXTURE)
+
+
+def _with_v3_product(tmp_path):
+    """The fixture root plus an ``atl06_v3`` sibling on a forward spec."""
+    root = tmp_path / "store"
+    shutil.copytree(FIXTURE, root)
+    shutil.copytree(root / "atl06", root / "atl06_v3")
+    manifest = root / "atl06_v3" / "morton_hive.json"
+    manifest.write_text(manifest.read_text().replace('"morton-hive/1"', '"morton-hive/3"'))
+    return root
 
 
 class TestProductNameGrammar:
@@ -55,7 +67,8 @@ class TestProductNameGrammar:
 class TestListProducts:
     def test_enumerates_named_products(self, multiroot):
         products = list_products(multiroot)
-        assert [p["name"] for p in products] == ["atl06", "atl06_windows"]  # sorted
+        names = [p["name"] for p in products]
+        assert names == ["atl06", "atl06_pg3", "atl06_ragged", "atl06_windows"]  # sorted
 
     def test_surfaces_semantic_hash_and_core_presence(self, multiroot):
         by_name = {p["name"]: p for p in list_products(multiroot)}
@@ -82,6 +95,33 @@ class TestListProducts:
     def test_bare_store_has_no_named_products(self):
         # §6.5 content discrimination: a manifest at the root ⇒ bare store.
         assert list_products(str(SERC)) == []
+
+    def test_unsupported_spec_product_is_listed_not_fatal(self, multiroot, tmp_path):
+        # A `/3` sibling is a store this reader is too old for, not a broken
+        # one: it must not make every readable product invisible (D19 makes
+        # the enumeration a viewer-facing contract).
+        root = _with_v3_product(tmp_path)
+        by_name = {p["name"] for p in list_products(str(root))}
+        assert by_name == {"atl06", "atl06_pg3", "atl06_ragged", "atl06_v3", "atl06_windows"}
+        v3 = next(p for p in list_products(str(root)) if p["name"] == "atl06_v3")
+        assert v3["spec"] == "morton-hive/3"
+        assert v3["manifest"] is None  # the marker: known spec, unopenable here
+        assert v3["dataset"] is None and v3["semantic_hash"] is None
+        readable = next(p for p in list_products(str(root)) if p["name"] == "atl06")
+        assert readable["manifest"]["spec"] == "morton-hive/1"
+
+    def test_unsupported_spec_sibling_keeps_pointed_open_error(self, tmp_path):
+        # The multi-product error still lists the products (it used to
+        # degrade to the spec error, since list_products raised inside it).
+        root = _with_v3_product(tmp_path)
+        with pytest.raises(ValueError, match=r"multi-product store root.*atl06_v3"):
+            open_hive(str(root))
+
+    def test_unsupported_spec_product_still_raises_on_open(self, tmp_path):
+        # Listing it is not opening it: the manifest bootstrap stays loud.
+        root = _with_v3_product(tmp_path)
+        with pytest.raises(ValueError, match="unknown manifest spec"):
+            open_hive(str(root), product="atl06_v3")
 
     def test_malformed_product_manifest_raises(self, multiroot, tmp_path):
         # A present-but-garbage manifest is a broken bootstrap, never a

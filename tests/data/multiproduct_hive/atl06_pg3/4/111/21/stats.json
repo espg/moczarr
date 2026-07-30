@@ -1,0 +1,36 @@
+{
+ "schema_version": 1,
+ "shard_key": 4616189618054758405,
+ "window": null,
+ "run_id": "fixture-run",
+ "semantic_hash": null,
+ "zagg_version": "0.36.0",
+ "n_shards": 1,
+ "n_granules": 1,
+ "granules_sha256": "21cd765fd885d98841926f0aa5f487813a35039dec2b4f2027b4b76a5123dc84",
+ "n_obs": 40,
+ "cells_with_data": 4,
+ "phase_timings": {
+  "read": 1.0,
+  "aggregate": 0.5,
+  "write": 0.25
+ },
+ "duration_s": 2.0,
+ "spill_bytes": null,
+ "gb_seconds": null,
+ "est_cost_usd": null,
+ "max_memory_mb": 512.0,
+ "container_hwm_mb": null,
+ "lambda": null,
+ "timestamp": "2026-07-27T00:05:00+00:00",
+ "success": true,
+ "error": null,
+ "invoked_by": null,
+ "content_hashes": {
+  "arrays": {
+   "6/morton": "718772b8a1dca39319b0b6bd72a4f9ee4f3f248f193b79d8c18e3b68cb2f926f",
+   "6/count": "73e200e2b048c86d4e8c86b86bf62bbda84c7384e34e250b01aa30ab29d234a4"
+  },
+  "combined": "571cbcaefa3f3186c409c48f31be0e6d65cb41ead90a98fd86ff0177300ce54d"
+ }
+}
