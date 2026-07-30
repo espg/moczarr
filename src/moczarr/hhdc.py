@@ -23,7 +23,17 @@ Three deliberate seams:
   zagg, never vendored (vendoring is parity drift by construction): install
   the extra, ``pip install 'moczarr[zagg]'``. The import is lazy, so
   everything else in this module (masks, occupancy, the layout kernel)
-  works without it.
+  works without it. The seam is the *algebra*, and only that: the reader
+  logic around it (:func:`rasterize_cell`, :func:`chunk_z_range`, the
+  occupancy/mask helpers, the :func:`read_tensors` body) is a **port** of
+  zagg's ``readers/tdigest_tensor.py``, several functions logic-identical.
+  That duplication is deliberate and temporary — zagg's reader is expected to
+  retire in moczarr's favour — but until then it is a real drift surface,
+  held by the committed goldens plus ``TestLiveParity``. The live leg needs
+  zagg's post-englacial/zagg#339 reader surface, which no zagg *release*
+  carries yet (0.39.0's reader predates the deinterleave), so it is a
+  checkout-only leg: against the declared ``zagg>=0.39`` floor it skips, and
+  the enforcement that reaches CI is the goldens.
 - **Occupancy** — the mask channel decodes the hive leaf's ``coverage.moc``
   occupancy sidecar through moczarr's own frozen bitmap convention
   (:func:`moczarr.coverage.decode_bitmap`), never through zagg.

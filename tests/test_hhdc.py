@@ -10,7 +10,13 @@ Parity is pinned two ways against the committed SERC strata fixture
   bit-identity against a frozen reference even when the installed zagg
   drifts.
 - **Live parity** (additionally needs zagg's post-#339 reader surface): the
-  two readers run side by side on the same store and must agree exactly.
+  two readers run side by side on the same store and must agree exactly —
+  end to end and helper by helper, since the reader logic is a port, not
+  just the imported algebra. No zagg *release* carries that surface
+  (:data:`ZAGG_PORT_COMMIT` is untagged; 0.39.0's reader predates the
+  deinterleave), so this leg runs against a zagg **checkout** and skips
+  otherwise — the goldens are what enforce the port in a released-zagg
+  environment.
 
 The layout kernel, the occupancy predicate and the whole mask channel, the
 ``open_hive`` no-choke check, and the missing-extra error hint all run
@@ -33,7 +39,9 @@ from zarr.storage import LocalStore
 from moczarr.convention import COMMIT_ATTR, COVERAGE_SIDECAR
 from moczarr.hhdc import (
     _block_mask,
+    _chunk_word,
     _load_occupancy,
+    _tensor_side,
     has_exact_occupancy,
     rank_to_rowcol,
     read_tensors,
@@ -51,6 +59,11 @@ NOISE = f"{GROUP}/h_tdigest_noise"
 BLOCK_ORDER = int(EXPECTED["goldens"]["params"]["block_order"])
 #: Cells-axis depth of the fixture leaf (16 cells = one order-4 shard subtree).
 LEAF_DEPTH = 2
+#: The zagg commit whose ``readers/tdigest_tensor.py`` the ported reader logic
+#: in :mod:`moczarr.hhdc` mirrors: the englacial/zagg#336 fold. It carries no
+#: tag, and 0.39.0 (the declared floor) has neither ``has_exact_occupancy`` nor
+#: ``rank_to_rowcol`` — hence the checkout-only parity legs below.
+ZAGG_PORT_COMMIT = "3890cb5"
 
 HAS_ZAGG = importlib.util.find_spec("zagg") is not None
 needs_zagg = pytest.mark.skipif(not HAS_ZAGG, reason="needs the moczarr[zagg] extra")
@@ -383,6 +396,57 @@ class TestFitPolicies:
     def test_collapse_bins_cannot_grow(self):
         with pytest.raises(ValueError, match="cannot grow the window"):
             list(read_tensors(_store(), SIGNAL, n_bins=4, resolution=0.5, fit="collapse_bins"))
+
+
+@needs_zagg_reader
+class TestPortedSurface:
+    """Drift alarm for the PORTED reader logic (not just the imported algebra).
+
+    ``rasterize_cell``, ``chunk_z_range``, the occupancy/mask helpers and the
+    ``read_tensors`` body are ports of zagg's ``readers/tdigest_tensor.py``
+    (:data:`ZAGG_PORT_COMMIT`), so the parity legs are the only thing holding
+    them. Value parity below can only compare what still EXISTS — a rename or
+    retirement upstream would silently reduce this file to self-certification,
+    which is what these two checks catch. Like :class:`TestLiveParity` they
+    are checkout-only: no zagg release carries the post-#339 surface.
+    """
+
+    PORTED = (
+        "read_tensors",
+        "rasterize_cell",
+        "chunk_z_range",
+        "has_exact_occupancy",
+        "rank_to_rowcol",
+        "rowcol_to_rank",
+        "_block_mask",
+        "_load_occupancy",
+        "_tensor_side",
+        "_chunk_word",
+        "_cells_order",
+    )
+
+    def test_zagg_still_exposes_every_ported_entry_point(self):
+        reference = _zagg_reader()
+        missing = [name for name in self.PORTED if not hasattr(reference, name)]
+        assert not missing, f"ported from zagg but gone upstream: {missing}"
+
+    def test_ported_helpers_agree_function_by_function(self):
+        """Parity at helper granularity, not only through ``read_tensors``:
+        a compensating pair of drifts inside the pipeline would cancel out
+        end to end but not here."""
+        reference = _zagg_reader()
+        store = _store()
+        arr, words = _cells_axis(store)
+        assert _tensor_side(arr, SIGNAL) == reference._tensor_side(arr, SIGNAL)
+        assert _chunk_word(words, SIGNAL, 0) == reference._chunk_word(words, SIGNAL, 0)
+        ours = _load_occupancy(store, arr, words, SIGNAL)
+        theirs = reference._load_occupancy(store, arr, words, SIGNAL)
+        assert ours[0] == theirs[0]
+        np.testing.assert_array_equal(ours[1], theirs[1])
+        np.testing.assert_array_equal(
+            _block_mask(words, ours, LEAF_DEPTH),
+            reference._block_mask(words, theirs, LEAF_DEPTH),
+        )
 
 
 @needs_zagg_reader
