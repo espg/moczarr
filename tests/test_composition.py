@@ -165,6 +165,17 @@ class TestCountRecovery:
             with pytest.raises(ValueError, match="n_signal must be a scalar or 1-D"):
                 composition.counts_from_composition(words, bad)
 
+    def test_absurd_n_signal_raises_instead_of_saturating(self):
+        # Both tails guarded now: the empty-stratum clamp below handles n <= 0,
+        # and past the float64-exact integer range the old path saturated int64
+        # under a bare numpy RuntimeWarning attributed to the arithmetic line
+        # rather than to n_signal. A sanity rail, not a regime photons reach.
+        words = np.asarray([GOLDEN_WORD], dtype=np.uint64)
+        with pytest.raises(ValueError, match="float64-exact"):
+            composition.counts_from_composition(words, np.asarray([2**63], dtype=np.uint64))
+        # The limit itself is inside the exact range and still recovers exactly.
+        assert composition.counts_from_composition(words, 2**53)[0, 0] == 2**53
+
     def test_empty_stratum_never_negative(self):
         words = np.asarray([GOLDEN_WORD], dtype=np.uint64)
         for n in (0, -3):

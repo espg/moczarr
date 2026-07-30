@@ -74,6 +74,11 @@ COMPOSITION_LANES = (
 )
 #: Lane count of a ``/1`` word (eight u8 lanes in a uint64).
 COMPOSITION_LANE_COUNT = len(COMPOSITION_LANES)
+#: Largest ``n_signal`` count recovery accepts — the float64-exact integer
+#: range, as in :data:`moczarr.FLOAT64_EXACT_MAX_ORDER`. Photon counts are
+#: nowhere near it; past it the float64 arithmetic stops being exact and the
+#: int64 result saturates.
+_FLOAT64_EXACT_MAX_INT = 2**53
 
 
 def _as_words(words) -> np.ndarray:
@@ -135,7 +140,10 @@ def counts_from_composition(words, n_signal) -> np.ndarray:
     covers lanes the writer *rounded*; a lane lifted by the presence floor
     (``k = 1`` for a count that would have quantized to 0) recovers
     ``~N/255`` by design, trading count accuracy for exact presence.
-    ``n_signal <= 0`` (empty stratum) recovers all-zero counts.
+    ``n_signal <= 0`` (empty stratum) recovers all-zero counts; both tails are
+    guarded, so an ``n_signal`` above :data:`_FLOAT64_EXACT_MAX_INT` raises
+    (naming ``n_signal``) instead of saturating ``int64`` under a bare numpy
+    warning.
     """
     lanes = unpack_composition(words).astype(np.float64)
     n = np.atleast_1d(np.asarray(n_signal, dtype=np.float64))
@@ -147,6 +155,13 @@ def counts_from_composition(words, n_signal) -> np.ndarray:
         )
     if n.shape[0] not in (1, lanes.shape[0]):
         raise ValueError(f"n_signal has {n.shape[0]} cells, words has {lanes.shape[0]}")
+    if n.size and n.max() > _FLOAT64_EXACT_MAX_INT:
+        raise ValueError(
+            f"n_signal {n.max():.0f} is above the float64-exact integer range "
+            f"({_FLOAT64_EXACT_MAX_INT}); recovery runs in float64, so the int64 result "
+            "would be imprecise or saturate. Photon counts do not reach here — check "
+            "the of digest's weights"
+        )
     n = np.maximum(n, 0.0)  # n <= 0 is the empty stratum: zero counts, never negative
     return np.rint(lanes * n[:, None] / 255.0).astype(np.int64)
 
