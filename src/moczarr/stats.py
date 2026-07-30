@@ -323,20 +323,34 @@ def combined_hash(hashes: dict[str, str]) -> str:
     return hashlib.sha256("\n".join(sorted(hashes.values())).encode()).hexdigest()
 
 
+#: Reserved (non-array) key of a FLAT ``content_hashes`` mapping. O11's
+#: wording is "``{array_name: hash}`` plus one combined hash", so the flat
+#: encoding a writer reaches for is arrays and combined in one mapping;
+#: ``combined`` is not a legal zarr array name in any zagg output, so
+#: reserving it costs nothing.
+_COMBINED_KEY = "combined"
+
+
 def _recorded_hashes(sidecar: dict | None) -> tuple[dict[str, str] | None, str | None]:
     """``(per-array, combined)`` recorded in a sidecar's ``content_hashes``.
 
     Accepts both shapes the D20/O11 wording admits — the nested
     ``{"arrays": {name: hash}, "combined": hash}`` envelope (what the
-    committed fixture pins) and a flat ``{name: hash}`` mapping — so the
-    verifier keeps working whichever zagg's writer lands.
+    committed fixture pins) and a flat ``{name: hash, "combined": hash}``
+    mapping — so the verifier keeps working whichever zagg's writer lands.
+    In the flat shape the reserved :data:`_COMBINED_KEY` is popped rather
+    than read as a phantom array name (which would report an intact leaf as
+    mismatched on ``combined``); a flat record carrying ONLY that key has no
+    per-array hashes, so it reads as unverifiable (``None``), not tampered.
     """
     content = (sidecar or {}).get("content_hashes")
     if not isinstance(content, dict) or not content:
         return None, None
     if isinstance(content.get("arrays"), dict):
-        return dict(content["arrays"]), content.get("combined")
-    return dict(content), None
+        return dict(content["arrays"]), content.get(_COMBINED_KEY)
+    flat = dict(content)
+    combined = flat.pop(_COMBINED_KEY, None)
+    return (flat or None), combined
 
 
 def verify_arrays(
