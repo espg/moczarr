@@ -186,16 +186,43 @@ class TestAttrsBinding:
         with pytest.raises(ValueError, match="composition.threshold"):
             composition.parse_composition_attrs(attrs)
 
-    def test_named_lanes_follow_the_attrs_order(self):
-        # PERMUTED lanes: binding must key on the attrs order, not zagg's
-        # writer default — under the reversed declaration the golden word's
-        # byte 3 is named "inland_water" and "land_ice" moves to byte 4 (=0).
+    def test_canonical_lanes_are_the_spec_table(self):
+        # The order the /1 gate enforces IS §3.1's table: five per-surface
+        # marginals in signal_conf_ph column order, then low/med/high.
+        assert composition.COMPOSITION_LANES == tuple(DEFAULT_LANES)
+        assert composition.COMPOSITION_LANE_COUNT == 8
+
+    def test_permuted_lanes_raise_as_non_conforming(self):
+        # §3.3 fixes the /1 value at exactly the §3.1 order, so a permuted
+        # declaration is a non-conforming store, not a relabeling instruction:
+        # binding it would read the golden word's byte 3 as "inland_water" and
+        # report "land_ice" as absent. Both entry points must refuse.
         words = np.asarray([GOLDEN_WORD], dtype=np.uint64)
-        named = composition.named_lanes(words, _attrs(lanes=DEFAULT_LANES[::-1]))
+        for attrs in (
+            _attrs(lanes=DEFAULT_LANES[::-1]),
+            _attrs(lanes=DEFAULT_LANES[1:] + ["land"]),
+        ):
+            with pytest.raises(ValueError, match="non-conforming"):
+                composition.parse_composition_attrs(attrs)
+            with pytest.raises(ValueError, match="non-conforming"):
+                composition.named_lanes(words, attrs)
+
+    def test_named_lanes_bind_to_the_parsed_declaration(self, monkeypatch):
+        # The binding is order-DRIVEN, not positional — what lets a future /2
+        # re-mean the same eight bytes without touching this function. With the
+        # validated block reporting a reversed order, the golden word re-keys:
+        # byte 3 becomes "inland_water", "land_ice" moves to byte 4 (=0). A
+        # hardcoded zip against COMPOSITION_LANES fails exactly here.
+        permuted = tuple(DEFAULT_LANES[::-1])
+        monkeypatch.setattr(
+            composition,
+            "parse_composition_attrs",
+            lambda attrs: {"lanes": permuted, "of": "h_tdigest_signal", "threshold": 2},
+        )
+        named = composition.named_lanes(np.asarray([GOLDEN_WORD], dtype=np.uint64), _attrs())
         assert set(named) == set(DEFAULT_LANES)
-        assert named["high"][0] == 255 and named["land"][0] == 255  # bytes 0 and 7
         assert named["inland_water"][0] == 255  # byte 3 under the permutation
-        assert named["land_ice"][0] == 0  # 255 under the default order
+        assert named["land_ice"][0] == 0  # 255 under the canonical order
 
     def test_named_lanes_default_order(self):
         named = composition.named_lanes(np.asarray([GOLDEN_WORD], dtype=np.uint64), _attrs())
