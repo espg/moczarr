@@ -1,11 +1,12 @@
 """Multi-product roots (D19 / spec §6.5): discovery + the ``open_hive`` sugar.
 
 ``tests/data/multiproduct_hive`` is the committed golden from
-``tools/generate_multiproduct_fixture.py``: three named products under one
+``tools/generate_multiproduct_fixture.py``: four named products under one
 store root (``atl06`` — /1, ``aggregation.yaml`` + ``semantic_hash``;
 ``atl06_windows`` — /2 windowed, neither; ``atl06_ragged`` — /1 carrying the
-vlen O11 arrays) plus a name-shaped non-product child (``scratch/``). The
-bare single-product form is the existing
+vlen O11 arrays; ``atl06_pg3`` — /1 at ``path_grouping: 3``) plus a
+name-shaped non-product child (``scratch/``). The bare single-product form is
+the existing
 ``serc_hive`` fixture — its whole suite is the "single-product unchanged"
 guard; the pins here are the two root forms' discrimination by content.
 """
@@ -67,7 +68,7 @@ class TestListProducts:
     def test_enumerates_named_products(self, multiroot):
         products = list_products(multiroot)
         names = [p["name"] for p in products]
-        assert names == ["atl06", "atl06_ragged", "atl06_windows"]  # sorted
+        assert names == ["atl06", "atl06_pg3", "atl06_ragged", "atl06_windows"]  # sorted
 
     def test_surfaces_semantic_hash_and_core_presence(self, multiroot):
         by_name = {p["name"]: p for p in list_products(multiroot)}
@@ -101,7 +102,7 @@ class TestListProducts:
         # the enumeration a viewer-facing contract).
         root = _with_v3_product(tmp_path)
         by_name = {p["name"] for p in list_products(str(root))}
-        assert by_name == {"atl06", "atl06_ragged", "atl06_v3", "atl06_windows"}
+        assert by_name == {"atl06", "atl06_pg3", "atl06_ragged", "atl06_v3", "atl06_windows"}
         v3 = next(p for p in list_products(str(root)) if p["name"] == "atl06_v3")
         assert v3["spec"] == "morton-hive/3"
         assert v3["manifest"] is None  # the marker: known spec, unopenable here
