@@ -221,6 +221,21 @@ unchanged. Windowed products inherit window naming (D23): `window=` scopes
 each order node to that window's `{window}.zarr` overviews, so one call
 still opens a store mixing windowed and unwindowed products.
 
+`window=` takes a **declared window label only**. The reserved all-time
+token `"all"` is refused: a windowed product's all-time folds do exist on
+disk (`pyramid.overview.all_time`, spec §4.5 — `all.zarr` at each ancestor
+node) but they are **not yet a reader surface**, because the source axis has
+no all-time leaf to pair them with. Opening them alone would hand back one
+tree whose source order reports 0 cells beside overview orders summing every
+window, so `open_store(..., window="all")` raises and names the gap instead.
+`all` is excluded from the window grammar forever (§4.2), so the eventual
+surface will be its own opt-in rather than a window label.
+
+`aoi=` and `window=` scope **rows**, never the tree's shape and never the
+answers below: an out-of-coverage AOI empties each node schema-correct
+(issue #4) while `source_orders` / `overview_orders` keep reporting what the
+store holds.
+
 ### `role` is per *object*, never per node
 
 zagg#201's
@@ -254,10 +269,25 @@ one entry per stamped object the open admitted, with the object's own
 `role` (absence on disk reads as `"source"`, per the spec) and, for
 overviews, its full `zagg_overview` provenance block (the D11 companions:
 source cell order, per-field `class`/`method`/`nan_policy`). The contract
-is enforced strictly on open: a third `role` value, a missing provenance
-block, an unknown `zagg-overview` spec revision, or an off-order overview
-all raise rather than guess. Unstamped overview prefixes are debris and
-skipped (D4), exactly as for leaves.
+is checked on open, with two severities split on §4.1's "overviews are
+**regenerable caches**, never load-bearing… a reader MUST NOT require them":
+
+- **Uninterpretable** cache object — a third `role` value, a missing or
+  unknown-revision `zagg_overview` block, a block without `cell_order`: the
+  object is dropped with a `UserWarning` and the node keeps its remaining
+  objects. Failing the whole `open_store` would take the product's *source*
+  nodes down with one stale cache object, which is exactly what §4.1
+  forbids; unstamped overview prefixes are already debris and skipped the
+  same way (D4), exactly as for leaves.
+- **Interpretable but wrong** — a provenance block positively declaring a
+  `cell_order` other than the node's: this **raises**. Those rows would be
+  mis-ranked under the node's §4.4 coordinate, a wrong answer rather than a
+  missing one, and an off-order fold indicts the sweep rather than one
+  object.
+
+Both severities are evaluated for every *stamped* object the order node
+names, before any `aoi` scoping — so what a store reports about its own
+integrity does not depend on the query that opened it.
 
 ### Source is not a single order — uniqueness is per (shard, window)
 
@@ -279,6 +309,14 @@ the *set* of source orders: `source_orders` / `overview_orders` (every
 stored order carrying at least one object of that role, keyed on the
 per-object entries) and `finest_source_at` ("the finest source order at or
 above order k" — at-or-coarser numerically), never "the one source node".
+
+These answer about the **store**, not about the query: they are unaffected
+by the `aoi`/`window` the tree was opened with, and they are defined on a
+flat (declared-off) product node too, where the product node itself holds the
+data — `source_orders` is its own cell order, `overview_orders` is `()`. An
+empty `overview_orders` therefore always means "this product stores no
+overviews", never "the AOI missed them"; and a flat node's `()` overviews
+sits beside a real source order rather than reading as "no data here".
 This is the same fact the computed-compose rule below rests on (a
 D24-heterogeneous product has no complete single-order Dataset precisely
 because its source spans orders).
@@ -364,3 +402,13 @@ load-bearing — the source child still opens via the discovery walk, which
 skips the non-decimal overview basenames); and a declared order with no
 stamped object anywhere (not yet swept, or deleted) is likewise omitted
 loudly rather than fabricated empty.
+
+A third omission, for the same reason: a store declaring `path_grouping > 1`
+(D21). A grouped tree's directories exist only at multiples of the grouping,
+so an ancestor order that is not a group boundary has no node in it —
+`4/33` would be a *truncated* group component where the tree's component is
+`331` — while zagg's sweep writes ancestor nodes one component per digit
+regardless of grouping. There is no settled path to name, so the reader
+names none: the order nodes are omitted with a warning and the source node
+stands. Every store written today is `path_grouping: 1`, where the per-digit
+form *is* the tree's own node path.

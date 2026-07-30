@@ -13,12 +13,24 @@
   `moczarr.pyramid.open_overview_order` (candidates = root-MOC source
   shards coarsened to the ancestor prefix; D4 stamp admission; issue-#4
   empty posture per node; zero chunk GETs on the moc default). `role` is
-  surfaced per object under `attrs["zagg_objects"]` (strict §4.3
-  enforcement: closed vocabulary, mandatory `zagg_overview` provenance,
-  spec revision and cell-order checks), per-node variable sets differ in
-  both directions by construction, and the selection helpers
+  surfaced per object under `attrs["zagg_objects"]`, checked per §4.3 with
+  two severities split on §4.1's "never load-bearing": an uninterpretable
+  cache object (role outside the closed vocabulary, missing/unknown-revision
+  `zagg_overview`, no `cell_order`) is dropped with a warning while the node
+  and the product's source nodes stand, and an off-order `cell_order` —
+  interpretable and positively wrong — raises. Per-node variable sets differ
+  in both directions by construction, and the selection helpers
   (`source_orders`, `overview_orders`, `finest_source_at`, `node_objects`)
-  range over source-order sets keyed on per-object roles. The discovery
+  range over source-order sets keyed on per-object roles, answering about
+  the store rather than the query (unaffected by `aoi`/`window`, and defined
+  on a flat product node). Rows are laid down in packed-word order, so a
+  store spanning northern and southern base cells labels them correctly.
+  `window=` takes a declared label only: the reserved all-time token `all`
+  (§4.2) is refused with a pointed error, since the `all.zarr` folds have no
+  counterpart on the source axis yet. Order nodes are omitted with a warning
+  — never guessed — when the root MOC is unusable, when a declared order was
+  never swept, and on a `path_grouping > 1` store (the grouped ancestor-path
+  convention is unsettled writer-side). The discovery
   walk now skips non-decimal overview basenames (`all.zarr`/
   `{window}.zarr` at ancestor nodes), so MOC-less pyramid stores still
   open their source. Fixture: a zagg-written overview store
