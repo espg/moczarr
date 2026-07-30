@@ -154,6 +154,17 @@ class TestCountRecovery:
         with pytest.raises(ValueError, match="2 cells"):
             composition.counts_from_composition(np.zeros(3, dtype=np.uint64), np.asarray([1, 2]))
 
+    def test_two_dimensional_n_signal_raises(self):
+        # A cell-count check on axis 0 alone lets an (N, 1) column through, and
+        # n[:, None] then broadcasts it to (N, N, 8) — a silently wrong RANK,
+        # so counts[:, lane] returns an array instead of erroring. (N, 1) is
+        # exactly what weights.sum(axis=1, keepdims=True) hands over, and
+        # sum(weights) per cell is how §3.3 says N_signal is obtained.
+        words = np.zeros(3, dtype=np.uint64)
+        for bad in (np.ones((3, 1)), np.ones((1, 3)), np.ones((3, 8))):
+            with pytest.raises(ValueError, match="n_signal must be a scalar or 1-D"):
+                composition.counts_from_composition(words, bad)
+
     def test_empty_stratum_never_negative(self):
         words = np.asarray([GOLDEN_WORD], dtype=np.uint64)
         for n in (0, -3):
