@@ -270,6 +270,36 @@ class TestAoiMask:
         keep = coverage.aoi_mask(cells, _words(self.FAR_COUSIN + "1234"))
         np.testing.assert_array_equal(cells[keep], _words(self.FAR_COUSIN))
 
+    def test_member_finer_than_every_cell_skips_whole_array_compare(self, monkeypatch):
+        # Perf fast path: a member finer than EVERY cell cannot bit-equal any
+        # clipped cell (pass-throughs keep their own order), so the whole-array
+        # coarser-or-equal compare is skipped. Pinned two ways — the mask is
+        # identical to the un-short-circuited computation, and no clip2order
+        # call touches the cells array.
+        import mortie
+
+        cells = self._pyramid()
+        member = _words(self.PARENT + "2341")  # order 9, finer than all of {3, 5, 6}
+        expected = coverage.aoi_mask(cells, member)  # the short-circuited result
+
+        sizes = []
+        real_clip = mortie.clip2order
+
+        def counting_clip(order, words):
+            sizes.append(np.asarray(words).size)
+            return real_clip(order, words)
+
+        monkeypatch.setattr(mortie, "clip2order", counting_clip)
+        keep = coverage.aoi_mask(cells, member)
+        np.testing.assert_array_equal(keep, expected)
+        # One clip per distinct coarser cell order, each on the 1-element
+        # member — never on the (7-element) cells array.
+        assert sizes == [1, 1, 1]
+        # Ground truth: the member's ancestors that are actually present.
+        np.testing.assert_array_equal(
+            np.sort(cells[keep]), np.sort(_words(self.PARENT, self.PARENT + "2"))
+        )
+
     def test_mixed_order_cells_with_points(self):
         # Point cells may ride alongside COARSER area cells in one array
         # (previously a mixed-order reject; §4 + issue #8): the point keeps
