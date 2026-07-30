@@ -29,8 +29,10 @@ instead of mis-ranking.
 
 Single cell order by construction (a store's cell coordinate is one order);
 mixed-order domains (pyramids, zagg#262) are the named phase-5 seam —
-intervals-per-order is the natural extension, gated with issue #8 on
-mortie#116.
+intervals-per-order is the natural extension. The mortie gate is OPEN (the
+mixed-order kernels of mortie#116 shipped in 0.9.1, adopted in issue #8), so
+what remains is moczarr-side design work here, not an upstream wait: issue #8
+closed without taking it.
 """
 
 from __future__ import annotations
@@ -193,8 +195,10 @@ class MortonRanges:
 
         The materialized→lazy direction (``MortonMocIndex.from_variables``).
         ``cell_order`` defaults to the order the words themselves carry;
-        mixed orders or a non-ascending array raise (mirroring ``aoi_mask``'s
-        raise-on-ambiguity discipline).
+        mixed orders or a non-ascending array raise — an interval set is a
+        rank space, and rank is only defined at one order (``aoi_mask`` no
+        longer makes that trade: since issue #8 it resolves each cell at its
+        own order, so it is not the analogy it used to be).
         """
         words = np.asarray(words, dtype=np.uint64).ravel()
         if cell_order is None:

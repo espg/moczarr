@@ -162,6 +162,19 @@ class TestPointKind:
         mixed = np.asarray([AREA29_NORTH_WORD, POINT_NORTH_WORD], dtype=np.uint64)
         np.testing.assert_array_equal(convention.is_point_word(mixed), [False, True])
 
+    def test_parity_with_mortie_is_point(self):
+        # mortie's public predicate landed in the new floor (espg/mortie#116,
+        # 0.9.1). moczarr keeps its own suffix mask as an independent read of
+        # the §1 table; this pins that the two agree on every suffix value, so
+        # a divergence surfaces as a spec question instead of drifting.
+        from mortie import is_point
+
+        body = np.uint64(convention.morton_word("-5" + "1" * 27)) & ~np.uint64(0x3F)
+        words = np.asarray([body | np.uint64(s) for s in range(64)], dtype=np.uint64)
+        np.testing.assert_array_equal(
+            np.asarray(convention.is_point_word(words)), np.asarray(is_point(words))
+        )
+
     def test_p_round_trip_goldens(self):
         # BOTH §4 parse directions, both hemispheres: p-marked -> POINT word,
         # unmarked order-29 -> AREA word (the tie-break); renders invert both.
