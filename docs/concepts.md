@@ -198,12 +198,31 @@ becomes a second node level under the product:
   today; on an overview-carrying store the source data becomes the
   source-order child rather than the product node's own dataset, riding
   the multiscale-DataTree conventions.
-- **`role` attrs vocabulary.** Every order node declares its provenance
-  in `attrs["role"]`, a closed two-value vocabulary: `"source"` — the
-  writer's native cell order, exactly one per product; `"overview"` — a
-  sweep-generated coarsening of the source (regenerable, D9 cache class).
-  Selection helpers (source-vs-overview, "finest at or above order k")
-  key on `role`, never on node names.
+- **`role` is per *object*, never per node.** zagg#201's
+  [ruling (5)](https://github.com/englacial/zagg/issues/201#issuecomment-4934715001)
+  refuses to let position — or any node-level summary — stand in for it:
+
+  > The manifest's pyramid section additionally enumerates which orders
+  > *carry* overviews (a useful walker hint), but it cannot be
+  > authoritative per-object: an order can host both overviews and coarse
+  > *source* in sparse regions (D11), so walkers at overview-carrying
+  > orders still check `role` on open. Two artifacts, two jobs: MOC =
+  > source domain; `role` = per-object classification.
+
+  So the attr lives on each **leaf**, a closed two-value vocabulary:
+  `"source"` — the writer's native cell order, exactly one per product;
+  `"overview"` — a sweep-generated coarsening of the source (regenerable,
+  D9 cache class). It never rides alone: #201/D11 make the **source
+  order** and the **aggregation method** mandatory companions in the same
+  attrs, and those are what an "is this comparable to my source data?"
+  check actually reads. An order node is in general a *mixture* of both
+  roles — overviews coarsened from finer regions sitting beside sparse
+  regions written natively at that order ("a shallow zarr may equally be
+  *coarse source*") — so a node-level `role` is at best a derived summary
+  and would need a third `"mixed"` state; this reader will not synthesize
+  one. Selection helpers (source-vs-overview, "finest at or above order
+  k") key on per-leaf `role`, never on node names and never on a
+  node-level attr.
 - **Roster absence is legal per node** (zagg#201's option-A ruling):
   overview nodes carry only the variables the sweep's aggregation roster
   rolls up, so sibling order nodes have **heterogeneous variable sets** —
