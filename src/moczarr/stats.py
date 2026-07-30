@@ -294,16 +294,30 @@ def hash_arrays(
     adopt it verbatim when it lands (spec home: englacial/zagg#340).
     """
     import zarr
+    from zarr.core.sync import sync
     from zarr.storage import ObjectStore
 
+    async def _collect(gen: Any) -> list[str]:
+        return [key async for key in gen]
+
     handle = _resolve_store(store_root, store, store_kwargs)
-    group = zarr.open_group(
-        ObjectStore(handle, read_only=True), path=leaf.strip("/"), mode="r", zarr_format=3
-    )
+    zstore = ObjectStore(handle, read_only=True)
+    prefix = leaf.strip("/")
+    # Walk the leaf by its ``zarr.json`` keys rather than ``Group.members``:
+    # a zagg leaf carries non-zarr sidecar objects (the in-leaf
+    # ``coverage.moc`` occupancy bitmap), which the recursive member probe
+    # trips over — they are simply not arrays, so they are not in O11 scope.
+    keys = sync(_collect(zstore.list_prefix(f"{prefix}/")))
     hashes = {}
-    for key, node in group.members(max_depth=None):
-        if not isinstance(node, zarr.Array):
+    for meta_key in sorted(keys):
+        if not meta_key.endswith("/zarr.json"):
             continue
+        node_path = meta_key[: -len("/zarr.json")]
+        meta = read_json(handle, meta_key)
+        if not isinstance(meta, dict) or meta.get("node_type") != "array":
+            continue
+        node = zarr.open_array(zstore, path=node_path, mode="r", zarr_format=3)
+        key = node_path[len(prefix) + 1 :]
         values = np.ascontiguousarray(node[...])
         if values.dtype.kind == "O":  # vlen: length-prefixed payloads, C order
             digest = hashlib.sha256()
