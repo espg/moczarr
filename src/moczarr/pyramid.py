@@ -350,6 +350,16 @@ def open_overview_order(
             continue  # absent object or unstamped debris (D4)
         if schema_rel is None:
             schema_rel = rel
+        # The per-object roster (and its §4.3 validation) is recorded for
+        # every STAMPED object, before any AOI filtering: `zagg_objects` is
+        # what source_orders/overview_orders answer from, and those are
+        # questions about the store's STRUCTURE — the same store must not
+        # report "carries no overviews" just because the query's AOI missed
+        # them. The AOI governs rows only, exactly as it does for the tree
+        # shape (issue #4). This also makes the §4.3 checks AOI-independent.
+        attrs = meta.get("attributes") if isinstance(meta, dict) else None
+        entry = _object_entry(attrs or {}, dec, window if windowed else None, target_order)
+        entries.append(entry)
         node_word = morton_word(dec)
         if index_kind == "moc":
             leaf_domain = MortonRanges.from_shards([node_word], target_order)
@@ -381,8 +391,6 @@ def open_overview_order(
             if not keep.any():
                 continue
             ds = ds.isel({ds["morton"].dims[0]: keep})
-        attrs = meta.get("attributes") if isinstance(meta, dict) else None
-        entries.append(_object_entry(attrs or {}, dec, window if windowed else None, target_order))
         opened.append(ds)
     if schema_rel is None:
         # Declared but no stamped object anywhere at this order/window: not
@@ -475,15 +483,42 @@ def node_objects(node) -> list[dict]:
 
 
 def _orders_with_role(product_node, role: str) -> tuple[int, ...]:
-    """Stored cell orders under a product node carrying ``role`` objects."""
-    orders = []
+    """Stored cell orders under a product node carrying ``role`` objects.
+
+    A **structural** answer, not a query-scoped one: the per-object entries it
+    keys on are recorded for every stamped object the order node names, so an
+    ``aoi``/``window`` that empties the rows leaves these answers unchanged.
+
+    Defined on a **flat** (pyramid-declared-off) product node too, where the
+    product node itself holds the data instead of an order child: it is source
+    at its manifest cell order and carries no overviews. Without that case
+    both helpers would answer ``()`` — "no source, no overviews" — for a
+    perfectly ordinary product.
+    """
+    ds = product_node.ds if hasattr(product_node, "ds") else product_node
+    native = (ds.attrs.get("morton_hive") or {}).get("cell_order")
+    children = {}
     for name, child in product_node.children.items():
         try:
-            order = int(name)
+            children[int(name)] = child
         except ValueError:
             continue
-        if any(entry.get("role") == role for entry in node_objects(child)):
-            orders.append(order)
+    if not children:
+        if role != "source" or native is None:
+            return ()
+        return (int(native),)
+    orders = {
+        order
+        for order, child in children.items()
+        if any(entry.get("role") == role for entry in node_objects(child))
+    }
+    if role == "source" and native is not None and int(native) in children:
+        # The leaf level carries source by definition — a manifest fact, not a
+        # query result. Its roster CAN legitimately be empty (the root MOC ∩
+        # AOI prunes leaf candidates before any stamp is fetched, so a
+        # non-intersecting AOI leaves nothing to key on), and dropping the
+        # order there would make a structural answer query-dependent.
+        orders.add(int(native))
     return tuple(sorted(orders, reverse=True))
 
 
@@ -494,13 +529,20 @@ def source_orders(product_node) -> tuple[int, ...]:
     resolution at a time, but heterogeneity is regional across shards, so a
     product may carry source at several orders — "the source node" is not a
     well-formed request. Keys on the per-object ``role`` entries, never on
-    node names.
+    node names, and answers about the **store**: unaffected by the ``aoi`` or
+    ``window`` the tree was opened with. On a flat product node (pyramid
+    declared off) the answer is the node's own cell order.
     """
     return _orders_with_role(product_node, "source")
 
 
 def overview_orders(product_node) -> tuple[int, ...]:
-    """Every stored cell order carrying at least one *overview* object, finest first."""
+    """Every stored cell order carrying at least one *overview* object, finest first.
+
+    Structural, like :func:`source_orders`: ``()`` means the product stores no
+    overviews at all (a flat product node included), never "the query's AOI
+    missed them".
+    """
     return _orders_with_role(product_node, "overview")
 
 

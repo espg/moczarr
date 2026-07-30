@@ -389,6 +389,22 @@ def open_hive(
     for rel, meta, stamp in zip(candidates, metas, stamps):
         if stamp is None:
             continue  # debris or a MOC-listed shard whose leaf is gone (D4)
+        if _objects_out is not None:
+            # Per-object role entry for every leaf this open ADMITS, recorded
+            # before the AOI rejects below: the roster answers structural
+            # questions (moczarr.pyramid.source_orders), so it must not shrink
+            # with the query. Role absence means source (zagg spec §4.3); a
+            # role-carrying object inside the source domain is off-convention
+            # but surfaced verbatim rather than hidden (mixture-tolerant).
+            attrs = meta.get("attributes") if isinstance(meta, dict) else None
+            node_dec, node_label = split_leaf_name(rel.rsplit("/", 1)[-1])
+            _objects_out.append(
+                {
+                    "node": node_dec,
+                    "window": node_label,
+                    "role": (attrs or {}).get("role") or "source",
+                }
+            )
         if aoi_words is not None:
             coverage = parse_leaf_coverage(stamp)
             if coverage is not None and coverage.get("box"):
@@ -431,20 +447,6 @@ def open_hive(
             if not keep.any():
                 continue
             ds = ds.isel({ds["morton"].dims[0]: keep})
-        if _objects_out is not None:
-            # Per-object role entry for every leaf this open admits: role
-            # absence means source (zagg spec §4.3); a role-carrying object
-            # inside the source domain is off-convention but surfaced
-            # verbatim rather than hidden (the mixture-tolerant grammar).
-            attrs = meta.get("attributes") if isinstance(meta, dict) else None
-            node_dec, node_label = split_leaf_name(rel.rsplit("/", 1)[-1])
-            _objects_out.append(
-                {
-                    "node": node_dec,
-                    "window": node_label,
-                    "role": (attrs or {}).get("role") or "source",
-                }
-            )
         opened.append(ds)
     if not opened:
         # Issue #4 contract: emptiness against a covered store is a data

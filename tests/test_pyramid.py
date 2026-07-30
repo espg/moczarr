@@ -286,6 +286,33 @@ class TestRolesAndVariables:
         with pytest.raises(ValueError, match="no source order"):
             finest_source_at(node, 7)
 
+    def test_helpers_are_structural_not_query_scoped(self, root):
+        # "Which orders does this product store?" is a question about the
+        # STORE. An out-of-coverage AOI empties every node's rows (issue #4)
+        # but must not turn the roster into "no source, no overviews" — the
+        # per-object entries are recorded for every stamped object.
+        with pytest.warns(UserWarning, match="intersects no coverage"):
+            scoped = open_store(root, products=["atl06"], aoi=["-5111"])
+        node = scoped["atl06"]
+        assert node["6"].ds.sizes["cells"] == 0
+        assert source_orders(node) == (8,)
+        assert overview_orders(node) == (6, 4)
+        assert finest_source_at(node, 8) == 8
+        unscoped = open_store(root, products=["atl06"])
+        assert node_objects(node["6"]) == node_objects(unscoped["atl06"]["6"])
+        assert source_orders(node) == source_orders(unscoped["atl06"])
+
+    def test_helpers_on_a_flat_product_node(self):
+        # A pyramid-declared-off product has no order children; the node
+        # itself is the source data at its own cell order. () would read as
+        # "no source", so the flat case gets a defined answer.
+        tree = open_store(str(MULTI), window="2019")
+        node = tree["atl06"]
+        assert not node.children
+        assert source_orders(node) == (node.ds.attrs["morton_hive"]["cell_order"],)
+        assert overview_orders(node) == ()
+        assert finest_source_at(node, 20) == node.ds.attrs["morton_hive"]["cell_order"]
+
     def test_helpers_key_on_roles_not_names(self, root, tmp_path):
         # Flip one object's role attrs to source at an overview order: the
         # order joins the source SET while keeping its overview siblings —
