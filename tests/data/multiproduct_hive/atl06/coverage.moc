@@ -1,0 +1,17 @@
+{
+ "spec": "morton-moc/1",
+ "encoding": "ranges",
+ "order": 3,
+ "source": "builder",
+ "generated_at": "2026-07-27T00:00:00+00:00",
+ "ranges": [
+  [
+   "4111",
+   "4111"
+  ],
+  [
+   "4112",
+   "4112"
+  ]
+ ]
+}

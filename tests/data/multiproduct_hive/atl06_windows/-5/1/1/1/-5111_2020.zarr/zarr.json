@@ -1,0 +1,26 @@
+{
+ "zarr_format": 3,
+ "node_type": "group",
+ "attributes": {
+  "morton_hive_commit": {
+   "spec": "morton-hive/2",
+   "complete": true,
+   "cells_with_data": 16,
+   "granule_count": 1,
+   "written_at": "2026-07-27T00:00:00+00:00",
+   "coverage": {
+    "spec": "morton-moc/1",
+    "box": [
+     "-5111",
+     null,
+     null,
+     null
+    ],
+    "cell_order": 5,
+    "source": "builder",
+    "encoding": "full"
+   },
+   "window": "2020"
+  }
+ }
+}

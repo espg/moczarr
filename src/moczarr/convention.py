@@ -43,6 +43,13 @@ import numpy as np
 #: store with ``schedule: none``; ``/2`` adds the temporal block.
 HIVE_SPEC = "morton-hive/1"
 HIVE_SPEC_V2 = "morton-hive/2"
+#: The D23 window-basename grammar (spec §6.4): leaf basename = time window
+#: (``{window}.zarr``; reserved token ``all`` for ``schedule: none``), the
+#: morton id recoverable from the digit path / stamp ``shard_key``. moczarr
+#: consumes this spec string for SIDECAR-NAME arithmetic only so far
+#: (:func:`moczarr.stats.stats_sidecar_key`); ``parse_manifest`` still
+#: rejects it — the ``/3`` store opener lands with zagg's ``/3`` writer.
+HIVE_SPEC_V3 = "morton-hive/3"
 #: Root manifest object name.
 MANIFEST_NAME = "morton_hive.json"
 #: Root-group attrs key carrying the commit stamp.

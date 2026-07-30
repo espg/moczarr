@@ -1,0 +1,29 @@
+{
+ "schema_version": 1,
+ "shard_key": 12682136550675316739,
+ "window": "2020",
+ "run_id": "fixture-run",
+ "semantic_hash": null,
+ "zagg_version": "0.36.0",
+ "n_shards": 1,
+ "n_granules": 1,
+ "granules_sha256": "20af54d3bbb36956b87503248bb621fcdb4e2ec856f9e6e94495eb753f8a3b84",
+ "n_obs": 20,
+ "cells_with_data": 16,
+ "phase_timings": {
+  "read": 1.0,
+  "aggregate": 0.5,
+  "write": 0.25
+ },
+ "duration_s": 2.0,
+ "spill_bytes": null,
+ "gb_seconds": null,
+ "est_cost_usd": null,
+ "max_memory_mb": 512.0,
+ "container_hwm_mb": null,
+ "lambda": null,
+ "timestamp": "2026-07-27T00:03:00+00:00",
+ "success": true,
+ "error": null,
+ "invoked_by": null
+}

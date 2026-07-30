@@ -1,0 +1,3 @@
+# canonical semantic core (D19) — deterministic fixture bytes
+dataset: {short_name: ATL06, version: '007'}
+aggregation: {count: {func: count}}
