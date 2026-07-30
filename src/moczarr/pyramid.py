@@ -24,6 +24,17 @@ is in general a *mixture* of ``role: overview`` zarrs and coarse *source*
 zarrs written natively at that order (D24 regional heterogeneity), so every
 object's classification is checked on open and surfaced per object under
 ``attrs["zagg_objects"]`` — this reader never synthesizes a node-level role.
+That mixture is **grammar-supported here but not yet producible**, and the
+docstrings below should not be read as coverage of it: this path only ever
+names ``{ancestor}/{window}.zarr`` candidates, so a coarse source leaf — named
+``{decimal}.zarr`` under the leaf dialect — is never enumerable at an overview
+order; and a regionally heterogeneous source domain has no representable root
+envelope either, since ``coverage.moc`` carries a single ``order`` and
+:func:`moczarr.coverage.ranges_words` raises on any range endpoint off it. So
+:func:`source_orders` can gain a second member today only via a role-*stripped*
+overview (what the tests construct). The seam that would write a real D24
+mixture is spec-legal (§4.3 classifies per object) and unbuilt.
+
 For the same D24 reason "the source node" is not a well-formed request:
 source-order uniqueness is per (shard, window), not per product, and the
 selection helpers below (:func:`source_orders`, :func:`overview_orders`,
