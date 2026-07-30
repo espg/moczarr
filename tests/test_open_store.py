@@ -163,10 +163,31 @@ class TestOpenStoreDegenerate:
         tree = open_store(str(SERC))
         assert list(tree.children) == ["atl06"]
         assert not tree.to_dataset().data_vars
-        assert tree.attrs["morton_hive_store"]["products"] == ["atl06"]
         want = open_hive(str(SERC))
         want.attrs["semantic_hash"] = _semantic_hash(SERC)
         xr.testing.assert_identical(tree["atl06"].to_dataset(), want)
+
+    def test_bare_store_roster_agrees_with_list_products(self):
+        # The root attrs never claim a roster list_products denies: a bare
+        # store publishes no named products, so products == [] and the
+        # derived child identity is reported as `node` under `bare: True`.
+        from moczarr import list_products
+
+        tree = open_store(str(SERC))
+        assert list_products(str(SERC)) == []
+        assert tree.attrs["morton_hive_store"] == {
+            "store_root": str(SERC),
+            "products": [],
+            "bare": True,
+            "node": "atl06",
+        }
+
+    def test_products_filter_against_bare_store_raises(self):
+        # No roster to filter on — including the derived node name, which is
+        # not a product (the old behavior "succeeded" against it).
+        for names in (["atl06"], ["serc"]):
+            with pytest.raises(ValueError, match="bare single-product store"):
+                open_store(str(SERC), products=names)
 
     def test_not_a_store_raises(self, tmp_path):
         (tmp_path / "junk.txt").write_text("nope")

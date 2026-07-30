@@ -4,18 +4,19 @@
 
 - `open_store`: a store root as one `xarray.DataTree` — empty root
   (store-level attrs), one child node per product (each exactly that
-  product's `open_hive` Dataset — its laziness, no stronger promise —
-  with `semantic_hash` on the node attrs), kwargs forwarded per node
-  with `window=` reaching only the windowed
-  products, a `products=[...]` filter, and the bare single-product store
-  as a valid one-child tree. xarray floor is now `>=2026.01.0` — bisected,
-  not read off a changelog: `xr.Coordinates.from_xindex` (2025.03.0) is
-  what the default `index_kind="moc"` path needs to open at all, and
-  `set_xindex` over an already-indexed coordinate (`MortonMocIndex`'s
-  adoption path) only works from 2026.01.0. Resolution (pyramid-order)
-  nodes are designed on the concepts page but **not implemented** — gated
-  on englacial/zagg#201's first overview fixture
-  ([#15](https://github.com/espg/moczarr/issues/15)).
+  product's `open_hive` Dataset — its laziness, no stronger promise — with
+  `semantic_hash` on the node attrs), kwargs forwarded per node with
+  `window=` reaching only the windowed products, a `products=[...]`
+  filter, and the bare single-product store as a valid one-child tree
+  (roster `[]` + `bare`/`node` attrs, agreeing with `list_products`;
+  `products=` there raises). xarray floor is now `>=2026.01.0` —
+  bisected, not read off a changelog: `xr.Coordinates.from_xindex`
+  (2025.03.0) is what the default `index_kind="moc"` path needs to open
+  at all, and `set_xindex` over an already-indexed coordinate
+  (`MortonMocIndex`'s adoption path) only works from 2026.01.0.
+  Resolution (pyramid-order) nodes are designed on the concepts page but
+  **not implemented** — gated on englacial/zagg#201's first overview
+  fixture ([#15](https://github.com/espg/moczarr/issues/15)).
 - Multi-product store roots (zagg D19, mortie spec §6.5): `list_products`
   enumerates the named products of a store root (surfacing `semantic_hash`
   and `aggregation.yaml` presence); `open_hive(..., product=...)` opens a

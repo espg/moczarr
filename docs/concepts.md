@@ -151,7 +151,10 @@ returns that tree:
 - **A bare single-product store is the valid degenerate form**: a
   one-child tree (the child named from the manifest's dataset
   `short_name`), so tooling written against the tree shape works on any
-  store.
+  store. That name is *derived*, not published: the roster stays `[]`
+  (exactly what `list_products` says) and the store attrs carry
+  `bare: True` + `node: <derived name>` — so `products=` has nothing to
+  filter on there and raises.
 
 Which axes become nodes is a design ruling (zagg's O14,
 [issue #15](https://github.com/espg/moczarr/issues/15)), worth knowing as

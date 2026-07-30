@@ -556,7 +556,8 @@ concurrency, xr_kwargs, **store_kwargs
     xarray.DataTree
         Root node: no data variables, no coordinates — only
         ``attrs["morton_hive_store"]`` (``store_root`` plus the name-sorted
-        ``products`` roster the store carries, unfiltered). One child node
+        ``products`` roster the store *publishes*, unfiltered — exactly
+        :func:`list_products`, so it is ``[]`` for a bare store). One child node
         per opened product, named by its product name; each child is the
         per-node ``open_hive`` Dataset unchanged (laziness, index posture,
         and the issue-#4 empty-AOI contract all apply per node), plus
@@ -566,7 +567,12 @@ concurrency, xr_kwargs, **store_kwargs
 
         A **bare single-product store** returns the valid degenerate form:
         a one-child tree, the child named from the manifest's dataset
-        ``short_name`` lowercased (fallback ``"product"``).
+        ``short_name`` lowercased (fallback ``"product"``). That name is
+        *derived*, not a published product, so the roster stays ``[]`` and
+        the store attrs carry ``bare: True`` plus ``node: <derived name>``
+        instead of fabricating a roster ``list_products`` would deny —
+        and ``products=`` against a bare store raises rather than filtering
+        on a name the store never published.
 
         Raises ``ValueError`` when the root has neither products nor a
         manifest, and per-node errors (``NoCoverageError``, the windowed
@@ -594,8 +600,16 @@ concurrency, xr_kwargs, **store_kwargs
                 "semantic_hash": manifest.get("semantic_hash"),
             }
         ]
-    roster = [record["name"] for record in records]
+    # The roster is what the store *publishes* — exactly ``list_products``,
+    # empty for a bare store; the degenerate child's name is derived from
+    # the manifest, so it is reported separately and never as a product.
+    roster = [] if bare else [record["name"] for record in records]
     if wanted is not None:
+        if bare:
+            raise ValueError(
+                f"products={sorted(wanted)} but {store_root} is a bare single-product store "
+                "(no named products — spec §6.5 product prefixes); open it without products="
+            )
         missing = sorted(wanted - set(roster))
         if missing:
             raise ValueError(
@@ -625,5 +639,9 @@ concurrency, xr_kwargs, **store_kwargs
         if record.get("semantic_hash"):
             ds.attrs["semantic_hash"] = record["semantic_hash"]
         nodes[record["name"]] = ds
-    root = xr.Dataset(attrs={"morton_hive_store": {"store_root": store_root, "products": roster}})
+    store_attrs: dict[str, Any] = {"store_root": store_root, "products": roster}
+    if bare:
+        store_attrs["bare"] = True
+        store_attrs["node"] = records[0]["name"]
+    root = xr.Dataset(attrs={"morton_hive_store": store_attrs})
     return xr.DataTree.from_dict({"/": root, **nodes})
