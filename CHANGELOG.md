@@ -5,12 +5,13 @@
 - Generic `zagg-ragged/1` decode layer (`moczarr.ragged`): strict-gated
   element attrs (`parse_ragged_attrs` — missing/foreign/newer spec raises,
   never half-parses), `read_ragged` whole-store sweep (sharded and flat
-  geometries through one code path, one GET per stored object — the
-  sibling `morton` coordinate included,
-  metadata-bound located siblings with the §1.1 row-alignment check),
-  `read_cell` random access (2 ranged GETs on a sharded store), zero
-  product knowledge — element-generic over a 1-D morton cells axis
-  (rect-grid ragged fields carry no per-cell morton and stay out of scope). HHDC tensor profile (`moczarr.hhdc`): `read_tensors`
+  geometries through one code path, one GET per stored object — the sibling
+  `morton` coordinate included, metadata-bound located siblings with the
+  §1.1 row-alignment check), `read_cell` random access (2 ranged GETs on a
+  sharded store), non-ordinal debris under `c/` skipped with a warning, and
+  zero product knowledge — element-generic over a 1-D morton cells axis
+  (rect-grid ragged fields carry no per-cell morton and stay out of scope).
+  HHDC tensor profile (`moczarr.hhdc`): `read_tensors`
   yields `(tensor, mask, (offset, gain), morton_index)` per coverage block
   — the englacial/zagg#336 contract, bit-identical to zagg's
   `readers.tdigest_tensor` (committed goldens + live parity) — with the
