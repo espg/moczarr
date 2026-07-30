@@ -533,9 +533,11 @@ def open_store(
         bare single-product store (manifest at the root), discriminated by
         content per spec §6.5.
     products : sequence of str, optional
-        Open only these products (a filter for stores with many). Unknown
-        names raise, listing what exists. Children stay in name-sorted
-        order regardless of the filter's order.
+        Open only these products (a filter for stores with many). Names are
+        checked against the spec §6.5 grammar **before any I/O**; unknown
+        (but well-formed) names raise once the roster is known, listing what
+        exists. Children stay in name-sorted order regardless of the
+        filter's order.
     aoi, window, anonymous, fabricate_cell_ids, decode, index_kind, \
 concurrency, xr_kwargs, **store_kwargs
         Forwarded to each node's :func:`open_hive` (see there), with one
@@ -572,6 +574,10 @@ concurrency, xr_kwargs, **store_kwargs
     """
     import xarray as xr
 
+    # Grammar before I/O: an off-spec product name is a caller bug, so it
+    # costs no LIST/GET to reject (spec §6.5 names are pure syntax).
+    wanted = {validate_product_name(name) for name in products} if products is not None else None
+
     obstore_store = open_object_store(store_root, anonymous=anonymous, **store_kwargs)
     records = list_products(store_root, store=obstore_store)
     bare = not records
@@ -589,8 +595,7 @@ concurrency, xr_kwargs, **store_kwargs
             }
         ]
     roster = [record["name"] for record in records]
-    if products is not None:
-        wanted = {validate_product_name(name) for name in products}
+    if wanted is not None:
         missing = sorted(wanted - set(roster))
         if missing:
             raise ValueError(

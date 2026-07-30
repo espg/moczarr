@@ -118,8 +118,20 @@ class TestOpenStoreProductsFilter:
             open_store(multiroot, products=["atl07"])
 
     def test_off_grammar_product_rejected_before_io(self, multiroot):
+        # "Before I/O" is literal: the §6.5 grammar check runs ahead of the
+        # object-store open, so no LIST/GET is spent on a caller typo.
+        import moczarr.open as open_mod
+
         with pytest.raises(ValueError, match="§6.5"):
             open_store(multiroot, products=["../escape"])
+
+        def boom(*args, **kwargs):
+            raise AssertionError("store opened before the product grammar check")
+
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr(open_mod, "open_object_store", boom)
+            with pytest.raises(ValueError, match="§6.5"):
+                open_store(multiroot, products=["../escape"])
 
 
 class TestOpenStoreWindowForwarding:
