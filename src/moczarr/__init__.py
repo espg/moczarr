@@ -1,5 +1,11 @@
 """moczarr: sparse-DGGS xarray reader for morton-hive zarr stores."""
 
+from moczarr.composition import (
+    COMPOSITION_SPEC,
+    counts_from_composition,
+    presence,
+    unpack_composition,
+)
 from moczarr.convention import (
     COMMIT_ATTR,
     COVERAGE_SIDECAR,
@@ -68,6 +74,7 @@ except ImportError:  # pragma: no cover - version file is generated at build tim
 
 __all__ = [
     "COMMIT_ATTR",
+    "COMPOSITION_SPEC",
     "COVERAGE_SIDECAR",
     "COVERAGE_SPEC",
     "FLOAT64_EXACT_MAX_ORDER",
@@ -87,6 +94,7 @@ __all__ = [
     "box_words",
     "check_node_invariant",
     "combined_hash",
+    "counts_from_composition",
     "decode_bitmap",
     "fabricate_cell_ids",
     "hash_arrays",
@@ -105,6 +113,7 @@ __all__ = [
     "parse_leaf_coverage",
     "parse_manifest",
     "parse_root_coverage",
+    "presence",
     "ranges_contain",
     "ranges_words",
     "read_commit",
@@ -116,6 +125,7 @@ __all__ = [
     "root_coverage_and",
     "split_leaf_name",
     "stats_sidecar_key",
+    "unpack_composition",
     "stats_sidecar_path",
     "validate_product_name",
     "verify_arrays",
