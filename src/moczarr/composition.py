@@ -16,8 +16,10 @@ Quantization (§3.2) uses a **presence floor**: ``k = round(255 * c / N)``
 (round-half-even), except any nonzero count quantizes to at least 1. So
 ``lane > 0`` means "this flag occurred" *exactly, at every N*, through
 arbitrary merge chains (:func:`presence`); count recovery
-``round(k * N / 255)`` is exact whenever ``N <= 254`` and within ``±N/510``
-above (:func:`counts_from_composition`).
+``round(k * N / 255)`` is exact whenever ``N <= 254`` and within
+``±(N/510 + ½)`` above (:func:`counts_from_composition`) — the writer's
+quantization costs ``N/510`` and the reader's own ``round`` adds up to
+another half.
 
 Lane *meaning* is attrs-bound, never positional: the array's ``composition``
 attrs block (§3.3) declares ``lanes`` (names in bit order), ``of`` (the
@@ -82,11 +84,17 @@ def counts_from_composition(words, n_signal) -> np.ndarray:
 
     ``n_signal`` is the per-cell total weight of the attrs-declared ``of``
     digest (scalar or ``(N,)``, broadcast against ``words``). Recovery is
-    **exact** whenever ``n_signal <= 254`` (quantization error
-    ``<= N/510 < 1/2``, spec §3.2); above that it is a bounded estimate
-    within ``±N/510`` (plus ``O(N/510)`` per re-quantizing merge) — returned,
-    not raised, since presence stays exact and large-N cells are the common
-    case. ``n_signal <= 0`` (empty stratum) recovers all-zero counts.
+    **exact** whenever ``n_signal <= 254``: the writer's quantization error is
+    ``<= N/510 < 1/2`` (spec §3.2), so this function's ``round`` lands back on
+    the integer count. Above that it is a bounded estimate within
+    ``±(N/510 + 1/2)`` — the two roundings compose, ``N/510`` from the writer
+    plus up to ``1/2`` here, i.e. ``<= floor(N/510 + 1/2)`` in integer terms —
+    plus ``O(N/510)`` per re-quantizing merge. Returned, not raised, since
+    presence stays exact and large-N cells are the common case. The bound
+    covers lanes the writer *rounded*; a lane lifted by the presence floor
+    (``k = 1`` for a count that would have quantized to 0) recovers
+    ``~N/255`` by design, trading count accuracy for exact presence.
+    ``n_signal <= 0`` (empty stratum) recovers all-zero counts.
     """
     lanes = unpack_composition(words).astype(np.float64)
     n = np.atleast_1d(np.asarray(n_signal, dtype=np.float64))

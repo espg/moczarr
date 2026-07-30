@@ -76,16 +76,43 @@ class TestCountRecovery:
             assert not recovered[:, 1:].any()
 
     def test_bounded_estimate_above_254(self):
-        # Adopted lean: above N=254 the bounded ±N/510 estimate is returned,
-        # never raised — presence stays exact regardless. The bound holds for
-        # every lane the writer rounded (k = round(255c/N) >= 1); a FLOORED
-        # lane (c > 0 rounding to k=0, forced to 1) trades count accuracy for
-        # exact presence and recovers ~N/255 instead — tested below.
-        n = 100_000
-        counts = np.asarray([0, 250, 499, 500, 50_000, 99_999, n])
+        # Adopted lean: above N=254 the bounded estimate is returned, never
+        # raised — presence stays exact regardless. The bound is COMPOSITE:
+        # the writer's quantization costs <= N/510 and the round() in
+        # counts_from_composition adds up to another 1/2, so the claim is
+        # |recovered - c| <= N/510 + 1/2 for every lane the writer ROUNDED
+        # (k = round(255c/N) >= 1). A FLOORED lane (c > 0 quantizing to k=0,
+        # forced to 1) is outside it by design and is tested below.
+        #
+        # Swept over EVERY count, not spot-checked: the excess over a bare
+        # N/510 lives in the small-c regime (255c/N just above 1/2) and is
+        # n-dependent — at n=1000, c=2 recovers 4, an error of 2 against
+        # N/510 = 1.9608, while n=100_000 has no such count at all.
+        exceeds_bare_bound = 0
+        for n in (255, 256, 509, 510, 765, 1000, 10_000, 100_000):
+            counts = np.arange(n + 1)
+            rounded = np.rint(255.0 * counts / n) >= 1  # the floor never fired
+            words = np.asarray(
+                [_pack([k] + [0] * 7) for k in _quantize(counts, n)], dtype=np.uint64
+            )
+            err = np.abs(composition.counts_from_composition(words, n)[:, 0] - counts)[rounded]
+            assert np.all(err <= n / 510 + 0.5), f"n={n}, worst={err.max()}"
+            exceeds_bare_bound += int((err > n / 510).sum())
+        # The extra 1/2 is load-bearing, not padding: a bare N/510 fails here.
+        assert exceeds_bare_bound > 0
+
+    def test_bound_holds_in_the_small_c_regime_at_large_n(self):
+        # Same claim where the n-dependence bites hardest: at n=10^6 the worst
+        # rounded lane is c=1961 (255c/N = 0.50006 -> k=1), recovering
+        # round(10^6/255) = 3922 — an error of 1961, inside N/510 + 1/2
+        # (1961.28) and outside a bare N/510 (1960.78).
+        n = 1_000_000
+        counts = np.arange(5_000)
         words = np.asarray([_pack([k] + [0] * 7) for k in _quantize(counts, n)], dtype=np.uint64)
-        recovered = composition.counts_from_composition(words, n)[:, 0]
-        assert np.all(np.abs(recovered - counts) <= np.ceil(n / 510))
+        err = np.abs(composition.counts_from_composition(words, n)[:, 0] - counts)
+        rounded = np.rint(255.0 * counts / n) >= 1
+        assert np.all(err[rounded] <= n / 510 + 0.5)
+        assert err[1961] == 1961 > n / 510
 
     def test_floored_lane_recovers_the_floor_estimate(self):
         # One occurrence in 100k: k floors to 1, so recovery says ~N/255 (392),
