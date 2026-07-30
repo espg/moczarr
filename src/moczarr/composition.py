@@ -18,9 +18,10 @@ writer (and which the §7 conformance fixture this package tests against
 does). Callers reading arrays from an untrusted writer should assert
 ``array.fill_value == 0`` at the open, alongside the §3.3 attrs gate.
 
-Normative home: zagg ``docs/specification.md`` §3 — currently in review on
-englacial/zagg#346 (branch ``claude/340-store-spec``; references confirmed
-at merge). Narrative in zagg ``docs/signal_strata.md``; the writer is
+Normative home: zagg ``docs/specification.md`` §3 — in review on
+englacial/zagg#346, and the section references here are read against
+``claude/340-store-spec`` at ``555874b`` (post-review-fold), re-confirmed at
+that PR's merge. Narrative in zagg ``docs/signal_strata.md``; the writer is
 ``zagg.stats.composition``.
 
 Quantization (§3.2) uses a **presence floor**: ``k = round(255 * c / N)``

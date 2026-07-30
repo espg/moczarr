@@ -313,13 +313,23 @@ class TestAttrsBinding:
 class TestStoreReadBinding:
     """Bind a REAL zagg-written composition array to its ``of`` weights.
 
-    The array under ``tests/data/composition/`` is vendored from the zagg
-    spec-conformance ``kitchen_sink`` fixture (englacial/zagg#346, branch
-    ``claude/340-store-spec``, ``tests/data/spec/.../6/composition``) —
-    branch-sourced pending that PR's merge, at which point the copy is
-    re-checkable against the merged fixture byte-for-byte. The ``n_signal``
-    literals below are that fixture's recorded per-cell signal-digest
-    weights (``kitchen_sink.expected.json``).
+    Vendored from the zagg spec-conformance ``kitchen_sink`` fixture, pinned to
+    a revision rather than a branch name so the re-check is a two-command diff
+    instead of archaeology and a regenerated fixture shows up as a mismatch
+    rather than a stale copy that keeps passing::
+
+        englacial/zagg 555874b (PR #346, branch claude/340-store-spec)
+        tests/data/spec/kitchen_sink/1/1/2/1/3/11213.zarr/6/composition
+
+        cmp  <zagg>/.../6/composition/c/0         tests/data/composition/c/0
+        diff <zagg>/.../6/composition/zarr.json   tests/data/composition/zarr.json
+
+    Both are byte-identical at that sha (re-verified after #346's review fold,
+    which left the fixture bytes untouched — it moved the branch from
+    ``166e908`` to ``555874b`` without regenerating this array). Re-pin the sha
+    here if the fixture is regenerated, and again at #346's merge. The
+    ``n_signal`` literals below are that fixture's recorded per-cell
+    signal-digest weights (``kitchen_sink.expected.json``).
     """
 
     #: (cell index in the 16-cell dense subtree, n_signal); other cells empty.
