@@ -44,9 +44,14 @@ order (:data:`COMPOSITION_LANES`), since §3.3 permits no other. A permuted
 declaration is a non-conforming store, not a relabeling instruction: binding
 it would decode every lane under the wrong name.
 
-Deliberately absent: a read-side merge. The §3.4 merge law is a write/rollup
-monoid over ``(word, n_signal)`` pairs and stays zagg-owned; moczarr
-consumes committed words.
+Deliberately absent: a read-side merge. The §3.4 merge law is symmetric and,
+**up to the bounded re-quantization error**, associative — every fold
+re-quantizes, so fold order never affects presence but shifts counts within
+``O(n/510)`` and folds are not byte-stable across orders. It operates on
+``(word, n_signal)`` *pairs*, and the weights come from the ``of`` digests'
+total weights, which this module never opens: a ``merge(word_a, word_b)``
+that could not demand them would be a trap. So the law stays zagg-owned and
+moczarr consumes committed words.
 """
 
 from __future__ import annotations
