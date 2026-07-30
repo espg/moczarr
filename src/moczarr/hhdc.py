@@ -29,11 +29,14 @@ Three deliberate seams:
   zagg's ``readers/tdigest_tensor.py``, several functions logic-identical.
   That duplication is deliberate and temporary — zagg's reader is expected to
   retire in moczarr's favour — but until then it is a real drift surface,
-  held by the committed goldens plus ``TestLiveParity``. The live leg needs
-  zagg's post-englacial/zagg#339 reader surface, which no zagg *release*
-  carries yet (0.39.0's reader predates the deinterleave), so it is a
-  checkout-only leg: against the declared ``zagg>=0.39`` floor it skips, and
-  the enforcement that reaches CI is the goldens.
+  held by the committed goldens plus ``TestLiveParity``. That live leg needs
+  zagg's post-englacial/zagg#339 reader surface: **zagg 0.40.0 is the first
+  release to carry it** (0.39.0's reader predates the deinterleave, so the
+  leg silently skipped against the declared ``zagg>=0.39`` floor — the
+  goldens were the only enforcement). Verified against the 0.40.0 sdist; the
+  extra's floor is still ``>=0.39``, and bumping it to ``>=0.40`` — which
+  turns the parity legs from skip-guarded into always-on — is a dependency
+  change awaiting sign-off, not something this module can assume.
 - **Occupancy** — the mask channel decodes the hive leaf's ``coverage.moc``
   occupancy sidecar through moczarr's own frozen bitmap convention
   (:func:`moczarr.coverage.decode_bitmap`), never through zagg.

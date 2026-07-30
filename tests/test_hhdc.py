@@ -12,11 +12,12 @@ Parity is pinned two ways against the committed SERC strata fixture
 - **Live parity** (additionally needs zagg's post-#339 reader surface): the
   two readers run side by side on the same store and must agree exactly —
   end to end and helper by helper, since the reader logic is a port, not
-  just the imported algebra. No zagg *release* carries that surface
-  (:data:`ZAGG_PORT_COMMIT` is untagged; 0.39.0's reader predates the
-  deinterleave), so this leg runs against a zagg **checkout** and skips
-  otherwise — the goldens are what enforce the port in a released-zagg
-  environment.
+  just the imported algebra. The gate is a surface probe, not a version
+  compare: 0.39.0 (the extra's declared floor) has no such reader, so the
+  leg skipped there and the goldens were the only enforcement; **zagg
+  0.40.0 is the first release that carries it**, and this suite passes
+  against it. Bumping the extra's floor to ``>=0.40`` would make the leg
+  always-on; that is a dependency change for sign-off, so the probe stays.
 
 The layout kernel, the occupancy predicate and the whole mask channel, the
 ``open_hive`` no-choke check, and the missing-extra error hint all run
@@ -62,8 +63,10 @@ BLOCK_ORDER = int(EXPECTED["goldens"]["params"]["block_order"])
 LEAF_DEPTH = 2
 #: The zagg commit whose ``readers/tdigest_tensor.py`` the ported reader logic
 #: in :mod:`moczarr.hhdc` mirrors: the englacial/zagg#336 fold. It carries no
-#: tag, and 0.39.0 (the declared floor) has neither ``has_exact_occupancy`` nor
-#: ``rank_to_rowcol`` — hence the checkout-only parity legs below.
+#: tag, and 0.39.0 (the extra's declared floor) has neither
+#: ``has_exact_occupancy`` nor ``rank_to_rowcol`` — so the parity legs below
+#: skip against the floor. zagg **0.40.0** is the first release carrying the
+#: surface, which is what makes them reachable from PyPI at all.
 ZAGG_PORT_COMMIT = "3890cb5"
 
 HAS_ZAGG = importlib.util.find_spec("zagg") is not None
@@ -415,8 +418,8 @@ class TestPortedSurface:
     (:data:`ZAGG_PORT_COMMIT`), so the parity legs are the only thing holding
     them. Value parity below can only compare what still EXISTS — a rename or
     retirement upstream would silently reduce this file to self-certification,
-    which is what these two checks catch. Like :class:`TestLiveParity` they
-    are checkout-only: no zagg release carries the post-#339 surface.
+    which is what these two checks catch. Gated like :class:`TestLiveParity`:
+    reachable from zagg 0.40.0 onward, skipped against the ``>=0.39`` floor.
     """
 
     PORTED = (
