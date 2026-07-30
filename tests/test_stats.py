@@ -7,11 +7,13 @@ chunk bytes — the verifier is golden-tested, not self-tested; the COMBINED
 digest, which the generator does take from ``combined_hash``, is pinned by
 the :data:`FROZEN_COMBINED_4111` literal instead) and hand-folded
 ``stats.rollup.json`` objects at the shard nodes and every ancestor;
-``atl06_windows`` has
-``stats_{window}.json`` sidecars in all three states (with hashes, without,
+``atl06_windows`` has ``stats_{window}.json`` sidecars in all three states
+(with hashes, without,
 absent); ``atl06_ragged`` carries the vlen (ragged) O11 surface — a
 ``variable_length_bytes`` digest array plus its ``{field}_locations``
-sibling — so the length-prefixed vlen hash recipe is golden-pinned. Name
+sibling — so the length-prefixed vlen hash recipe is golden-pinned; and
+``atl06_pg3`` is a ``path_grouping: 3`` store, so the D21 grouped sidecar and
+rollup key arithmetic is exercised rather than only supported. Name
 arithmetic is pinned across all three spec grammars, including the D23
 ``{window}.stats.json`` / ``all`` form moczarr will meet on ``/3`` stores.
 """
@@ -58,6 +60,11 @@ def windows():
 @pytest.fixture()
 def ragged():
     return str(FIXTURE / "atl06_ragged")
+
+
+@pytest.fixture()
+def pg3():
+    return str(FIXTURE / "atl06_pg3")
 
 
 def _rewrite_content_hashes(atl06, tmp_path, rewrite):
@@ -166,6 +173,45 @@ class TestReadStatsRollup:
         target = root / "4" / "1" / "stats.rollup.json"
         target.write_text(json.dumps({"spec": "other/1", "payload": {}}))
         assert read_stats_rollup(str(root), "41") is None  # wrong spec: cache posture
+
+
+class TestPathGrouping:
+    """The D21 generic path at ``path_grouping: 3`` (espg/moczarr#11 directive:
+    exercised, not theoretically supported). ``atl06_pg3`` is an order-5 shard
+    whose digit tail chunks 3+2, so both a full-width component and the short
+    remainder are covered.
+    """
+
+    def test_node_rel_chunks_the_tail(self):
+        # The remainder rides LAST — easy to get backwards.
+        assert stats._node_rel("411121", 3) == "4/111/21"
+        assert stats._node_rel("41111", 3) == "4/111/1"  # 4-digit tail: 3 + 1
+        assert stats._node_rel("4111", 3) == "4/111"  # exactly one component
+        assert stats._node_rel("4", 3) == "4"
+        assert stats._node_rel("-5111211", 3) == "-5/111/211"
+        assert stats._node_rel("411121", 1) == "4/1/1/1/2/1"
+
+    def test_sidecar_path_is_grouped(self):
+        leaf = convention.leaf_path("411121", path_grouping=3)
+        assert stats_sidecar_path(leaf, convention.HIVE_SPEC) == "4/111/21/stats.json"
+
+    def test_reads_grouped_sidecar(self, pg3):
+        record = read_stats(pg3, "411121")
+        assert record["n_obs"] == 40
+        assert record["shard_key"] == convention.morton_word("411121")
+
+    def test_reads_grouped_rollups(self, pg3):
+        # Component-boundary nodes are the grouped tree's real levels.
+        for node in ("411121", "4111", "4"):
+            envelope = read_stats_rollup(pg3, node)
+            assert envelope["payload"]["n_obs"] == 40
+            assert envelope["generation"]["n_leaves"] == 1
+        assert read_stats_rollup(pg3, "41112") is None  # mid-component: no node
+
+    def test_verifies_grouped_leaf(self, pg3):
+        result = verify_arrays(pg3, "411121")
+        assert result["match"] is True
+        assert set(result["computed"]) == {"6/morton", "6/count"}
 
 
 class TestVerifyArrays:
