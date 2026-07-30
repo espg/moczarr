@@ -251,6 +251,75 @@ class TestGoldenParity:
             assert set(np.unique(mask)) <= {0, 2}
 
 
+#: Chunk-local nested ranks at every ``(row, col)`` of a DEPTH-2 block — the
+#: Z-order curve, written out. A row-major reshape would read
+#: ``((0,1,2,3), (4,5,6,7), (8,9,10,11), (12,13,14,15))``; at depth 1 the two
+#: agree on all four ranks, which is why the committed goldens (4-cell chunks)
+#: cannot see the difference.
+DEPTH2_RANKS = ((0, 1, 4, 5), (2, 3, 6, 7), (8, 9, 12, 13), (10, 11, 14, 15))
+#: Value floor of the synthetic depth-2 digests (see :func:`_deep_digest_store`).
+DEEP_BASE = 100.25
+
+
+def _deep_digest_store(tmp_path, chunks=(0, 2)):
+    """A synthetic sharded digest field whose READ CHUNKS hold 16 cells.
+
+    The committed fixture's chunks hold 4 cells (depth 1), where the Z-order
+    deinterleave and a row-major reshape agree on every rank — so its
+    per-chunk goldens cannot see the layout kernel (only the depth-2 block
+    assembly can). This is the smallest geometry where they differ: 64 cells,
+    4 read chunks of 16, built from ``test_ragged``'s spec-text-only byte
+    recipes so no committed fixture byte moves.
+
+    Every cell of each populated chunk carries a ONE-centroid digest at
+    ``DEEP_BASE + rank``, so at the default ``resolution=0.5`` the one
+    nonzero bin of a tensor position is ``2 * rank`` — the rank that landed
+    there, independent of the reader's own kernel.
+    """
+    from test_ragged import SHARD, _shard_object, _uint64_meta, _vlen_meta, _write
+
+    from moczarr.convention import morton_word
+
+    tails = [a + b + c for a in "1234" for b in "1234" for c in "1234"]
+    attrs = {"ragged": {"spec": "zagg-ragged/1", "element": {"dtype": "float32", "shape": [-1, 2]}}}
+    grid = tmp_path / "deep"
+    payload = []
+    for chunk in range(4):
+        if chunk not in chunks:
+            payload.append(None)
+            continue
+        payload.append(
+            [
+                np.array([[DEEP_BASE + rank, 1.0]], dtype="<f4").tobytes()
+                for rank in range(len(DEPTH2_RANKS) ** 2)
+            ]
+        )
+    _write(grid, "g/h_tdigest/zarr.json", _vlen_meta(64, 16, sharded=True, attrs=attrs))
+    _write(grid, "g/h_tdigest/c/0", _shard_object(payload))
+    _write(grid, "g/morton/zarr.json", _uint64_meta(64))
+    words = np.array([morton_word(SHARD + t) for t in tails], dtype="<u8")
+    _write(grid, "g/morton/c/0", words.tobytes())
+    return LocalStore(grid)
+
+
+@needs_zagg
+class TestDepth2Placement:
+    """Cell placement at depth 2, where Z-order and row-major diverge."""
+
+    def test_every_rank_lands_at_its_deinterleaved_position(self, tmp_path):
+        store = _deep_digest_store(tmp_path)
+        blocks = list(read_tensors(store, "g/h_tdigest"))
+        assert len(blocks) == 2  # one per populated read chunk
+        for tensor, _mask, (offset, gain), _word in blocks:
+            assert tensor.shape == (4, 4, 128)
+            assert (offset, gain) == (float(int(DEEP_BASE)), 0.5)
+            for row in range(4):
+                for col in range(4):
+                    counts = tensor[row, col]
+                    assert int(counts.sum()) == 1  # one centroid of weight 1
+                    assert int(np.argmax(counts)) == 2 * DEPTH2_RANKS[row][col]
+
+
 @needs_zagg
 class TestSymmetricMask:
     def test_both_strata_empty_cell_is_one_on_both_fields(self, tmp_path):
