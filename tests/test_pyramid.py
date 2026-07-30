@@ -197,6 +197,19 @@ class TestTreeShape:
         assert list(tree["atl06"].children) == ["8", "6", "4"]
         assert tree.attrs["morton_hive_store"]["bare"] is True
 
+    def test_anonymous_survives_the_product_loop(self, root):
+        # anonymous= is the primary remote mode (public buckets), and it must
+        # reach the order level without being written into open_store's own
+        # **store_kwargs — a mutation the NEXT product's open_hive splat would
+        # then double up on. Two products, the first one carrying a pyramid.
+        tree = open_store(root, window="2019", anonymous=True)
+        assert list(tree["atl06"].children) == ["8", "6", "4"]
+        assert list(tree["atl06_windows"].children) == ["8", "6"]
+        signed = open_store(root, window="2019")
+        xr.testing.assert_identical(
+            tree["atl06"]["6"].to_dataset(), signed["atl06"]["6"].to_dataset()
+        )
+
     def test_computed_compose_never_a_node(self, root, manifest):
         # Nodes are exactly the STORED orders the declaration implies —
         # no synthesized composite/order node beyond source + declared.

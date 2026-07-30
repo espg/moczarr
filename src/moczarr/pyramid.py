@@ -188,6 +188,7 @@ def open_overview_order(
     *,
     aoi=None,
     window: str | None = None,
+    anonymous: bool = False,
     fabricate_cell_ids: bool | str = "auto",
     decode: bool = False,
     index_kind: str = "moc",
@@ -214,6 +215,11 @@ def open_overview_order(
     walk). An ``aoi`` that excludes every stamped object returns the
     issue-#4 schema-correct empty dataset with a ``UserWarning``, exactly
     like :func:`moczarr.open.open_hive`.
+
+    ``anonymous`` skips request signing for public buckets, and remaining
+    ``store_kwargs`` reach ``open_object_store`` — the same posture (and
+    spelling) as :func:`moczarr.open.open_hive`, so the remote read path is
+    declared in the signature rather than smuggled through ``store_kwargs``.
     """
     import xarray as xr
     from zarr.storage import ObjectStore
@@ -221,6 +227,8 @@ def open_overview_order(
     from moczarr.open import _aoi_words, _check_composition_fill
     from moczarr.store import _resolve_store, _stamp_from_meta
 
+    if anonymous:
+        store_kwargs.setdefault("anonymous", True)
     if fabricate_cell_ids not in ("auto", True, False):
         raise ValueError(
             f"fabricate_cell_ids={fabricate_cell_ids!r}: expected 'auto', True, or False"

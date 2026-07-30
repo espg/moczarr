@@ -772,8 +772,6 @@ concurrency, xr_kwargs, **store_kwargs
         nodes[name] = xr.Dataset(attrs=product_attrs)
         nodes[f"{name}/{int(manifest_rec['cell_order'])}"] = ds
         product_root = store_root if bare else f"{store_root.rstrip('/')}/{name}"
-        if anonymous:
-            store_kwargs.setdefault("anonymous", True)
         for ancestor_order, target_order in cell_orders.items():
             overview_ds = pyramid.open_overview_order(
                 product_root,
@@ -781,6 +779,7 @@ concurrency, xr_kwargs, **store_kwargs
                 ancestor_order,
                 aoi=aoi,
                 window=node_window,
+                anonymous=anonymous,
                 fabricate_cell_ids=fabricate_cell_ids,
                 decode=decode,
                 index_kind=index_kind,
