@@ -342,12 +342,15 @@ def _recorded_hashes(sidecar: dict | None) -> tuple[dict[str, str] | None, str |
     than read as a phantom array name (which would report an intact leaf as
     mismatched on ``combined``); a flat record carrying ONLY that key has no
     per-array hashes, so it reads as unverifiable (``None``), not tampered.
+    An EMPTY ``arrays`` mapping reads the same way, for the same reason: the
+    docstring's own framing is that unverifiable is distinct from verified,
+    so "nothing was recorded" must not report as "tampered".
     """
     content = (sidecar or {}).get("content_hashes")
     if not isinstance(content, dict) or not content:
         return None, None
     if isinstance(content.get("arrays"), dict):
-        return dict(content["arrays"]), content.get(_COMBINED_KEY)
+        return (dict(content["arrays"]) or None), content.get(_COMBINED_KEY)
     flat = dict(content)
     combined = flat.pop(_COMBINED_KEY, None)
     return (flat or None), combined
@@ -378,6 +381,7 @@ def verify_arrays(
             "recorded": ...,          # sidecar's per-array hashes (or None)
             "recorded_combined": .,   # sidecar's combined hash (or None)
             "match": ...,             # True/False; None = nothing recorded
+            "combined_match": ...,    # True/False; None = none recorded
             "mismatched": [...],      # array names differing (either side)
         }
 
@@ -385,6 +389,15 @@ def verify_arrays(
     ``content_hashes`` — "nothing to verify against" is a distinct answer
     from "verified" (the conservative posture zagg's dedup takes: an
     unverifiable leaf is never a hit).
+
+    ``combined_match`` is the recorded-vs-recomputed combined-hash verdict,
+    kept as its own greppable signal because it fails for a DIFFERENT reason
+    than a per-array mismatch: the combined hash is derived from the
+    per-array digests, so "every array matches but combined differs" is not
+    a data problem at all — it is proof the writer's combined serialization
+    diverges from :func:`combined_hash` (the choice this PR asks zagg to
+    freeze). A ``False`` there also forces ``match`` to ``False``: a leaf
+    whose recorded combined hash disagrees is never reported verified.
     """
     handle = _resolve_store(store_root, store, store_kwargs)
     manifest = read_manifest(store_root, store=handle)
@@ -396,19 +409,24 @@ def verify_arrays(
     sidecar = _read_tolerant(handle, stats_sidecar_path(rel, manifest["spec"]), "stats sidecar")
     recorded, recorded_combined = _recorded_hashes(sidecar)
     computed = hash_arrays(store_root, rel, store=handle)
+    combined = combined_hash(computed)
     mismatched: list[str] = []
     match: bool | None = None
     if recorded is not None:
         names = sorted(set(computed) | set(recorded))
         mismatched = [n for n in names if computed.get(n) != recorded.get(n)]
         match = not mismatched
+    combined_match = None if recorded_combined is None else recorded_combined == combined
+    if match and combined_match is False:
+        match = False  # a disagreeing combined hash is never "verified"
     return {
         "leaf": rel,
         "computed": computed,
-        "combined": combined_hash(computed),
+        "combined": combined,
         "recorded": recorded,
         "recorded_combined": recorded_combined,
         "match": match,
+        "combined_match": combined_match,
         "mismatched": mismatched,
     }
 

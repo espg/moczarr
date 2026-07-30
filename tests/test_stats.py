@@ -226,6 +226,37 @@ class TestVerifyArrays:
         assert result["recorded"] is None
         assert result["mismatched"] == []
 
+    def test_combined_disagreement_is_never_a_match(self, atl06, tmp_path):
+        # Per-array hashes all matching but the combined hash differing is
+        # writer-serialization drift, not tampering — a distinct signal, and
+        # never reported as verified.
+        root = _rewrite_content_hashes(
+            atl06, tmp_path, lambda content: {**content, "combined": "dead" * 16}
+        )
+        result = verify_arrays(str(root), "4111")
+        assert result["mismatched"] == []
+        assert result["combined_match"] is False
+        assert result["match"] is False
+
+    def test_combined_match_is_none_when_unrecorded(self, atl06, tmp_path):
+        # A record with per-array hashes but no combined: verified per-array,
+        # combined unverifiable.
+        root = _rewrite_content_hashes(
+            atl06, tmp_path, lambda content: {"arrays": content["arrays"]}
+        )
+        result = verify_arrays(str(root), "4111")
+        assert result["match"] is True
+        assert result["combined_match"] is None
+
+    def test_empty_arrays_mapping_is_unverifiable(self, atl06, tmp_path):
+        # {"arrays": {}} records nothing; reporting every array as mismatched
+        # would read "nothing recorded" as "tampered".
+        root = _rewrite_content_hashes(atl06, tmp_path, lambda content: {"arrays": {}})
+        result = verify_arrays(str(root), "4111")
+        assert result["match"] is None
+        assert result["recorded"] is None
+        assert result["mismatched"] == []
+
     def test_combined_hash_is_order_free(self):
         a = {"x": "aa", "y": "bb"}
         b = {"y": "bb", "x": "aa"}
