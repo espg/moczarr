@@ -1,0 +1,39 @@
+{
+ "spec": "zagg-sweep/1",
+ "family": "stats",
+ "node": "41",
+ "order": 1,
+ "generation": {
+  "n_leaves": 2,
+  "max_leaf_timestamp": "2026-07-27T00:01:00+00:00"
+ },
+ "payload": {
+  "schema_version": 1,
+  "window": null,
+  "shard_key": null,
+  "run_id": "fixture-run",
+  "semantic_hash": "eee689ebe87d95d8c753ee35ebdf061282a10e3a7d7fd0796371acb6aafad045",
+  "granules_sha256": null,
+  "zagg_version": "0.36.0",
+  "lambda": null,
+  "invoked_by": null,
+  "error": null,
+  "n_shards": 2,
+  "n_granules": 2,
+  "n_obs": 300,
+  "cells_with_data": 32,
+  "duration_s": 4.0,
+  "phase_timings": {
+   "read": 2.0,
+   "aggregate": 1.0,
+   "write": 0.5
+  },
+  "gb_seconds": null,
+  "est_cost_usd": null,
+  "spill_bytes": null,
+  "max_memory_mb": 512.0,
+  "container_hwm_mb": null,
+  "timestamp": "2026-07-27T00:01:00+00:00",
+  "success": true
+ }
+}

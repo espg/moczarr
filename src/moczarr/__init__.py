@@ -5,6 +5,7 @@ from moczarr.convention import (
     COVERAGE_SIDECAR,
     HIVE_SPEC,
     HIVE_SPEC_V2,
+    HIVE_SPEC_V3,
     MANIFEST_NAME,
     MORTON_CONVENTION_ENTRY,
     MORTON_CONVENTION_UUID,
@@ -34,6 +35,15 @@ from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.join import join_coarse, parent_cells
 from moczarr.open import open_hive
 from moczarr.ranges import MortonRanges
+from moczarr.stats import (
+    combined_hash,
+    hash_arrays,
+    read_stats,
+    read_stats_rollup,
+    stats_sidecar_key,
+    stats_sidecar_path,
+    verify_arrays,
+)
 
 # moczarr.moc_index (MortonMocIndex) is imported by module path, not here:
 # the package root stays xarray-import-free (the repo's lazy-import posture),
@@ -62,6 +72,7 @@ __all__ = [
     "FLOAT64_EXACT_MAX_ORDER",
     "HIVE_SPEC",
     "HIVE_SPEC_V2",
+    "HIVE_SPEC_V3",
     "MANIFEST_NAME",
     "MORTON_CONVENTION_ENTRY",
     "MORTON_CONVENTION_UUID",
@@ -74,8 +85,10 @@ __all__ = [
     "box_and",
     "box_words",
     "check_node_invariant",
+    "combined_hash",
     "decode_bitmap",
     "fabricate_cell_ids",
+    "hash_arrays",
     "is_point_word",
     "join_coarse",
     "leaf_path",
@@ -94,8 +107,13 @@ __all__ = [
     "read_coverage_bitmap",
     "read_leaf_coverage",
     "read_manifest",
+    "read_stats",
+    "read_stats_rollup",
     "root_coverage_and",
     "split_leaf_name",
+    "stats_sidecar_key",
+    "stats_sidecar_path",
+    "verify_arrays",
     "walk_leaves",
     "warn_if_stale",
 ]
