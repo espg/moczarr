@@ -108,13 +108,27 @@ class MortonInfo(DGGSInfo):
     def cell_ids2geographic(self, cell_ids) -> tuple[np.ndarray, np.ndarray]:
         """``(lon, lat)`` cell centers in degrees, lon normalized to [-180, 180).
 
-        ``mort2geo`` reads each word's own order — ``level`` is not consulted,
-        but mortie rejects mixed-order input per call — and returns lon in
-        [0, 360); the xdggs surface is [-180, 180).
-        """
-        from mortie import mort2geo
+        ``mort2geo`` reads each word's own order — ``level`` is not consulted —
+        and returns lon in [0, 360); the xdggs surface is [-180, 180).
 
-        lat, lon = mort2geo(_words(cell_ids))
+        Mixed-order ``cell_ids`` reject here as the *index* contract, not a
+        kernel limitation (issue #8): mortie 0.9.1+ converts mixed orders
+        natively (mortie#116), but an xdggs index is single-level by
+        construction — ``level`` is a frozen :class:`MortonInfo` parameter —
+        so mixed input is a caller error at this surface. Decode each level
+        separately instead.
+        """
+        from mortie import mort2geo, orders_of
+
+        words = _words(cell_ids)
+        distinct = np.unique(orders_of(words))
+        if distinct.size > 1:
+            raise ValueError(
+                f"mixed-order cell_ids (orders {[int(o) for o in distinct]}): a morton "
+                f"xdggs index is single-level by construction (level is a frozen "
+                f"MortonInfo parameter) — decode each level separately"
+            )
+        lat, lon = mort2geo(words)
         lon = (np.atleast_1d(np.asarray(lon, dtype=np.float64)) + 180.0) % 360.0 - 180.0
         return lon, np.atleast_1d(np.asarray(lat, dtype=np.float64))
 
@@ -184,8 +198,10 @@ class MortonInfo(DGGSInfo):
         if level < self.level:
             return np.asarray(clip2order(level, words), dtype=np.uint64)
         # Finer: one ``generate_morton_children`` call per parent — an O(n)
-        # Python loop (mortie has no vectorized many-parent children kernel;
-        # ``split_children`` builds a compacted trie, different semantics).
+        # Python loop. Revisited at the mortie#116 adoption (issue #8):
+        # 0.9.1's group-by-order dispatch landed in the geo kernels only —
+        # there is still no vectorized many-parent children kernel
+        # (``split_children`` builds a compacted trie, different semantics).
         # Empty input mirrors the coarser ``(0,)`` with a clean ``(0, 4**diff)``
         # rather than letting ``np.stack`` raise on an empty sequence.
         if words.size == 0:

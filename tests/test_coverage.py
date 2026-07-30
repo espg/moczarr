@@ -211,11 +211,11 @@ class TestAoiMask:
         np.testing.assert_array_equal(cells[keep], np.sort(_words("-5111114", "-5121111")))
 
     def test_mixed_order_cells_raise(self):
-        # cells must be single-order: infer_order_from_morton returns the
-        # array MINIMUM, so a mixed array would silently drop finer cells.
-        # The module's raise-on-ambiguity discipline forbids that.
-        mixed = np.sort(_words("-5111111", "-51111121"))  # order 7 + order 8
-        with pytest.raises(ValueError, match="single-order"):
+        # cells must be single-order; post mortie#116 (0.9.1) the raise is
+        # mortie's own — infer_order_from_morton names the distinct orders —
+        # so the expectation pins mortie's wording (issue #8).
+        mixed = np.sort(_words("-5111111", "-51111121"))  # order 6 + order 7
+        with pytest.raises(ValueError, match=r"Mixed orders in morton array: \[6, 7\]"):
             coverage.aoi_mask(mixed, _words("-5"))
 
     def test_pure_point_cells(self):

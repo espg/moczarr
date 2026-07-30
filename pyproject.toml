@@ -25,8 +25,10 @@ dependencies = [
     "numpy>=2.0",
     # Morton/HEALPix kernels: decimal<->word, hive_path, MOC algebra
     # (moc_and), clip2order/children/parents. The layout convention itself is
-    # owned by the mortie spec (espg/mortie#62).
-    "mortie>=0.9.0",
+    # owned by the mortie spec (espg/mortie#62). Floor 0.9.1: mixed-order geo
+    # kernels + orders_of/is_point + raising infer_order_from_morton (mortie
+    # issue #116, PR #122 — shipped in the 0.9.1 release).
+    "mortie>=0.9.1",
     # mortie's MortonIndexArray (.decimal_repr()/.hive_path()) imports pandas;
     # a direct runtime dep the reader calls into, not just transitive via xarray.
     "pandas",

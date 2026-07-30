@@ -174,12 +174,10 @@ def aoi_mask(cells, aoi) -> np.ndarray:
     by convention); ``aoi`` members may be mixed-order.
 
     Single order is *enforced*, not merely assumed: a mixed-order ``cells``
-    array raises ``ValueError``. ``infer_order_from_morton`` returns the
-    *minimum* order over an array, so a silent inference would clip finer
-    cells to the wrong (coarser) order and drop their rows — the module's
-    raise-on-ambiguity discipline forbids that. The check is one vectorized
-    ``clip2order`` compare (O(n), no per-cell Python loop): clipping to the
-    common order is identity iff every cell already sits at that order.
+    array raises ``ValueError`` — from mortie itself (0.9.1+, mortie#116):
+    ``infer_order_from_morton`` raises on mixed input, naming the distinct
+    orders, so the former moczarr-side ``clip2order`` round-trip guard is
+    gone (issue #8).
 
     POINT-kind words (spec §1 suffix ``48..=63``) are first-class members on
     BOTH sides — the v1 posture: for containment a point counts as an
@@ -200,12 +198,7 @@ def aoi_mask(cells, aoi) -> np.ndarray:
     # §4 normalization: containment arithmetic runs in area space (points
     # -> their order-29 twins on the same path; area words pass through).
     cells = np.asarray(point_to_area29(cells), dtype=np.uint64)
-    cell_order = int(infer_order_from_morton(cells))
-    if (clip2order(cell_order, cells) != cells).any():
-        raise ValueError(
-            f"aoi_mask requires single-order cells; got a mixed-order array "
-            f"(minimum order {cell_order}). Clip or split the cells to one order first."
-        )
+    cell_order = int(infer_order_from_morton(cells))  # raises on mixed orders (mortie#116)
     members = np.atleast_1d(np.asarray(aoi, dtype=np.uint64))
     for member in np.asarray(point_to_area29(members), dtype=np.uint64):
         one = np.asarray([member], dtype=np.uint64)
