@@ -13,8 +13,9 @@ URL-safe by construction) with the **base-component exclusion**: a name must
 never match the morton base-component grammar ``-?[1-6]``, so the walker's
 child classification stays unambiguous.
 
-Discovery is one delimiter-LIST of the store root plus one manifest GET per
-named child — the enumeration recipe the design fixes for every viewer
+Discovery is one delimiter-LIST of the store root, one manifest GET per
+name-shaped child, and one HEAD per product (the ``aggregation.yaml``
+probe) — the enumeration recipe the design fixes for every viewer
 ("list ``{store_root}/`` and read each ``{name}/morton_hive.json`` directly —
 no name↔hash translation layer") — so one product this reader is too old for
 must never take down the enumeration: an unsupported-but-well-formed spec is
@@ -92,7 +93,12 @@ def list_products(store_root: str, *, store: Any = None, **store_kwargs: Any) ->
     """Enumerate the named products of a multi-product store root (D19).
 
     One delimiter-LIST of the root, then one ``{name}/morton_hive.json`` GET
-    per name-shaped child. Returns one record per product, sorted by name::
+    per name-shaped child, then one HEAD per product for the
+    ``has_aggregation_yaml`` probe — two sequential round-trips per product,
+    measured on the committed fixture (1 LIST + 5 GET + 4 HEAD for its four
+    products plus the non-product ``scratch/`` child). Bounded, but stated
+    because ``list_products`` is a per-page-load call for a viewer. Returns
+    one record per product, sorted by name::
 
         {
             "name": ...,               # the {name}/ prefix (§6.5 grammar)
