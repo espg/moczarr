@@ -38,6 +38,16 @@ per-object ``role``/``zagg_overview`` attrs, and per-field fold checks
 moczarr reader tests pin against what zagg actually wrote, without zagg
 installed. Generation asserts source↔overview count-total parity so a broken
 fold can never be enshrined as a golden.
+
+**Reproducibility.** At a fixed zagg sha this generator is byte-reproducible
+except for wall clock: the only fields that differ between two runs are
+``generated_at`` / ``written_at`` and ``zagg_overview.generation.
+max_leaf_timestamp`` (``content_hash`` is stable). So "regenerate and diff" is
+a usable drift check, and the reader tests deliberately do **not** value-pin
+those fields — they require them, and compare everything else (see
+``_without_wallclock`` in ``tests/test_pyramid.py``). Timestamps recorded in
+the golden are informational: pinning them against their own recorded copy
+would be a self-echo.
 """
 
 from __future__ import annotations

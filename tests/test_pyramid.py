@@ -76,6 +76,28 @@ SOUTH_NODE = "-51111"
 SOUTH_SHARD = "-5111111"
 
 
+#: ``zagg_overview`` paths whose values are wall clock, so they differ on every
+#: fixture regeneration. Everything else the generator writes is reproducible
+#: to the byte (``content_hash`` included), so dropping these two from the
+#: golden comparison is what makes "regenerate and diff" a real drift check.
+WALLCLOCK = (("generated_at",), ("generation", "max_leaf_timestamp"))
+
+
+def _without_wallclock(entries: list[dict]) -> list[dict]:
+    """Per-object entries with the wall-clock provenance fields removed."""
+    out = json.loads(json.dumps(entries))
+    for entry in out:
+        block = entry.get("zagg_overview")
+        if not isinstance(block, dict):
+            continue
+        for path in WALLCLOCK:
+            target = block
+            for key in path[:-1]:
+                target = target.get(key, {})
+            target.pop(path[-1], None)
+    return out
+
+
 def _two_base(tmp_path: Path) -> Path:
     """A fixture copy whose ``atl06`` spans northern AND southern base cells.
 
@@ -225,7 +247,16 @@ class TestRolesAndVariables:
         # (the D11 companions: source orders + per-field methods).
         tree = open_store(root, window="2019")
         for order, per_key in GOLDEN["products"]["atl06"]["overviews"].items():
-            assert node_objects(tree["atl06"][order]) == per_key["all"]["objects"]
+            got = node_objects(tree["atl06"][order])
+            assert _without_wallclock(got) == _without_wallclock(per_key["all"]["objects"])
+            # The wall-clock fields are still REQUIRED, just not value-pinned:
+            # a golden that echoes generation timestamps back at themselves
+            # carries no signal AND makes "regenerate, diff the golden" a
+            # useless drift check (everything else is byte-reproducible).
+            for entry in got:
+                block = entry["zagg_overview"]
+                assert block["generated_at"].endswith("+00:00")
+                assert block["generation"]["max_leaf_timestamp"].endswith("+00:00")
 
     def test_overview_provenance_carries_d11_companions(self, root):
         tree = open_store(root, window="2019")
