@@ -15,7 +15,16 @@ readers bind the sibling by metadata, never by reconstructing the
 Zero product knowledge lives here: this module decodes any conforming
 element declaration (a t-digest's ``float32 (n, 2)``, a locations sibling's
 ``uint64 (n,)``, or anything else a future writer declares) and never
-imports zagg. The HHDC tensor profile (:mod:`moczarr.hhdc`) composes on top.
+imports zagg. The genericity is over the ELEMENT, and the scope is bounded
+on the indexing side: :func:`read_ragged` and the profiles read a 1-D cells
+axis with a sibling ``morton`` coordinate — every conforming ragged field of
+a **morton-hive (HEALPix) product**, which is moczarr's whole domain. zagg's
+rectilinear grid writes ``kind: ragged`` fields too, but on a 2-D ``(y, x)``
+cell grid with no per-cell morton coordinate (its shard keys are packed
+``(rb, cb)`` tile ints), so a rect ragged field is out of scope for this
+layer and would need its own cell-identity binding. The element gates
+(:func:`parse_ragged_attrs`, :func:`decode_cell`) carry no such assumption.
+The HHDC tensor profile (:mod:`moczarr.hhdc`) composes on top.
 
 Postures, inherited from the spec's conformance rules:
 
@@ -254,8 +263,9 @@ def open_ragged(
         )
     if arr.ndim != 1:
         raise ValueError(
-            f"{field!r} has {arr.ndim} dimensions; a {RAGGED_SPEC!r} field is one "
-            f"vlen array on the 1-D cells axis"
+            f"{field!r} has {arr.ndim} dimensions; this layer decodes one vlen array "
+            f"on the 1-D morton cells axis (a rect-grid {RAGGED_SPEC!r} field is 2-D "
+            f"and out of scope — it carries no per-cell morton coordinate)"
         )
     return arr, element
 

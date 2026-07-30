@@ -9,7 +9,8 @@
   sibling `morton` coordinate included,
   metadata-bound located siblings with the §1.1 row-alignment check),
   `read_cell` random access (2 ranged GETs on a sharded store), zero
-  product knowledge. HHDC tensor profile (`moczarr.hhdc`): `read_tensors`
+  product knowledge — element-generic over a 1-D morton cells axis
+  (rect-grid ragged fields carry no per-cell morton and stay out of scope). HHDC tensor profile (`moczarr.hhdc`): `read_tensors`
   yields `(tensor, mask, (offset, gain), morton_index)` per coverage block
   — the englacial/zagg#336 contract, bit-identical to zagg's
   `readers.tdigest_tensor` (committed goldens + live parity) — with the
