@@ -6,8 +6,10 @@
   enumerates the named products of a store root (surfacing `semantic_hash`
   and `aggregation.yaml` presence); `open_hive(..., product=...)` opens a
   named product's subtree; a multi-product root opened without `product=`
-  errors with the product names. Bare single-product stores are unchanged
-  ([#11](https://github.com/espg/moczarr/issues/11)).
+  errors with the product names; a product on an unsupported-but-well-formed
+  spec (`morton-hive/3` and up) is listed with `manifest: None` rather than
+  making its readable siblings undiscoverable. Bare single-product stores are
+  unchanged ([#11](https://github.com/espg/moczarr/issues/11)).
 - D20 stats sidecars + D22 rollups, read side: `read_stats` (per-leaf
   record), `read_stats_rollup` (swept fold at any digit node),
   `stats_sidecar_key`/`stats_sidecar_path` (spec-keyed naming incl. the

@@ -29,6 +29,16 @@ def multiroot():
     return str(FIXTURE)
 
 
+def _with_v3_product(tmp_path):
+    """The fixture root plus an ``atl06_v3`` sibling on a forward spec."""
+    root = tmp_path / "store"
+    shutil.copytree(FIXTURE, root)
+    shutil.copytree(root / "atl06", root / "atl06_v3")
+    manifest = root / "atl06_v3" / "morton_hive.json"
+    manifest.write_text(manifest.read_text().replace('"morton-hive/1"', '"morton-hive/3"'))
+    return root
+
+
 class TestProductNameGrammar:
     def test_accepts_spec_charset(self):
         for name in ("atl06", "atl06_windows", "a", "x" * 192, "a-b_c9"):
@@ -84,6 +94,33 @@ class TestListProducts:
     def test_bare_store_has_no_named_products(self):
         # §6.5 content discrimination: a manifest at the root ⇒ bare store.
         assert list_products(str(SERC)) == []
+
+    def test_unsupported_spec_product_is_listed_not_fatal(self, multiroot, tmp_path):
+        # A `/3` sibling is a store this reader is too old for, not a broken
+        # one: it must not make every readable product invisible (D19 makes
+        # the enumeration a viewer-facing contract).
+        root = _with_v3_product(tmp_path)
+        by_name = {p["name"] for p in list_products(str(root))}
+        assert by_name == {"atl06", "atl06_ragged", "atl06_v3", "atl06_windows"}
+        v3 = next(p for p in list_products(str(root)) if p["name"] == "atl06_v3")
+        assert v3["spec"] == "morton-hive/3"
+        assert v3["manifest"] is None  # the marker: known spec, unopenable here
+        assert v3["dataset"] is None and v3["semantic_hash"] is None
+        readable = next(p for p in list_products(str(root)) if p["name"] == "atl06")
+        assert readable["manifest"]["spec"] == "morton-hive/1"
+
+    def test_unsupported_spec_sibling_keeps_pointed_open_error(self, tmp_path):
+        # The multi-product error still lists the products (it used to
+        # degrade to the spec error, since list_products raised inside it).
+        root = _with_v3_product(tmp_path)
+        with pytest.raises(ValueError, match=r"multi-product store root.*atl06_v3"):
+            open_hive(str(root))
+
+    def test_unsupported_spec_product_still_raises_on_open(self, tmp_path):
+        # Listing it is not opening it: the manifest bootstrap stays loud.
+        root = _with_v3_product(tmp_path)
+        with pytest.raises(ValueError, match="unknown manifest spec"):
+            open_hive(str(root), product="atl06_v3")
 
     def test_malformed_product_manifest_raises(self, multiroot, tmp_path):
         # A present-but-garbage manifest is a broken bootstrap, never a
