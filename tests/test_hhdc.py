@@ -28,6 +28,7 @@ exercises it.
 
 import importlib.util
 import json
+import math
 import shutil
 from pathlib import Path
 
@@ -375,15 +376,22 @@ class TestFitPolicies:
         with pytest.raises(ValueError, match="exceeds the fixed window"):
             list(read_tensors(_store(), SIGNAL, n_bins=4, resolution=0.5))
 
-    def test_degrade_resolution_doubles_gain(self):
+    def test_degrade_resolution_stops_at_the_first_fitting_gain(self):
+        """A power-of-two gain is not the claim — the claim is that the loop
+        widened *just enough*. ``fit="raise"`` is the oracle: the chosen gain
+        must fit, and half of it must not (an overshoot by 2x would pass the
+        power-of-two check alone)."""
         blocks = list(
             read_tensors(_store(), SIGNAL, n_bins=4, resolution=0.5, fit="degrade_resolution")
         )
         assert blocks
-        for tensor, _mask, (offset, gain), _word in blocks:
+        for tensor, _mask, (_offset, gain), _word in blocks:
             assert tensor.shape[2] == 4  # n_bins fixed
-            # gain is the original resolution doubled some whole number of times
-            assert gain >= 0.5 and (gain / 0.5) == 2 ** round(np.log2(gain / 0.5))
+            assert gain > 0.5 and math.log2(gain / 0.5).is_integer()  # doubled from the request
+        widest = max(gain for _t, _m, (_o, gain), _w in blocks)
+        assert len(list(read_tensors(_store(), SIGNAL, n_bins=4, resolution=widest))) == len(blocks)
+        with pytest.raises(ValueError, match="exceeds the fixed window"):
+            list(read_tensors(_store(), SIGNAL, n_bins=4, resolution=widest / 2))
 
     def test_collapse_bins_shrinks_to_power_of_two(self):
         blocks = list(read_tensors(_store(), SIGNAL, fit="collapse_bins"))
