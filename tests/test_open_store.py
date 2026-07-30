@@ -10,6 +10,7 @@ schemas, per-node AOI scoping, and laziness (zero chunk GETs at open, the
 """
 
 import json
+import warnings
 from pathlib import Path
 
 import pytest
@@ -48,15 +49,35 @@ class TestOpenStoreTree:
             "products": ["atl06", "atl06_windows"],
         }
 
-    def test_nodes_are_the_per_product_open_hive_datasets(self, multiroot):
+    @pytest.mark.parametrize(
+        "kwargs",
+        [
+            pytest.param({}, id="defaults"),
+            pytest.param({"decode": True}, id="decode"),
+            pytest.param({"index_kind": "pandas", "aoi": ["4111"]}, id="pandas-aoi"),
+            pytest.param({"concurrency": 1, "fabricate_cell_ids": False}, id="serial-nofabricate"),
+            pytest.param(
+                {"xr_kwargs": {"mask_and_scale": False}, "anonymous": False},
+                id="xr_kwargs-anonymous",
+            ),
+        ],
+    )
+    def test_nodes_are_the_per_product_open_hive_datasets(self, multiroot, kwargs):
         # Each child holds EXACTLY what open_hive returns for that product
-        # (plus the semantic_hash attr the tree layer surfaces).
-        tree = open_store(multiroot, window="2019")
-        want = open_hive(multiroot, product="atl06")
-        want.attrs["semantic_hash"] = _semantic_hash(FIXTURE / "atl06")
-        xr.testing.assert_identical(tree["atl06"].to_dataset(), want)
-        want = open_hive(multiroot, product="atl06_windows", window="2019")
-        xr.testing.assert_identical(tree["atl06_windows"].to_dataset(), want)
+        # (plus the semantic_hash attr the tree layer surfaces) — pinned
+        # across kwarg bundles so the forwarding block cannot rot silently
+        # (every kwarg open_store forwards is exercised by some bundle).
+        if kwargs.get("decode"):
+            pytest.importorskip("moczarr.dggs")
+        with warnings.catch_warnings():
+            # the aoi bundle empties atl06_windows (issue #4, per node)
+            warnings.simplefilter("ignore", UserWarning)
+            tree = open_store(multiroot, window="2019", **kwargs)
+            want_plain = open_hive(multiroot, product="atl06", **kwargs)
+            want_windowed = open_hive(multiroot, product="atl06_windows", window="2019", **kwargs)
+        want_plain.attrs["semantic_hash"] = _semantic_hash(FIXTURE / "atl06")
+        xr.testing.assert_identical(tree["atl06"].to_dataset(), want_plain)
+        xr.testing.assert_identical(tree["atl06_windows"].to_dataset(), want_windowed)
 
     def test_schema_heterogeneity_across_nodes(self, multiroot):
         # Sibling nodes carry different variable sets — the non-alignable-
