@@ -41,9 +41,18 @@ from moczarr.coverage import (
 )
 from moczarr.exceptions import NoCoverageError
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
+from moczarr.hhdc import has_exact_occupancy, read_tensors
 from moczarr.join import join_coarse, parent_cells
 from moczarr.open import open_hive, open_store
 from moczarr.products import is_product_name, list_products, validate_product_name
+from moczarr.ragged import (
+    RAGGED_SPEC,
+    RaggedElement,
+    decode_cell,
+    parse_ragged_attrs,
+    read_cell,
+    read_ragged,
+)
 from moczarr.ranges import MortonRanges
 from moczarr.stats import (
     combined_hash,
@@ -90,7 +99,9 @@ __all__ = [
     "MORTON_CONVENTION_UUID",
     "MortonRanges",
     "NoCoverageError",
+    "RAGGED_SPEC",
     "ROOT_COVERAGE_NAME",
+    "RaggedElement",
     "__version__",
     "aoi_mask",
     "bitmap_and",
@@ -100,7 +111,9 @@ __all__ = [
     "combined_hash",
     "counts_from_composition",
     "decode_bitmap",
+    "decode_cell",
     "fabricate_cell_ids",
+    "has_exact_occupancy",
     "hash_arrays",
     "is_point_word",
     "is_product_name",
@@ -119,15 +132,19 @@ __all__ = [
     "parse_composition_attrs",
     "parse_leaf_coverage",
     "parse_manifest",
+    "parse_ragged_attrs",
     "parse_root_coverage",
     "ranges_contain",
     "ranges_words",
+    "read_cell",
     "read_commit",
     "read_coverage_bitmap",
     "read_leaf_coverage",
     "read_manifest",
+    "read_ragged",
     "read_stats",
     "read_stats_rollup",
+    "read_tensors",
     "root_coverage_and",
     "split_leaf_name",
     "stats_sidecar_key",

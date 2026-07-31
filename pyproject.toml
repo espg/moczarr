@@ -25,10 +25,12 @@ dependencies = [
     "numpy>=2.0",
     # Morton/HEALPix kernels: decimal<->word, hive_path, MOC algebra
     # (moc_and), clip2order/children/parents. The layout convention itself is
-    # owned by the mortie spec (espg/mortie#62). Floor 0.9.1: mixed-order geo
-    # kernels + orders_of/is_point + raising infer_order_from_morton (mortie
-    # issue #116, PR #122 — shipped in the 0.9.1 release).
-    "mortie>=0.9.1",
+    # owned by the mortie spec (espg/mortie#62). Floor 0.9.3: the mortie spec
+    # §8 rank <-> (x, y) deinterleave kernels ``rank_to_xy``/``xy_to_rank``
+    # (espg/mortie#150) that the HHDC tensor layout is built on (issue #19;
+    # bump signed off on the issue #19 thread). 0.9.1 remains the floor for
+    # everything else (mixed-order geo kernels, mortie#116/#122).
+    "mortie>=0.9.3",
     # mortie's MortonIndexArray (.decimal_repr()/.hive_path()) imports pandas;
     # a direct runtime dep the reader calls into, not just transitive via xarray.
     "pandas",
@@ -68,6 +70,13 @@ test = [
     "pytest>=8.0",
     "pytest-cov",
 ]
+# HHDC tensor rasterization (moczarr.hhdc): the t-digest algebra
+# (cdf_from_tdigest / quantile_from_tdigest) is IMPORTED from zagg, never
+# vendored — vendoring is parity drift by construction (issue #19; extra
+# signed off on the issue #19 thread). The import is lazy (the dggs.py
+# posture), so the core import graph is unchanged. Floor 0.39: the current
+# release at adoption time; the algebra surface itself is far older.
+zagg = ["zagg>=0.40"]
 
 [project.urls]
 Homepage = "https://github.com/espg/moczarr"

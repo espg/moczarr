@@ -13,6 +13,14 @@ jobs:
     strategy:
       matrix:
         python-version: ['3.12', '3.13']
+        extras: ['--extra test --extra xdggs']
+        include:
+          # moczarr[zagg] live-parity leg (issue #19, espg-approved): with a
+          # real zagg installed, the importorskip("zagg") parity tests run
+          # instead of skipping — the committed goldens remain the base
+          # legs' enforcement.
+          - python-version: '3.12'
+            extras: '--extra test --extra xdggs --extra zagg'
 
     steps:
     - uses: actions/checkout@v5
@@ -24,7 +32,7 @@ jobs:
       run: uv python install ${{ matrix.python-version }}
 
     - name: Install dependencies
-      run: uv sync --extra test --extra xdggs
+      run: uv sync ${{ matrix.extras }}
 
     - name: Run tests with pytest
       run: uv run pytest --cov=moczarr --cov-report=xml --cov-report=term
