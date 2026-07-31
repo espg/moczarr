@@ -23,10 +23,10 @@ array metadata is already in hand. So a store reaching these functions through
 attrs, and a caller who opens an array by other means should check
 ``array.fill_value == 0`` itself alongside the §3.3 attrs gate.
 
-Normative home: zagg ``docs/specification.md`` §3 — in review on
-englacial/zagg#346, and the section references here are read against
-``claude/340-store-spec`` at ``555874b`` (post-review-fold), re-confirmed at
-that PR's merge. Narrative in zagg ``docs/signal_strata.md``; the writer is
+Normative home: zagg ``docs/specification.md`` §3 — merged to zagg ``main``
+(englacial/zagg#346, rebase merge); the section references here are read
+against ``main`` at ``c0493ba``, and the branch-era shas (``166e908``,
+``555874b``) are historical. Narrative in zagg ``docs/signal_strata.md``; the writer is
 ``zagg.stats.composition``.
 
 Quantization (§3.2) uses a **presence floor**: ``k = round(255 * c / N)``

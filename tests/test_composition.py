@@ -319,16 +319,16 @@ class TestStoreReadBinding:
     instead of archaeology and a regenerated fixture shows up as a mismatch
     rather than a stale copy that keeps passing::
 
-        englacial/zagg 555874b (PR #346, branch claude/340-store-spec)
+        englacial/zagg c0493ba (main — PR #346 rebase-merged 2026-07-31)
         tests/data/spec/kitchen_sink/1/1/2/1/3/11213.zarr/6/composition
 
         cmp  <zagg>/.../6/composition/c/0         tests/data/composition/c/0
         diff <zagg>/.../6/composition/zarr.json   tests/data/composition/zarr.json
 
-    Both are byte-identical at that sha (re-verified after #346's review fold,
-    which left the fixture bytes untouched — it moved the branch from
-    ``166e908`` to ``555874b`` without regenerating this array). Re-pin the sha
-    here if the fixture is regenerated, and again at #346's merge. The
+    Both are byte-identical at that sha (re-verified at the merge; the rebase
+    rewrote the branch onto ``main`` without touching the fixture bytes, so
+    the branch-era pins ``166e908``/``555874b`` are historical). Re-pin the
+    sha here if the fixture is ever regenerated. The
     ``n_signal`` literals below are that fixture's recorded per-cell
     signal-digest weights (``kitchen_sink.expected.json``).
     """
