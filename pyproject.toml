@@ -76,7 +76,7 @@ test = [
 # signed off on the issue #19 thread). The import is lazy (the dggs.py
 # posture), so the core import graph is unchanged. Floor 0.39: the current
 # release at adoption time; the algebra surface itself is far older.
-zagg = ["zagg>=0.39"]
+zagg = ["zagg>=0.40"]
 
 [project.urls]
 Homepage = "https://github.com/espg/moczarr"
