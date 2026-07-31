@@ -1,0 +1,32 @@
+{
+ "spec": "zagg-sweep/1",
+ "family": "overview",
+ "node": "43312",
+ "order": 4,
+ "windows": {
+  "2019": {
+   "object": "2019.zarr",
+   "generation": {
+    "n_leaves": 1,
+    "max_leaf_timestamp": "2026-07-30T09:01:35+00:00"
+   },
+   "content_hash": "5437f6e782b2b18b4b3f05f48bf1b1b2f6d2b8bf9f8eb95c46b4710108df6635"
+  },
+  "2020": {
+   "object": "2020.zarr",
+   "generation": {
+    "n_leaves": 1,
+    "max_leaf_timestamp": "2026-07-30T09:01:35+00:00"
+   },
+   "content_hash": "4c631f3838bef047c16d1f584f9805540ffc0fb4a41e478ae9a9a03c9e1f53a3"
+  },
+  "all": {
+   "object": "all.zarr",
+   "generation": {
+    "n_leaves": 2,
+    "max_leaf_timestamp": "2026-07-30T09:01:35+00:00"
+   },
+   "content_hash": "b6aa08046f5f4d3708348607b749bba330ded0277b0a09bf4bfb86cacb449b33"
+  }
+ }
+}

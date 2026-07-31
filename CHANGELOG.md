@@ -2,6 +2,43 @@
 
 ## Unreleased
 
+- Resolution (pyramid-order) nodes in `open_store` (issue #15 phase 8b,
+  completing the DataTree reader model): a product whose manifest declares
+  sweep-generated overviews (zagg spec §4.5 — the reader binds
+  `pyramid.overview.orders` and nothing else; `[]`/absent keeps today's
+  flat product node, regression-pinned) opens as `{product}/{order}`
+  children named by stored cell order — the source data as the source-order
+  child (the same `open_hive` Dataset) and one node per declared overview
+  order with a stamped object, each opened by the new
+  `moczarr.pyramid.open_overview_order` (candidates = root-MOC source
+  shards coarsened to the ancestor prefix; D4 stamp admission; issue-#4
+  empty posture per node; zero chunk GETs on the moc default). `role` is
+  surfaced per object under `attrs["zagg_objects"]`, checked per §4.3 with
+  two severities split on §4.1's "never load-bearing": an uninterpretable
+  cache object (role outside the closed vocabulary, missing/unknown-revision
+  `zagg_overview`, no `cell_order`) is dropped with a warning while the node
+  and the product's source nodes stand, and an off-order `cell_order` —
+  interpretable and positively wrong — raises. Per-node variable sets differ
+  in both directions by construction, and the selection helpers
+  (`source_orders`, `overview_orders`, `finest_source_at`, `node_objects`)
+  range over source-order sets keyed on per-object roles, answering about
+  the store rather than the query (unaffected by `aoi`/`window`, and defined
+  on a flat product node). Rows are laid down in packed-word order, so a
+  store spanning northern and southern base cells labels them correctly.
+  `window=` takes a declared label only: the reserved all-time token `all`
+  (§4.2) is refused with a pointed error, since the `all.zarr` folds have no
+  counterpart on the source axis yet. Order nodes are omitted with a warning
+  — never guessed — when the root MOC is unusable, when a declared order was
+  never swept, and on a `path_grouping > 1` store (the grouped ancestor-path
+  convention is unsettled writer-side). The discovery
+  walk now skips non-decimal overview basenames (`all.zarr`/
+  `{window}.zarr` at ancestor nodes), so MOC-less pyramid stores still
+  open their source. Fixture: a zagg-written overview store
+  (`tools/generate_overview_fixture.py` — production write path + the
+  `sweep_overviews` second pass; zagg sha in the golden sidecar), two
+  overview orders plus per-window and all-time folds
+  ([#15](https://github.com/espg/moczarr/issues/15)).
+
 - Generic `zagg-ragged/1` decode layer (`moczarr.ragged`): strict-gated
   element attrs (`parse_ragged_attrs` — missing/foreign/newer spec raises,
   never half-parses), `read_ragged` whole-store sweep (sharded and flat

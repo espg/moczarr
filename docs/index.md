@@ -87,6 +87,7 @@ moczarr is the *read* side of a convention owned elsewhere:
   (§4 coverage, §5 reader, §6 xarray extension).
 
 Plan and progress: [espg/moczarr#1](https://github.com/espg/moczarr/issues/1).
-Next up: resolution (pyramid-order) nodes under each product node —
-designed on the [concepts page](concepts.md), gated on zagg's overview
-sweep ([issue #15](https://github.com/espg/moczarr/issues/15)).
+Resolution (pyramid-order) nodes under each product node shipped with
+[issue #15](https://github.com/espg/moczarr/issues/15): a manifest-declared
+overview pyramid opens as `{product}/{order}` children — see the
+[concepts page](concepts.md) and [`moczarr.pyramid`](api/pyramid.md).

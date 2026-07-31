@@ -45,6 +45,15 @@ from moczarr.hhdc import has_exact_occupancy, read_tensors
 from moczarr.join import join_coarse, parent_cells
 from moczarr.open import open_hive, open_store
 from moczarr.products import is_product_name, list_products, validate_product_name
+from moczarr.pyramid import (
+    finest_source_at,
+    node_objects,
+    open_overview_order,
+    overview_cell_orders,
+    overview_declaration,
+    overview_orders,
+    source_orders,
+)
 from moczarr.ragged import (
     RAGGED_SPEC,
     RaggedElement,
@@ -113,6 +122,7 @@ __all__ = [
     "decode_bitmap",
     "decode_cell",
     "fabricate_cell_ids",
+    "finest_source_at",
     "has_exact_occupancy",
     "hash_arrays",
     "is_point_word",
@@ -125,9 +135,14 @@ __all__ = [
     "morton_decimal",
     "morton_word",
     "named_lanes",
+    "node_objects",
     "open_hive",
     "open_object_store",
+    "open_overview_order",
     "open_store",
+    "overview_cell_orders",
+    "overview_declaration",
+    "overview_orders",
     "parent_cells",
     "parse_composition_attrs",
     "parse_leaf_coverage",
@@ -146,6 +161,7 @@ __all__ = [
     "read_stats_rollup",
     "read_tensors",
     "root_coverage_and",
+    "source_orders",
     "split_leaf_name",
     "stats_sidecar_key",
     "stats_sidecar_path",

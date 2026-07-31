@@ -1,0 +1,98 @@
+{
+ "spec": "morton-hive/2",
+ "dataset": {
+  "short_name": "ATL06",
+  "version": "007"
+ },
+ "semantic_hash": "94f8cf0dc6f81bd939e4e21496cf7d5d3d1a0fd474dc535e688703a6b327ff94",
+ "cell_order": 8,
+ "shard_order": 6,
+ "split_schedule": [
+  1,
+  1,
+  1,
+  1,
+  1,
+  1
+ ],
+ "path_grouping": 1,
+ "pyramid": {
+  "spec": "zagg-pyramid/1",
+  "overview": {
+   "spacing": 2,
+   "orders": [
+    4
+   ],
+   "all_time": true,
+   "fields": {
+    "count": {
+     "class": "exact",
+     "method": "sum",
+     "nan_policy": "skip",
+     "dtype": "int32",
+     "fill_value": 0
+    },
+    "h_min": {
+     "class": "exact",
+     "method": "min",
+     "nan_policy": "skip",
+     "dtype": "float32",
+     "fill_value": "NaN"
+    },
+    "h_max": {
+     "class": "exact",
+     "method": "max",
+     "nan_policy": "skip",
+     "dtype": "float32",
+     "fill_value": "NaN"
+    },
+    "h_mean": {
+     "class": "none"
+    },
+    "h_sigma": {
+     "class": "none"
+    },
+    "h_variance": {
+     "class": "none"
+    },
+    "h_q25": {
+     "class": "none"
+    },
+    "h_q50": {
+     "class": "none"
+    },
+    "h_q75": {
+     "class": "none"
+    }
+   },
+   "materialized": {
+    "orders": [
+     4
+    ],
+    "generated_at": "2026-07-30T09:01:35+00:00"
+   }
+  }
+ },
+ "generated_at": "2026-07-30T09:01:35+00:00",
+ "temporal": {
+  "schedule": "explicit",
+  "time_field": "delta_time",
+  "epoch": "2018-01-01T00:00:00+00:00",
+  "scale": "utc",
+  "units": "seconds",
+  "calendar": "proleptic_gregorian",
+  "append_policy": "re-template",
+  "windows": [
+   {
+    "label": "2019",
+    "start": "2019-01-01T00:00:00+00:00",
+    "end": "2020-01-01T00:00:00+00:00"
+   },
+   {
+    "label": "2020",
+    "start": "2020-01-01T00:00:00+00:00",
+    "end": "2021-01-01T00:00:00+00:00"
+   }
+  ]
+ }
+}

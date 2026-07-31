@@ -196,6 +196,39 @@ async def _get_json_async(store, key: str, semaphore):
     return json.loads(bytes(data))
 
 
+def read_leaf_metas(
+    store_root: str,
+    leaves: Sequence[str],
+    *,
+    store: Any = None,
+    concurrency: int | None = 32,
+    **store_kwargs: Any,
+) -> list[dict | None]:
+    """Raw root ``zarr.json`` payloads for many leaves, batched (issue #5).
+
+    The substrate :func:`read_commits` maps over, exposed so a caller that
+    needs MORE than the stamp from the same object — the pyramid layer reads
+    the D11 ``role``/``zagg_overview`` root attrs alongside it (zagg spec
+    §4.3) — never pays a second GET. One result per input leaf, aligned by
+    position: ``None`` for an absent object, the parsed payload otherwise; a
+    present-but-unparsable ``zarr.json`` raises (that leaf claims to exist
+    and cannot be half-trusted). ``concurrency`` bounds the in-flight GETs
+    (``obstore.get_async`` behind a semaphore); ``None`` or ``1`` keeps the
+    serial path for debugging.
+    """
+    handle = _resolve_store(store_root, store, store_kwargs)
+    keys = [f"{leaf.strip('/')}/zarr.json" for leaf in leaves]
+    if concurrency is None or concurrency <= 1:
+        return [read_json(handle, key) for key in keys]
+    import asyncio
+
+    async def gather():
+        semaphore = asyncio.Semaphore(concurrency)
+        return await asyncio.gather(*(_get_json_async(handle, key, semaphore) for key in keys))
+
+    return _run_coroutine(gather())
+
+
 def read_commits(
     store_root: str,
     leaves: Sequence[str],
@@ -208,22 +241,13 @@ def read_commits(
 
     One result per input leaf, aligned by position, each with
     :func:`read_commit` semantics — ``None`` for debris/absent, a raise for
-    a present-but-unparsable ``zarr.json``. ``concurrency`` bounds the
-    in-flight GETs (``obstore.get_async`` behind a semaphore); ``None`` or
-    ``1`` keeps the serial per-leaf path for debugging.
+    a present-but-unparsable ``zarr.json`` (:func:`read_leaf_metas` is the
+    shared substrate).
     """
-    handle = _resolve_store(store_root, store, store_kwargs)
-    if concurrency is None or concurrency <= 1:
-        return [read_commit(store_root, leaf, store=handle) for leaf in leaves]
-    import asyncio
-
-    keys = [f"{leaf.strip('/')}/zarr.json" for leaf in leaves]
-
-    async def gather():
-        semaphore = asyncio.Semaphore(concurrency)
-        return await asyncio.gather(*(_get_json_async(handle, key, semaphore) for key in keys))
-
-    return [_stamp_from_meta(meta) for meta in _run_coroutine(gather())]
+    metas = read_leaf_metas(
+        store_root, leaves, store=store, concurrency=concurrency, **store_kwargs
+    )
+    return [_stamp_from_meta(meta) for meta in metas]
 
 
 def read_leaf_coverage(

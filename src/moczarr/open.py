@@ -46,9 +46,11 @@ from moczarr.exceptions import NoCoverageError
 from moczarr.fabricate import fabricate_cell_ids as _fabricate_cell_ids
 from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.store import (
+    _stamp_from_meta,
     load_root_coverage,
     open_object_store,
     read_commits,
+    read_leaf_metas,
     read_manifest,
     walk_leaves,
 )
@@ -58,6 +60,23 @@ def _aoi_words(aoi) -> np.ndarray:
     """Normalize an AOI cover to packed ``uint64`` words (strings accepted)."""
     values = list(np.asarray(aoi).ravel()) if np.asarray(aoi).ndim else [aoi]
     return np.asarray([morton_word(v) for v in values], dtype=np.uint64)
+
+
+def _shard_leaf_name(rel: str) -> tuple[str, str | None] | None:
+    """``(shard, window)`` for a walked ``*.zarr`` path, or ``None``.
+
+    ``None`` means the object is not a shard leaf: overview zarrs at ancestor
+    nodes reuse the window-naming dialect (``all.zarr`` / ``{window}.zarr``,
+    zagg spec §4.2), so their stems are not morton decimals. The source walk
+    skips them — the MOC-arithmetic path never names them at all (the root
+    MOC is the *source* domain), and the walk must match it.
+    """
+    try:
+        shard, label = split_leaf_name(rel.rsplit("/", 1)[-1])
+        morton_word(shard)
+    except ValueError:
+        return None
+    return shard, label
 
 
 def _candidate_leaves(
@@ -102,7 +121,10 @@ def _candidate_leaves(
     for rel in walk_leaves(
         store_root, store=store, concurrency=concurrency, path_grouping=grouping
     ):
-        shard, label = split_leaf_name(rel.rsplit("/", 1)[-1])
+        named = _shard_leaf_name(rel)
+        if named is None:
+            continue  # an overview object at an ancestor node, not a leaf
+        shard, label = named
         labels.add(label if label is not None else "<none>")
         if label != window:
             continue
@@ -153,7 +175,11 @@ def _schema_leaf(
         if rel is not None:
             return rel
     leaves = sorted(
-        walk_leaves(store_root, store=store, concurrency=concurrency, path_grouping=path_grouping)
+        rel
+        for rel in walk_leaves(
+            store_root, store=store, concurrency=concurrency, path_grouping=path_grouping
+        )
+        if _shard_leaf_name(rel) is not None  # overview objects serve no leaf schema
     )
     stamps = read_commits(store_root, leaves, store=store, concurrency=concurrency)
     return next((r for r, s in zip(leaves, stamps) if s is not None), None)
@@ -203,6 +229,7 @@ def open_hive(
     index_kind: str = "moc",
     concurrency: int | None = 32,
     xr_kwargs: dict[str, Any] | None = None,
+    _objects_out: list | None = None,
     **store_kwargs: Any,
 ):
     """Open a morton-hive store as one xarray Dataset.
@@ -353,11 +380,31 @@ def open_hive(
     candidates = _candidate_leaves(
         store_root, manifest, aoi_words, window, store=obstore_store, concurrency=concurrency
     )
-    stamps = read_commits(store_root, candidates, store=obstore_store, concurrency=concurrency)
+    # One zarr.json GET per candidate serves BOTH the commit stamp and — for
+    # the tree layer's per-object role surfacing (_objects_out, a private
+    # collection hook in the zagg occupied_out style) — the D11 role attrs.
+    metas = read_leaf_metas(store_root, candidates, store=obstore_store, concurrency=concurrency)
+    stamps = [_stamp_from_meta(meta) for meta in metas]
     domain = None  # index_kind="moc": the accumulated interval-set row domain
-    for rel, stamp in zip(candidates, stamps):
+    for rel, meta, stamp in zip(candidates, metas, stamps):
         if stamp is None:
             continue  # debris or a MOC-listed shard whose leaf is gone (D4)
+        if _objects_out is not None:
+            # Per-object role entry for every leaf this open ADMITS, recorded
+            # before the AOI rejects below: the roster answers structural
+            # questions (moczarr.pyramid.source_orders), so it must not shrink
+            # with the query. Role absence means source (zagg spec §4.3); a
+            # role-carrying object inside the source domain is off-convention
+            # but surfaced verbatim rather than hidden (mixture-tolerant).
+            attrs = meta.get("attributes") if isinstance(meta, dict) else None
+            node_dec, node_label = split_leaf_name(rel.rsplit("/", 1)[-1])
+            _objects_out.append(
+                {
+                    "node": node_dec,
+                    "window": node_label,
+                    "role": (attrs or {}).get("role") or "source",
+                }
+            )
         if aoi_words is not None:
             coverage = parse_leaf_coverage(stamp)
             if coverage is not None and coverage.get("box"):
@@ -550,9 +597,22 @@ def open_store(
     attrs only; a multi-product root is manifest-less by design). The
     window axis is **never** nodes (time stays a per-node dimension,
     scoped by ``window=``), and the spatial digit axis is never nodes.
-    Resolution (pyramid-order) nodes are a designed, not-yet-implemented
-    second level — gated on zagg#201's first overview fixture; see the
-    concepts page's design section.
+
+    **Resolution (pyramid-order) nodes** (issue #15 phase 8b): when a
+    product's manifest declares sweep-generated overviews (the zagg spec
+    §4.5 ``pyramid.overview.orders`` binding — manifest declaration is the
+    only discovery path), the product node becomes an empty intermediate
+    and the stored orders become its children, named by the integer cell
+    order they store: the source data is the source-order child (the same
+    ``open_hive`` Dataset, plus per-object role entries under
+    ``attrs["zagg_objects"]``) and each declared overview order with at
+    least one stamped object is a sibling node opened by
+    :func:`moczarr.pyramid.open_overview_order`. ``role`` is per object,
+    never per node; sibling variable sets differ in both directions; the
+    seamless mixed-order composite is a *computed* view, never a node.
+    Selection helpers: :func:`moczarr.pyramid.source_orders`,
+    :func:`moczarr.pyramid.overview_orders`,
+    :func:`moczarr.pyramid.finest_source_at`.
 
     Named after its scope (the store), not its return type: the xarray-
     native name ``open_datatree`` is reserved for zarr-native hierarchies,
@@ -641,6 +701,7 @@ concurrency, xr_kwargs, **store_kwargs
                 "name": _degenerate_node_name(manifest),
                 "spec": manifest["spec"],
                 "semantic_hash": manifest.get("semantic_hash"),
+                "manifest": manifest,
             }
         ]
     # The roster is what the store *publishes* — exactly ``list_products``,
@@ -664,24 +725,81 @@ concurrency, xr_kwargs, **store_kwargs
             f"window={window!r} but no windowed ({HIVE_SPEC_V2}) product is selected at "
             f"{store_root} (specs: { {r['name']: r['spec'] for r in records} })"
         )
+    from moczarr import pyramid
+
     nodes: dict[str, Any] = {}
     for record in records:
+        name = record["name"]
+        node_window = window if record["spec"] == HIVE_SPEC_V2 else None
+        manifest_rec = record.get("manifest")
+        # Node discovery is MANIFEST DECLARATION (zagg spec §4.5; issue #15
+        # phase 8b): the reader binds pyramid.overview.orders and nothing
+        # else. Empty/absent -> today's flat product node, unchanged.
+        cell_orders = pyramid.overview_cell_orders(manifest_rec) if manifest_rec else {}
+        objects: list[dict] = []
         ds = open_hive(
             store_root,
-            product=None if bare else record["name"],
+            product=None if bare else name,
             aoi=aoi,
-            window=window if record["spec"] == HIVE_SPEC_V2 else None,
+            window=node_window,
             anonymous=anonymous,
             fabricate_cell_ids=fabricate_cell_ids,
             decode=decode,
             index_kind=index_kind,
             concurrency=concurrency,
             xr_kwargs=xr_kwargs,
+            _objects_out=objects if cell_orders else None,
             **store_kwargs,
         )
+        if not cell_orders or manifest_rec is None:  # None narrows for mypy
+            if record.get("semantic_hash"):
+                ds.attrs["semantic_hash"] = record["semantic_hash"]
+            nodes[name] = ds
+            continue
+        # Pyramid form ({product}/{order}, zagg#201's ratified layout): the
+        # product node becomes an empty intermediate carrying the product's
+        # identity attrs; the source data becomes the source-order child
+        # (named by the cell order it stores) with its per-object role
+        # entries; each declared overview order that carries at least one
+        # stamped object becomes a sibling order node. The seamless
+        # mixed-order composite is a COMPUTED view, never a node.
+        ds.attrs[pyramid.OBJECTS_ATTR] = objects
+        product_attrs: dict[str, Any] = {
+            "morton_hive": {
+                key: manifest_rec[key] for key in ("spec", "cell_order", "shard_order", "dataset")
+            }
+        }
         if record.get("semantic_hash"):
-            ds.attrs["semantic_hash"] = record["semantic_hash"]
-        nodes[record["name"]] = ds
+            product_attrs["semantic_hash"] = record["semantic_hash"]
+        nodes[name] = xr.Dataset(attrs=product_attrs)
+        nodes[f"{name}/{int(manifest_rec['cell_order'])}"] = ds
+        product_root = store_root if bare else f"{store_root.rstrip('/')}/{name}"
+        # ONE store construction and ONE root-MOC read for this product's whole
+        # order level (issue #5): the sidecar tier must not grow with the number
+        # of declared orders — on a 5-order pyramid over S3 that would be 5
+        # round-trips for one per-product envelope. A None envelope means "not
+        # supplied", so the degraded no-MOC case re-reads and warns per order
+        # exactly as before.
+        product_store = open_object_store(product_root, anonymous=anonymous, **store_kwargs)
+        product_envelope = load_root_coverage(product_root, store=product_store)
+        for ancestor_order, target_order in cell_orders.items():
+            overview_ds = pyramid.open_overview_order(
+                product_root,
+                manifest_rec,
+                ancestor_order,
+                aoi=aoi,
+                window=node_window,
+                fabricate_cell_ids=fabricate_cell_ids,
+                decode=decode,
+                index_kind=index_kind,
+                concurrency=concurrency,
+                xr_kwargs=xr_kwargs,
+                store=product_store,
+                _envelope=product_envelope,
+            )
+            if overview_ds is None:
+                continue  # open_overview_order warned; the node is omitted
+            nodes[f"{name}/{target_order}"] = overview_ds
     store_attrs: dict[str, Any] = {"store_root": store_root, "products": roster}
     if bare:
         store_attrs["bare"] = True

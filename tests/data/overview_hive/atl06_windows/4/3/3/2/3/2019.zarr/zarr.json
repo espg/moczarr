@@ -1,0 +1,47 @@
+{
+  "attributes": {
+    "role": "overview",
+    "zagg_overview": {
+      "spec": "zagg-overview/1",
+      "node": "43323",
+      "order": 4,
+      "cell_order": 6,
+      "source_shard_order": 6,
+      "source_cell_order": 8,
+      "window": "2019",
+      "fields": {
+        "count": {
+          "class": "exact",
+          "method": "sum",
+          "nan_policy": "skip"
+        },
+        "h_min": {
+          "class": "exact",
+          "method": "min",
+          "nan_policy": "skip"
+        },
+        "h_max": {
+          "class": "exact",
+          "method": "max",
+          "nan_policy": "skip"
+        }
+      },
+      "generation": {
+        "n_leaves": 2,
+        "max_leaf_timestamp": "2026-07-30T09:01:35+00:00"
+      },
+      "content_hash": "adb0401e20872596af142b294e5960562eef2b2bb57dcfacec4eef3c498211a4",
+      "generated_at": "2026-07-30T09:01:35+00:00"
+    },
+    "morton_hive_commit": {
+      "spec": "morton-hive/2",
+      "complete": true,
+      "cells_with_data": 2,
+      "granule_count": 4,
+      "written_at": "2026-07-30T09:01:35+00:00",
+      "window": "2019"
+    }
+  },
+  "zarr_format": 3,
+  "node_type": "group"
+}
