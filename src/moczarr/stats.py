@@ -294,16 +294,36 @@ def hash_arrays(
     adopt it verbatim when it lands (spec home: englacial/zagg#340).
     """
     import zarr
+    from zarr.core.sync import sync
     from zarr.storage import ObjectStore
 
+    async def _metadata_keys(gen: Any) -> list[str]:
+        # Filter in the stream: the listing covers every object under the leaf
+        # (chunk payloads included), and only the metadata keys are wanted.
+        return [key async for key in gen if key.endswith("/zarr.json")]
+
     handle = _resolve_store(store_root, store, store_kwargs)
-    group = zarr.open_group(
-        ObjectStore(handle, read_only=True), path=leaf.strip("/"), mode="r", zarr_format=3
-    )
+    zstore = ObjectStore(handle, read_only=True)
+    prefix = leaf.strip("/")
+    # Walk the leaf by its ``zarr.json`` keys rather than ``Group.members``:
+    # a zagg leaf carries non-zarr sidecar objects (the in-leaf
+    # ``coverage.moc`` occupancy bitmap), which the recursive member probe
+    # trips over — they are simply not arrays, so they are not in O11 scope.
+    # The probe's failure is also backend-dependent (zarr's own LocalStore
+    # warns and skips the sidecar; over obstore the same probe raises), so
+    # this walk is the one behavior BOTH backends share. Each node's metadata
+    # is read twice — once here, once by ``zarr.open_array`` — which is the
+    # price of the tolerant ``node_type`` probe: opening first would raise on
+    # a metadata object that is not a node at all.
+    keys = sync(_metadata_keys(zstore.list_prefix(f"{prefix}/")))
     hashes = {}
-    for key, node in group.members(max_depth=None):
-        if not isinstance(node, zarr.Array):
+    for meta_key in sorted(keys):
+        node_path = meta_key[: -len("/zarr.json")]
+        meta = read_json(handle, meta_key)
+        if not isinstance(meta, dict) or meta.get("node_type") != "array":
             continue
+        node = zarr.open_array(zstore, path=node_path, mode="r", zarr_format=3)
+        key = node_path[len(prefix) + 1 :]
         values = np.ascontiguousarray(node[...])
         if values.dtype.kind == "O":  # vlen: length-prefixed payloads, C order
             digest = hashlib.sha256()
