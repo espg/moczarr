@@ -25,7 +25,7 @@ attrs, and a caller who opens an array by other means should check
 
 Normative home: zagg ``docs/specification.md`` §3 — merged to zagg ``main``
 (englacial/zagg#346, rebase merge); the section references here are read
-against ``main`` at ``c0493ba``, and the branch-era shas (``166e908``,
+against ``main`` at ``9e11e65``, and the branch-era shas (``166e908``,
 ``555874b``) are historical. Narrative in zagg ``docs/signal_strata.md``; the writer is
 ``zagg.stats.composition``.
 

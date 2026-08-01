@@ -1,7 +1,7 @@
 """Generic ``zagg-ragged/1`` vlen decode layer — product-agnostic (issue #19).
 
 The read side of zagg's ragged store spec (``docs/specification.md`` §1 in
-englacial/zagg — normative on ``main``, re-checked at ``c0493ba``, the
+englacial/zagg — normative on ``main``, re-checked at ``9e11e65``, the
 englacial/zagg#346 rebase merge): a ``kind: ragged`` field is ONE
 ``variable_length_bytes`` zarr v3 array on the cells axis. Each populated
 cell holds the raw **little-endian** bytes of its ``(n, *inner_shape)``
