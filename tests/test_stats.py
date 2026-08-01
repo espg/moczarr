@@ -28,14 +28,24 @@ from moczarr import convention, stats
 from moczarr.stats import (
     combined_hash,
     hash_arrays,
+    overview_sidecar_key,
+    overview_sidecar_path,
+    read_overview_stats,
     read_stats,
     read_stats_rollup,
     stats_sidecar_key,
     stats_sidecar_path,
     verify_arrays,
+    verify_overview_arrays,
 )
 
 FIXTURE = Path(__file__).parent / "data" / "multiproduct_hive"
+#: The zagg-written overview-pyramid fixture (PR #28, regenerated at the zagg
+#: sha that writes overview D20 sidecars — englacial/zagg PR #356).
+OVERVIEW = Path(__file__).parent / "data" / "overview_hive"
+OVERVIEW_GOLDEN = json.loads(
+    (Path(__file__).parent / "data" / "overview_hive.golden.json").read_text()
+)
 
 #: The FROZEN O11 combined-hash serialization, as a literal: sha256 of the
 #: sorted per-array hex digests, ``"\n"``-joined, ASCII — for the ``atl06``
@@ -65,6 +75,23 @@ def ragged():
 @pytest.fixture()
 def pg3():
     return str(FIXTURE / "atl06_pg3")
+
+
+@pytest.fixture()
+def ov_flat():
+    """The unwindowed overview product — a ``morton-hive/1`` store."""
+    return str(OVERVIEW / "atl06")
+
+
+@pytest.fixture()
+def ov_windows():
+    """The windowed (``morton-hive/2``) overview product."""
+    return str(OVERVIEW / "atl06_windows")
+
+
+def _golden_stats(product: str, order: str, key: str) -> dict:
+    """The golden's recorded sidecar entries for one order/window."""
+    return OVERVIEW_GOLDEN["products"][product]["overviews"][order][key]["stats"]
 
 
 def _rewrite_content_hashes(atl06, tmp_path, rewrite):
@@ -439,3 +466,181 @@ class TestVerifyArrays:
         hashes = hash_arrays(atl06, rel)
         count = np.arange(1, 17, dtype="<i8")
         assert hashes["5/count"] == hashlib.sha256(count.tobytes()).hexdigest()
+
+
+class TestOverviewSidecarNames:
+    """The zagg spec §5.3 rule: an overview sidecar is its basename's stem
+    plus ``.stats.json``, at EVERY store spec revision."""
+
+    def test_stem_grammar(self):
+        assert overview_sidecar_key("all.zarr") == "all.stats.json"
+        assert overview_sidecar_key("2019.zarr") == "2019.stats.json"
+        assert overview_sidecar_path("4/3/3/1/2/2019.zarr") == "4/3/3/1/2/2019.stats.json"
+
+    def test_spec_keyed_naming_would_collide(self):
+        # WHY the rule is unconditional: one ancestor node holds every
+        # window's overview, and the legacy grammar resolves them all — the
+        # per-window ones included, since an overview basename carries no
+        # `{id}_{window}` split — to one `stats.json` at that node.
+        for basename in ("all.zarr", "2019.zarr", "2020.zarr"):
+            assert stats_sidecar_key(basename, convention.HIVE_SPEC) == "stats.json"
+        assert len({overview_sidecar_key(b) for b in ("all.zarr", "2019.zarr")}) == 2
+
+    def test_malformed_basename_raises(self):
+        # Inherits the /3 branch's strictness: no path escape, no `_`.
+        for bad in ("all", "../all.zarr", "a_b.zarr"):
+            with pytest.raises(ValueError):
+                overview_sidecar_key(bad)
+
+
+class TestReadOverviewStats:
+    def test_reads_the_record_on_a_v1_store(self, ov_flat):
+        # The case a spec-keyed name misses: `atl06` is `morton-hive/1`, so
+        # `stats_sidecar_key` computes `stats.json` — while zagg wrote
+        # `all.stats.json` beside the overview zarr.
+        manifest = json.loads((OVERVIEW / "atl06" / "morton_hive.json").read_text())
+        assert manifest["spec"] == convention.HIVE_SPEC
+        assert not (OVERVIEW / "atl06" / "4" / "3" / "3" / "1" / "2" / "stats.json").exists()
+        record = read_overview_stats(ov_flat, "43312")
+        assert record["shard_key"] == convention.morton_word("43312")
+        golden = _golden_stats("atl06", "6", "all")["43312"]
+        assert golden["key"] == "all.stats.json"
+        assert record["content_hashes"]["combined"] == golden["combined"]
+
+    def test_addresses_any_declared_order(self, ov_flat):
+        # Order 2 (cells at order 4): one ancestor node, three digits.
+        record = read_overview_stats(ov_flat, "433")
+        assert (
+            record["content_hashes"]["combined"]
+            == _golden_stats("atl06", "4", "all")["433"]["combined"]
+        )
+
+    def test_packed_word_node_accepted(self, ov_flat):
+        # The `read_stats_rollup` addressing contract: word or decimal.
+        assert read_overview_stats(ov_flat, convention.morton_word("43312")) == read_overview_stats(
+            ov_flat, "43312"
+        )
+
+    def test_per_window_records(self, ov_windows):
+        for window in ("2019", "2020"):
+            record = read_overview_stats(ov_windows, "43312", window=window)
+            assert record["window"] == window
+            golden = _golden_stats("atl06_windows", "6", window)["43312"]
+            assert record["content_hashes"]["combined"] == golden["combined"]
+        # Distinct objects at ONE node — what the unconditional stem grammar
+        # buys: the legacy name would have resolved both to `stats.json`.
+        assert (
+            read_overview_stats(ov_windows, "43312", window="2019")["content_hashes"]["combined"]
+            != read_overview_stats(ov_windows, "43312", window="2020")["content_hashes"]["combined"]
+        )
+
+    def test_all_time_fold_is_addressable(self, ov_windows):
+        # The reserved token IS spellable on the telemetry surface (contrast
+        # espg/moczarr#30, which refuses it at the dataset openers): the
+        # object exists, and one record cannot misreport coverage. `None` and
+        # an explicit "all" name the same `all.zarr` sidecar.
+        record = read_overview_stats(ov_windows, "43312")
+        assert record == read_overview_stats(ov_windows, "43312", window="all")
+        golden = _golden_stats("atl06_windows", "6", "all")["43312"]
+        assert record["content_hashes"]["combined"] == golden["combined"]
+        # It is a DIFFERENT object from either window's.
+        assert record != read_overview_stats(ov_windows, "43312", window="2019")
+
+    def test_unswept_node_reads_absent(self, ov_flat):
+        # A legal ancestor decimal the sweep never wrote: no telemetry, and
+        # (D9) that is never "no data".
+        assert read_overview_stats(ov_flat, "43313") is None
+
+    def test_deleted_sidecar_reads_absent(self, ov_flat, tmp_path):
+        root = tmp_path / "store"
+        shutil.copytree(ov_flat, root)
+        (root / "4" / "3" / "3" / "1" / "2" / "all.stats.json").unlink()
+        assert read_overview_stats(str(root), "43312") is None
+        # The overview zarr itself is untouched — telemetry is not load-bearing.
+        assert verify_overview_arrays(str(root), "43312")["computed"]
+
+    @pytest.mark.parametrize("payload", ["{not json", '["a list"]'])
+    def test_unusable_sidecar_reads_absent(self, ov_flat, tmp_path, payload):
+        root = tmp_path / "store"
+        shutil.copytree(ov_flat, root)
+        (root / "4" / "3" / "3" / "1" / "2" / "all.stats.json").write_text(payload)
+        assert read_overview_stats(str(root), "43312") is None
+
+    def test_grouped_store_raises(self, pg3):
+        # Name arithmetic is this module's loud surface: zagg's sweep writes
+        # ancestor nodes one component per digit regardless of grouping, so
+        # no key composed here would be the writer's.
+        with pytest.raises(ValueError, match="path_grouping 3"):
+            read_overview_stats(pg3, "4111")
+
+    def test_non_hive_root_raises(self, tmp_path):
+        with pytest.raises(ValueError, match="not a hive store root"):
+            read_overview_stats(str(tmp_path), "433")
+
+
+class TestVerifyOverviewArrays:
+    def test_golden_match(self, ov_flat):
+        # O11 parity with source leaves: zagg computes an overview's hashes
+        # from the folded in-memory arrays with the same §5.1 recipe, so the
+        # unchanged `hash_arrays` verifies them.
+        result = verify_overview_arrays(ov_flat, "43312")
+        assert result["match"] is True
+        assert result["combined_match"] is True
+        assert result["mismatched"] == []
+        assert result["leaf"] == "4/3/3/1/2/all.zarr"
+        assert set(result["computed"]) == {"6/morton", "6/count", "6/h_min", "6/h_max"}
+        assert result["recorded"] == result["computed"]
+
+    def test_every_committed_overview_verifies(self, ov_flat, ov_windows):
+        for product, root in (("atl06", ov_flat), ("atl06_windows", ov_windows)):
+            for order, per_key in OVERVIEW_GOLDEN["products"][product]["overviews"].items():
+                for key, entry in per_key.items():
+                    window = None if key == "all" else key
+                    for node, recorded in entry["stats"].items():
+                        result = verify_overview_arrays(root, node, window=window)
+                        assert result["match"] is True, (product, order, key, node)
+                        assert result["recorded_combined"] == recorded["combined"]
+
+    def test_combined_hash_recomputes_to_the_golden(self, ov_flat):
+        # Cross-implementation, not an echo: zagg recorded `combined`; this
+        # recomputes it from the zarr bytes through moczarr's own recipe.
+        result = verify_overview_arrays(ov_flat, "433")
+        assert result["combined"] == combined_hash(hash_arrays(ov_flat, "4/3/3/all.zarr"))
+        assert result["combined"] == _golden_stats("atl06", "4", "all")["433"]["combined"]
+
+    def test_tamper_localizes_mismatch(self, ov_flat, tmp_path):
+        root = tmp_path / "store"
+        shutil.copytree(ov_flat, root)
+        chunk = root / "4" / "3" / "3" / "1" / "2" / "all.zarr" / "6" / "count" / "c" / "0"
+        data = bytearray(chunk.read_bytes())
+        data[0] ^= 0xFF
+        chunk.write_bytes(bytes(data))
+        result = verify_overview_arrays(str(root), "43312")
+        assert result["match"] is False
+        assert result["mismatched"] == ["6/count"]
+        assert result["combined"] != result["recorded_combined"]
+
+    def test_nothing_recorded_is_none_not_a_pass(self, ov_flat, tmp_path):
+        # The posture that matters most on a regenerable cache: an overview
+        # whose sidecar records no hashes (an older sweep, or the fail-open
+        # PUT) is UNVERIFIABLE, distinct from both verified and tampered.
+        root = tmp_path / "store"
+        shutil.copytree(ov_flat, root)
+        sidecar = root / "4" / "3" / "3" / "1" / "2" / "all.stats.json"
+        record = json.loads(sidecar.read_text())
+        del record["content_hashes"]
+        sidecar.write_text(json.dumps(record))
+        result = verify_overview_arrays(str(root), "43312")
+        assert result["match"] is None
+        assert result["recorded"] is None and result["recorded_combined"] is None
+        assert result["mismatched"] == []
+        # Absence of the whole sidecar reads the same way — never a pass.
+        sidecar.unlink()
+        assert verify_overview_arrays(str(root), "43312")["match"] is None
+
+    def test_shares_the_source_leaf_recipe(self, ov_flat):
+        # Same code path as `verify_arrays` below the addressing: the verdict
+        # is reproducible from the public primitives.
+        result = verify_overview_arrays(ov_flat, "43312")
+        assert result["computed"] == hash_arrays(ov_flat, "4/3/3/1/2/all.zarr")
+        assert result["combined"] == combined_hash(result["computed"])
