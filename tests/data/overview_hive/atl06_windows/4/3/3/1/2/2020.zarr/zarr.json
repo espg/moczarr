@@ -28,17 +28,17 @@
       },
       "generation": {
         "n_leaves": 1,
-        "max_leaf_timestamp": "2026-07-30T09:01:35+00:00"
+        "max_leaf_timestamp": "2026-08-01T00:43:09+00:00"
       },
       "content_hash": "4c631f3838bef047c16d1f584f9805540ffc0fb4a41e478ae9a9a03c9e1f53a3",
-      "generated_at": "2026-07-30T09:01:35+00:00"
+      "generated_at": "2026-08-01T00:43:09+00:00"
     },
     "morton_hive_commit": {
       "spec": "morton-hive/2",
       "complete": true,
       "cells_with_data": 1,
       "granule_count": 2,
-      "written_at": "2026-07-30T09:01:35+00:00",
+      "written_at": "2026-08-01T00:43:09+00:00",
       "window": "2020"
     }
   },
