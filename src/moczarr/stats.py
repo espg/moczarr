@@ -206,15 +206,25 @@ def overview_sidecar_path(leaf: str) -> str:
     return stats_sidecar_path(leaf, HIVE_SPEC_V3)
 
 
-def _overview_leaf(store_root: str, node, window: str | None, handle: Any) -> str:
+def _overview_leaf(
+    store_root: str, node, window: str | None, handle: Any, manifest: dict | None = None
+) -> str:
     """Store-relative path of one overview zarr at an ancestor node.
 
     The node path is :func:`_node_rel` — the same arithmetic
     :func:`read_stats_rollup` addresses digit nodes with — and the basename
     is the D23 window naming overviews inherit: ``{window}.zarr``, or
     ``all.zarr`` for the unwindowed store and the all-time fold.
+
+    ``manifest``, when the caller already holds one, is used instead of a
+    ``read_manifest`` GET (there is no cache — it is a real object read).
+    That keeps :func:`read_overview_order_stats` at ONE request per node
+    rather than two, the posture ``open_overview_order`` states for itself
+    (issue #5), and makes a single manifest govern both the node
+    enumeration and the ``path_grouping`` refusal below.
     """
-    manifest = read_manifest(store_root, store=handle)
+    if manifest is None:
+        manifest = read_manifest(store_root, store=handle)
     if manifest is None:
         raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
     grouping = manifest_path_grouping(manifest)
@@ -347,7 +357,13 @@ def read_overview_order_stats(
         return {}
     records = {}
     for node in overview_nodes(manifest, ranges_words(envelope), order):
-        record = read_overview_stats(store_root, node, window=window, store=handle)
+        # :func:`read_overview_stats`'s two lines, with the caller's manifest
+        # threaded through the addressing: calling it would re-GET
+        # `morton_hive.json` per node (``read_manifest`` has no cache), so a
+        # sweep whose node count grows 4x per order would spend half its
+        # requests re-reading a document the caller handed in.
+        rel = _overview_leaf(store_root, node, window, handle, manifest)
+        record = _read_tolerant(handle, overview_sidecar_path(rel), "overview stats sidecar")
         if record is not None:
             records[node] = record
     return records
