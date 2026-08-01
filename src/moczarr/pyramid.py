@@ -58,12 +58,13 @@ from typing import Any
 import numpy as np
 
 from moczarr.convention import (
+    ALL_TOKEN,
     HIVE_SPEC_V2,
     decimal_base,
     manifest_path_grouping,
     morton_decimal,
     morton_word,
-    validate_label,
+    validate_window,
 )
 from moczarr.coverage import ranges_words
 from moczarr.ranges import MortonRanges
@@ -80,8 +81,6 @@ ROLE_ATTR = "role"
 OVERVIEW_ATTR = "zagg_overview"
 #: Dataset-attrs key carrying one order node's per-object entries.
 OBJECTS_ATTR = "zagg_objects"
-#: Reserved window token naming the unwindowed / all-time fold (D23).
-ALL_TOKEN = "all"
 
 
 def overview_declaration(manifest: dict) -> dict | None:
@@ -312,23 +311,12 @@ def open_overview_order(
                 f"{store_root} is a windowed ({HIVE_SPEC_V2}) store; its overview "
                 f"orders are per-window (D23 naming) — pass window=..."
             )
-        validate_label(window)
-        if window == ALL_TOKEN:
-            # `all` passes validate_label, so without this it would happily
-            # open the all-time folds while open_hive found no `{shard}_all`
-            # leaf and emptied the source node — one tree whose source order
-            # reports 0 cells beside overview orders summing EVERY window.
-            # Refusing is spec-aligned (§4.2 excludes `all` from the window
-            # grammar forever), and leaves the surface question open.
-            raise ValueError(
-                f"window={ALL_TOKEN!r} at {store_root}: {ALL_TOKEN!r} is the reserved "
-                f"all-time token (zagg spec §4.2 — excluded from the window grammar "
-                f"forever), not a window label. The all-time overview folds "
-                f"(pyramid.overview.all_time, §4.5) exist on disk but are not yet a "
-                f"reader surface: the source axis has no all-time leaf to pair them "
-                f"with, so opening them alone would mislead. Pass a declared window "
-                f"label (espg/moczarr#15 tracks the opt-in surface)"
-            )
+        # The same seam open_hive/open_store run through (#30): `all` passes
+        # the label charset, so without an explicit refusal this would happily
+        # open the all-time folds while open_hive found no `{shard}_all` leaf
+        # and emptied the source node — one tree whose source order reports 0
+        # cells beside overview orders summing EVERY window.
+        validate_window(window, where=store_root)
         basename = f"{window}.zarr"
     else:
         basename = f"{ALL_TOKEN}.zarr"

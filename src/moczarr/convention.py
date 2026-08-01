@@ -74,6 +74,13 @@ MORTON_CONVENTION_ENTRY = {
 
 #: Frozen window-label charset (no ``_``, so leaf names split unambiguously).
 _LABEL_RE = re.compile(r"^[0-9A-Za-z-]{1,32}$")
+#: The reserved all-time token (zagg spec §4.2): the BASENAME of the
+#: unwindowed (``schedule: none``) leaf and of the sweep's all-time overview
+#: fold. It satisfies the label charset by design — it is a name, and names
+#: share one grammar — but it is excluded from explicit window labels
+#: forever, so it is never a legal ``window=`` argument
+#: (:func:`validate_window`).
+ALL_TOKEN = "all"
 
 #: Spec §1 suffix bands: ``0..=27`` area (order == suffix), ``28..=47``
 #: order-28/29 area preorder, ``48..=63`` order-29 POINT (no area claim).
@@ -253,6 +260,40 @@ def validate_label(label: str) -> str:
         raise ValueError(
             f"window label {label!r} does not match the frozen grammar "
             f"({_LABEL_RE.pattern}; morton-hive/2, mortie#62)"
+        )
+    return label
+
+
+def validate_window(label: str, *, where: str | None = None) -> str:
+    """Validate an explicit ``window=`` label; returns it.
+
+    :func:`validate_label` plus the one exclusion the charset cannot carry —
+    the reserved all-time token :data:`ALL_TOKEN`. ``all`` satisfies the
+    grammar because it is a *basename* (the unwindowed leaf's, and the
+    sweep's all-time overview fold's), so a reader entry point that only
+    validates the charset resolves it to objects that are not that window's:
+    ``open_hive`` names ``{shard}_all.zarr`` leaves that do not exist and
+    quietly empties, while an overview order would open the all-time folds
+    beside a 0-cell source node. Three behaviors for one reserved token is an
+    API trap (espg/moczarr#30), so every ``window=`` seam refuses it here,
+    with one message.
+
+    Name arithmetic that legitimately spells ``all`` — the overview sidecar
+    stem in :func:`moczarr.stats.stats_sidecar_key`, and the telemetry
+    readers that address an ``all.zarr`` object by name — keeps calling
+    :func:`validate_label`: reading one record cannot mislead about coverage
+    the way an all-time dataset node would.
+    """
+    validate_label(label)
+    if label == ALL_TOKEN:
+        at = f" at {where}" if where else ""
+        raise ValueError(
+            f"window={label!r}{at}: {ALL_TOKEN!r} is the reserved all-time token (zagg "
+            f"spec §4.2 — excluded from the window grammar forever), not a window label. "
+            f"The all-time folds (pyramid.overview.all_time, §4.5) exist on disk but are "
+            f"not yet a reader surface: the source axis has no all-time leaf to pair them "
+            f"with, so opening them alone would mislead. Pass a declared window label "
+            f"(espg/moczarr#31 tracks the opt-in surface)"
         )
     return label
 

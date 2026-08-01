@@ -33,7 +33,7 @@ from moczarr.convention import (
     manifest_path_grouping,
     morton_word,
     split_leaf_name,
-    validate_label,
+    validate_window,
 )
 from moczarr.coverage import (
     aoi_mask,
@@ -98,7 +98,10 @@ def _candidate_leaves(
     windowed = manifest["spec"] == HIVE_SPEC_V2
     grouping = manifest_path_grouping(manifest)
     if window is not None:
-        validate_label(window)
+        # The one window-validation seam every non-overview entry point runs
+        # through: open_hive directly, open_store via its per-product call.
+        # It is also what refuses the reserved all-time token (#30).
+        validate_window(window, where=store_root)
         if not windowed:
             raise ValueError(
                 f"window={window!r} on a {manifest['spec']} store: unwindowed stores "
@@ -720,6 +723,11 @@ concurrency, xr_kwargs, **store_kwargs
                 f"products {missing} not found at {store_root} (products present: {roster})"
             )
         records = [record for record in records if record["name"] in wanted]
+    if window is not None:
+        # Ahead of the typo-catching check below on purpose: a user who passes
+        # the reserved all-time token gets told that, not "no windowed product
+        # is selected", whatever the roster happens to be (#30).
+        validate_window(window, where=store_root)
     if window is not None and all(record["spec"] != HIVE_SPEC_V2 for record in records):
         raise ValueError(
             f"window={window!r} but no windowed ({HIVE_SPEC_V2}) product is selected at "
