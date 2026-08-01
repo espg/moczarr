@@ -644,7 +644,7 @@ class TestDegradation:
         assert list(tree["atl06"].children) == [str(manifest["cell_order"])]
         assert tree["atl06"]["10"].ds.sizes["cells"] > 0
 
-    def test_all_time_token_is_refused(self, root):
+    def test_all_time_token_is_refused(self, root, manifest):
         # `all` passes validate_label, so it WAS reachable: it opened the
         # all-time folds on the overview orders while the source order — which
         # has no `{shard}_all` leaf — emptied. Refused loudly instead (§4.2:
@@ -669,6 +669,25 @@ class TestDegradation:
             warnings.simplefilter("error")
             with pytest.raises(ValueError, match="reserved all-time token"):
                 open_store(root, products=["atl06_windows"], window="all")
+        # ...and on the UNWINDOWED (`morton-hive/1`) product too: the
+        # overview basename there is `all.zarr` whatever `window=` says, so
+        # a validation that lived inside the windowed branch let the token
+        # through silently — the one entry point still not refusing it.
+        with pytest.raises(ValueError, match="reserved all-time token"):
+            open_overview_order(f"{root}/atl06", manifest, 4, window="all")
+
+    def test_unwindowed_overview_refuses_a_window_label(self, root, manifest):
+        # Worse than the quiet empty #30 set out to kill: an unwindowed
+        # store's `all.zarr` ancestors were returned as if they were the
+        # requested window — real all-time rows under a label the store has
+        # no leaves for. open_hive already refuses this on the source axis,
+        # so the overview axis says the same thing, in the same words.
+        with pytest.raises(ValueError, match="unwindowed stores have no window leaves"):
+            open_overview_order(f"{root}/atl06", manifest, 4, window="2019")
+        with pytest.raises(ValueError, match="unwindowed stores have no window leaves"):
+            open_hive(f"{root}/atl06", window="2019")
+        # window=None is untouched: it is how the all-time ancestors are read.
+        assert open_overview_order(f"{root}/atl06", manifest, 4).sizes["cells"] > 0
 
     def test_all_time_token_beats_the_typo_check(self, root):
         # open_store's own "no windowed product is selected" check would

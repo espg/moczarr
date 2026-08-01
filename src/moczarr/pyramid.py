@@ -305,11 +305,15 @@ def open_overview_order(
     like :func:`moczarr.open.open_hive`.
 
     ``window`` must be a declared label: the reserved all-time token
-    (``"all"``, §4.2) is **refused** on a windowed product. Its ``all.zarr``
-    folds exist on disk (``pyramid.overview.all_time``, §4.5) but have no
-    counterpart on the source axis, so surfacing them alone would report a
-    0-cell source node beside overview nodes summing every window — the
-    opt-in surface is deferred rather than half-built.
+    (``"all"``, §4.2) is **refused**. Its ``all.zarr`` folds exist on disk
+    (``pyramid.overview.all_time``, §4.5) but have no counterpart on the
+    source axis, so surfacing them alone would report a 0-cell source node
+    beside overview nodes summing every window — the opt-in surface is
+    deferred rather than half-built. On an *unwindowed* store any ``window``
+    is refused, the way :func:`moczarr.open.open_hive` refuses it on the
+    source axis: the ancestor nodes there hold one ``all.zarr`` apiece, so
+    an accepted label would return the all-time rows under a name the store
+    has no leaves for. Only ``window=None`` reaches them.
 
     ``anonymous`` skips request signing for public buckets, and remaining
     ``store_kwargs`` reach ``open_object_store`` — the same posture (and
@@ -340,20 +344,35 @@ def open_overview_order(
     target_order = cell_order - (shard_order - k)
     grouping = manifest_path_grouping(manifest)
     windowed = manifest["spec"] == HIVE_SPEC_V2
+    if window is not None:
+        # ABOVE the windowed branch, exactly where `open._candidate_leaves`
+        # runs it: an unwindowed store's overview basename is `all.zarr`
+        # whatever `window=` says, so validating inside `if windowed:` left
+        # a `/1` product silently ignoring the argument — the reserved token
+        # unrefused, and a real label returning the all-time rows AS IF they
+        # were that window (#30's uniformity claim held only for `/2`).
+        # `all` passes the label charset, so without this refusal a windowed
+        # open would surface the all-time folds while open_hive found no
+        # `{shard}_all` leaf and emptied the source node — one tree whose
+        # source order reports 0 cells beside overview orders summing EVERY
+        # window.
+        validate_window(window, where=store_root)
     if windowed:
         if window is None:
             raise ValueError(
                 f"{store_root} is a windowed ({HIVE_SPEC_V2}) store; its overview "
                 f"orders are per-window (D23 naming) — pass window=..."
             )
-        # The same seam open_hive/open_store run through (#30): `all` passes
-        # the label charset, so without an explicit refusal this would happily
-        # open the all-time folds while open_hive found no `{shard}_all` leaf
-        # and emptied the source node — one tree whose source order reports 0
-        # cells beside overview orders summing EVERY window.
-        validate_window(window, where=store_root)
         basename = f"{window}.zarr"
     else:
+        if window is not None:
+            # Same message (and same substance) `open._candidate_leaves`
+            # gives for the source axis: one store, one answer about what a
+            # window means there.
+            raise ValueError(
+                f"window={window!r} on a {manifest['spec']} store: unwindowed stores "
+                f"have no window leaves (schedule: none)"
+            )
         basename = f"{ALL_TOKEN}.zarr"
     if grouping != 1:
         # An ancestor order that is not a multiple of path_grouping has NO
