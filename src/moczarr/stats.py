@@ -668,9 +668,18 @@ def verify_overview_arrays(
     ancestor ``node`` plus the overview basename, and the §5.3
     spec-independent sidecar name. The return dict is
     :func:`verify_arrays`'s, verbatim, including the posture that matters
-    most here: ``match is None`` means the overview records no
-    ``content_hashes`` (an older sweep, or a fail-open sidecar PUT), which is
-    **unverifiable, not tampered**.
+    most here: ``match is None`` means **unverifiable, not tampered**.
+
+    Two different things read that way, and ``computed`` is the
+    discriminator. A non-empty ``computed`` is an overview that exists but
+    records no ``content_hashes`` (an older sweep, or a fail-open sidecar
+    PUT). An **empty** ``computed`` — equivalently a ``combined`` equal to
+    the sha256 of the empty byte string — means no arrays were found under
+    ``leaf`` at all: there is no overview object at that node. The node path
+    is composed arithmetically from any digit string, so a mistyped node, an
+    order the sweep never ran, and a deleted overview all land there. Check
+    ``computed`` (or ``open_overview_order``'s ``zagg_objects``) before
+    reading ``match is None`` as a statement about a present object.
 
     Overviews are regenerable caches (§4.1), so a mismatch indicts the cache,
     not the store: the fix is to re-run the sweep. What it localizes is
