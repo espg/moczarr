@@ -39,6 +39,7 @@ from moczarr.pyramid import (
     open_overview_order,
     overview_cell_orders,
     overview_declaration,
+    overview_nodes,
 )
 
 FIXTURE = Path(__file__).parent / "data" / "overview_hive"
@@ -447,6 +448,48 @@ class TestScoping:
                 np.asarray(ds["cell_ids"].values),
                 fabricate_cell_ids(words, level=int(order)),
             )
+
+
+class TestOverviewNodes:
+    """The shared candidate enumeration (issue #32): `open_overview_order`
+    and `moczarr.stats.read_overview_order_stats` must name the same nodes."""
+
+    def test_coarsens_the_source_domain(self, root, manifest):
+        from moczarr.coverage import ranges_words
+        from moczarr.store import load_root_coverage
+
+        words = ranges_words(load_root_coverage(f"{root}/atl06"))
+        assert overview_nodes(manifest, words, 4) == ["43312", "43314", "43321", "43323"]
+        assert overview_nodes(manifest, words, 2) == ["433"]
+        # k == shard_order would be the shards themselves, not an ancestor.
+        assert overview_nodes(manifest, words, 0) == ["4"]
+
+    def test_agrees_with_the_opened_order(self, root, manifest):
+        from moczarr.coverage import ranges_words
+        from moczarr.store import load_root_coverage
+
+        words = ranges_words(load_root_coverage(f"{root}/atl06"))
+        for order in manifest["pyramid"]["overview"]["orders"]:
+            ds = open_overview_order(f"{root}/atl06", manifest, order)
+            assert [e["node"] for e in node_objects(ds)] == overview_nodes(manifest, words, order)
+
+    def test_word_order_across_hemispheres(self, tmp_path):
+        # The invariant the function exists to hold in one place: a decimal
+        # sort would put the southern node FIRST ("-" precedes every digit).
+        from moczarr.coverage import ranges_words
+        from moczarr.store import load_root_coverage
+
+        product = _two_base(tmp_path) / "atl06"
+        manifest = json.loads((product / "morton_hive.json").read_text())
+        words = ranges_words(load_root_coverage(str(product)))
+        nodes = overview_nodes(manifest, words, 4)
+        assert nodes == ["43312", "43314", "43321", "43323", SOUTH_NODE]
+        assert nodes != sorted(nodes)
+
+    def test_non_ancestor_order_raises(self, manifest):
+        for order in (-1, manifest["shard_order"]):
+            with pytest.raises(ValueError, match="not an ancestor order"):
+                overview_nodes(manifest, [morton_word("4331244")], order)
 
 
 class TestMultiBaseOrdering:

@@ -51,6 +51,7 @@ from moczarr.pyramid import (
     open_overview_order,
     overview_cell_orders,
     overview_declaration,
+    overview_nodes,
     overview_orders,
     source_orders,
 )
@@ -66,11 +67,16 @@ from moczarr.ranges import MortonRanges
 from moczarr.stats import (
     combined_hash,
     hash_arrays,
+    overview_sidecar_key,
+    overview_sidecar_path,
+    read_overview_order_stats,
+    read_overview_stats,
     read_stats,
     read_stats_rollup,
     stats_sidecar_key,
     stats_sidecar_path,
     verify_arrays,
+    verify_overview_arrays,
 )
 
 # moczarr.moc_index (MortonMocIndex) is imported by module path, not here:
@@ -142,7 +148,10 @@ __all__ = [
     "open_store",
     "overview_cell_orders",
     "overview_declaration",
+    "overview_nodes",
     "overview_orders",
+    "overview_sidecar_key",
+    "overview_sidecar_path",
     "parent_cells",
     "parse_composition_attrs",
     "parse_leaf_coverage",
@@ -156,6 +165,8 @@ __all__ = [
     "read_coverage_bitmap",
     "read_leaf_coverage",
     "read_manifest",
+    "read_overview_order_stats",
+    "read_overview_stats",
     "read_ragged",
     "read_stats",
     "read_stats_rollup",
@@ -168,6 +179,7 @@ __all__ = [
     "unpack_composition",
     "validate_product_name",
     "verify_arrays",
+    "verify_overview_arrays",
     "walk_leaves",
     "warn_if_stale",
 ]
