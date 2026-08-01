@@ -33,11 +33,19 @@ parent order 6 / child order 8, 16 cells per leaf):
 
 The golden sidecar records, at generation time, the expected node roster per
 product (source + overview cell orders), each order's variables, the
-per-object ``role``/``zagg_overview`` attrs, and per-field fold checks
-(count totals, h_min minima) read back from the written bytes — so the
-moczarr reader tests pin against what zagg actually wrote, without zagg
-installed. Generation asserts source↔overview count-total parity so a broken
-fold can never be enshrined as a golden.
+per-object ``role``/``zagg_overview`` attrs, per-field fold checks (count
+totals, h_min minima), and each overview object's **D20 stats sidecar** (its
+object key and the recorded O11 ``combined`` hash) read back from the written
+bytes — so the moczarr reader tests pin against what zagg actually wrote,
+without zagg installed. Generation asserts source↔overview count-total parity
+so a broken fold can never be enshrined as a golden.
+
+Note the sidecar keys: zagg pins an overview sidecar to the leaf-stem grammar
+(``{stem}.stats.json``) at EVERY store spec revision (spec §5.3), so the
+``atl06`` product — a ``morton-hive/1`` store — nonetheless carries
+``all.stats.json``, not ``stats.json``. That is the case a spec-keyed reader
+misses, and it is why this fixture (rather than a constructed store) pins
+``moczarr.stats.overview_sidecar_key`` (espg/moczarr#32).
 
 **Reproducibility.** At a fixed zagg sha this generator is byte-reproducible
 except for wall clock: the only fields that differ between two runs are
@@ -229,6 +237,7 @@ def _golden_overviews(root: Path, manifest: dict, shard_windows: dict) -> dict:
         for key in keys:
             basename = f"{key}.zarr" if key is not None else "all.zarr"
             objects = []
+            stats: dict[str, dict] = {}
             variables: set = set()
             totals: dict[str, float] = {}
             minima: list[float] = []
@@ -258,6 +267,19 @@ def _golden_overviews(root: Path, manifest: dict, shard_windows: dict) -> dict:
                         "zagg_overview": attrs["zagg_overview"],
                     }
                 )
+                # The D20 sidecar zagg's sweep PUTs beside the overview zarr
+                # (englacial/zagg PR #356). Kept OUT of the object entries,
+                # which mirror the reader's `zagg_objects` shape key for key.
+                # Recorded as key + the O11 `combined` digest only: the
+                # per-array hashes are what the moczarr tests RECOMPUTE from
+                # these same bytes, so copying them here would be an echo.
+                sidecar = path.with_name(f"{path.stem}.stats.json")
+                if sidecar.exists():
+                    record = json.loads(sidecar.read_text())
+                    stats[node] = {
+                        "key": sidecar.name,
+                        "combined": record["content_hashes"]["combined"],
+                    }
             if not objects:
                 continue
             entry = {
@@ -267,6 +289,7 @@ def _golden_overviews(root: Path, manifest: dict, shard_windows: dict) -> dict:
                 "count_total": totals["count"],
                 "h_min_min": min(minima) if minima else None,
                 "objects": objects,
+                "stats": stats,
             }
             nodes.setdefault(str(target), {})[key if windowed else "all"] = entry
     return nodes
