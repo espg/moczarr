@@ -30,6 +30,7 @@ from moczarr.stats import (
     hash_arrays,
     overview_sidecar_key,
     overview_sidecar_path,
+    read_overview_order_stats,
     read_overview_stats,
     read_stats,
     read_stats_rollup,
@@ -644,3 +645,87 @@ class TestVerifyOverviewArrays:
         result = verify_overview_arrays(ov_flat, "43312")
         assert result["computed"] == hash_arrays(ov_flat, "4/3/3/1/2/all.zarr")
         assert result["combined"] == combined_hash(result["computed"])
+
+
+class TestReadOverviewOrderStats:
+    """The order-wide convenience, keyed like ``open_overview_order``."""
+
+    @pytest.fixture()
+    def ov_manifest(self):
+        return json.loads((OVERVIEW / "atl06" / "morton_hive.json").read_text())
+
+    @pytest.fixture()
+    def ov_windows_manifest(self):
+        return json.loads((OVERVIEW / "atl06_windows" / "morton_hive.json").read_text())
+
+    def test_sweeps_every_materialized_node(self, ov_flat, ov_manifest):
+        records = read_overview_order_stats(ov_flat, ov_manifest, 4)
+        golden = _golden_stats("atl06", "6", "all")
+        assert list(records) == ["43312", "43314", "43321", "43323"]
+        for node, record in records.items():
+            assert record["content_hashes"]["combined"] == golden[node]["combined"]
+            assert record == read_overview_stats(ov_flat, node)
+
+    def test_coarser_order_is_one_node(self, ov_flat, ov_manifest):
+        records = read_overview_order_stats(ov_flat, ov_manifest, 2)
+        assert list(records) == ["433"]
+
+    def test_per_window_sweeps_differ(self, ov_windows, ov_windows_manifest):
+        by_window = {
+            window: read_overview_order_stats(ov_windows, ov_windows_manifest, 4, window=window)
+            for window in (None, "2019", "2020")
+        }
+        for records in by_window.values():
+            assert list(records) == ["43312", "43314", "43321", "43323"]
+        combined = {
+            window: {n: r["content_hashes"]["combined"] for n, r in records.items()}
+            for window, records in by_window.items()
+        }
+        assert len({tuple(sorted(c.items())) for c in combined.values()}) == 3
+
+    def test_keys_agree_with_open_overview_order(self, ov_flat, ov_manifest):
+        # The two surfaces take the same key, so they must name the same
+        # objects — the reason the candidate enumeration is shared.
+        from moczarr.pyramid import node_objects, open_overview_order
+
+        for order in ov_manifest["pyramid"]["overview"]["orders"]:
+            ds = open_overview_order(ov_flat, ov_manifest, order)
+            records = read_overview_order_stats(ov_flat, ov_manifest, order)
+            assert list(records) == [entry["node"] for entry in node_objects(ds)]
+
+    def test_missing_record_drops_the_node_not_the_object(self, ov_flat, ov_manifest, tmp_path):
+        # A node whose sidecar is gone is ABSENT from the mapping — and the
+        # overview object it belongs to is still there (telemetry is never
+        # load-bearing, D9), which is why the two answers must be compared
+        # rather than conflated.
+        from moczarr.pyramid import node_objects, open_overview_order
+
+        root = tmp_path / "store"
+        shutil.copytree(ov_flat, root)
+        (root / "4" / "3" / "3" / "1" / "2" / "all.stats.json").unlink()
+        records = read_overview_order_stats(str(root), ov_manifest, 4)
+        assert list(records) == ["43314", "43321", "43323"]
+        ds = open_overview_order(str(root), ov_manifest, 4)
+        assert [e["node"] for e in node_objects(ds)] == [
+            "43312",
+            "43314",
+            "43321",
+            "43323",
+        ]
+
+    def test_unswept_order_is_empty(self, ov_flat, ov_manifest):
+        # Order 5 is a legal ancestor order the sweep never ran: the nodes
+        # are nameable, none carries a record.
+        assert read_overview_order_stats(ov_flat, ov_manifest, 5) == {}
+
+    def test_no_root_moc_warns_and_empties(self, ov_flat, ov_manifest, tmp_path):
+        # Silence here would be indistinguishable from "no telemetry at all".
+        root = tmp_path / "store"
+        shutil.copytree(ov_flat, root)
+        (root / "coverage.moc").unlink()
+        with pytest.warns(UserWarning, match="no usable root coverage.moc"):
+            assert read_overview_order_stats(str(root), ov_manifest, 4) == {}
+
+    def test_non_ancestor_order_raises(self, ov_flat, ov_manifest):
+        with pytest.raises(ValueError, match="not an ancestor order"):
+            read_overview_order_stats(ov_flat, ov_manifest, ov_manifest["shard_order"])

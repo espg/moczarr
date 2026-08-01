@@ -145,6 +145,43 @@ def overview_cell_orders(manifest: dict) -> dict[int, int]:
     return {k: cell_order - (shard_order - k) for k in orders}
 
 
+def _ancestor_order(manifest: dict, order: int) -> int:
+    """``order`` validated as an ancestor order of the manifest's shard order."""
+    shard_order = int(manifest["shard_order"])
+    k = int(order)
+    if not (0 <= k < shard_order):
+        raise ValueError(f"order {k} is not an ancestor order of shard_order {shard_order}")
+    return k
+
+
+def overview_nodes(manifest: dict, shard_words, order: int) -> list[str]:
+    """Ancestor-node decimals an overview order names, in packed-word order.
+
+    The zagg#201 ruling-(5) enumeration, as pure arithmetic: the root MOC
+    stays the *source* domain, and the objects at declared order ``k`` are
+    named by coarsening that domain's shards to their order-``k`` prefix. No
+    I/O and no listing — ``shard_words`` is whatever the caller read the root
+    ``coverage.moc`` into (:func:`moczarr.coverage.ranges_words`).
+
+    Ordered by PACKED WORD, never by decimal string: a leading ``"-"``
+    (southern base cell) sorts before every digit as a string but AFTER every
+    northern base cell as a word, so on a store spanning both hemispheres a
+    decimal sort lays rows down in an order the §4.4 moc coordinate disagrees
+    with. :func:`open_overview_order` and
+    :func:`moczarr.stats.read_overview_order_stats` share this function so
+    the dataset and telemetry surfaces cannot disagree about which objects an
+    order has.
+    """
+    k = _ancestor_order(manifest, order)
+    return sorted(
+        {
+            dec[: len(decimal_base(dec)) + k]
+            for dec in (morton_decimal(int(w)) for w in shard_words)
+        },
+        key=morton_word,
+    )
+
+
 def _node_rel(decimal: str) -> str:
     """An ancestor node decimal's relative path — one component per digit.
 
@@ -299,9 +336,7 @@ def open_overview_order(
         raise ValueError(f"index_kind={index_kind!r}: expected 'pandas' or 'moc'")
     cell_order = int(manifest["cell_order"])
     shard_order = int(manifest["shard_order"])
-    k = int(order)
-    if not (0 <= k < shard_order):
-        raise ValueError(f"order {k} is not an ancestor order of shard_order {shard_order}")
+    k = _ancestor_order(manifest, order)
     target_order = cell_order - (shard_order - k)
     grouping = manifest_path_grouping(manifest)
     windowed = manifest["spec"] == HIVE_SPEC_V2
@@ -360,21 +395,11 @@ def open_overview_order(
     # tree shape must not depend on the AOI, and the schema for the empty
     # return needs a stamped object to read. Ancestor nodes are 4**(s-k)-fold
     # fewer than shards, so the unscoped stamp GETs stay cheap.
-    shard_words = ranges_words(envelope)
-    # Ordered by PACKED WORD, never by decimal string: a leading "-" (southern
-    # base cell) sorts before every digit as a string but AFTER every northern
-    # base cell as a word, so on a store spanning both hemispheres a decimal
-    # sort lays rows down in an order the moc coordinate — accumulated in
-    # `domain`, word-ascending — disagrees with, and §4.4 makes the coordinate
-    # the truth for row identity. This is the invariant `_candidate_leaves`
-    # keeps by sorting words before naming leaves (open.py).
-    ancestors = sorted(
-        {
-            dec[: len(decimal_base(dec)) + k]
-            for dec in (morton_decimal(int(w)) for w in shard_words)
-        },
-        key=morton_word,
-    )
+    # Word-ordered, for the reason `overview_nodes` documents: the §4.4 moc
+    # coordinate accumulated in `domain` below is word-ascending, and it is
+    # the truth for row identity. Same invariant `_candidate_leaves` keeps by
+    # sorting words before naming leaves (open.py).
+    ancestors = overview_nodes(manifest, ranges_words(envelope), k)
     rels = [f"{_node_rel(dec)}/{basename}" for dec in ancestors]
     metas = read_leaf_metas(store_root, rels, store=obstore_store, concurrency=concurrency)
     zarr_store = ObjectStore(obstore_store, read_only=True)
@@ -614,6 +639,7 @@ __all__ = [
     "open_overview_order",
     "overview_cell_orders",
     "overview_declaration",
+    "overview_nodes",
     "overview_orders",
     "source_orders",
 ]

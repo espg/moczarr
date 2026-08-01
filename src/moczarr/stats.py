@@ -40,6 +40,7 @@ from __future__ import annotations
 
 import hashlib
 import logging
+import warnings
 from typing import Any
 
 import numpy as np
@@ -58,7 +59,9 @@ from moczarr.convention import (
     split_leaf_name,
     validate_label,
 )
-from moczarr.store import _resolve_store, read_json, read_manifest
+from moczarr.coverage import ranges_words
+from moczarr.pyramid import overview_nodes
+from moczarr.store import _resolve_store, load_root_coverage, read_json, read_manifest
 
 logger = logging.getLogger(__name__)
 
@@ -281,6 +284,59 @@ def read_overview_stats(
     handle = _resolve_store(store_root, store, store_kwargs)
     rel = _overview_leaf(store_root, node, window, handle)
     return _read_tolerant(handle, overview_sidecar_path(rel), "overview stats sidecar")
+
+
+def read_overview_order_stats(
+    store_root: str,
+    manifest: dict,
+    order: int,
+    *,
+    window: str | None = None,
+    store: Any = None,
+    **store_kwargs: Any,
+) -> dict[str, dict]:
+    """Every materialized node's D20 record at one declared overview order.
+
+    :func:`read_overview_stats` swept over an order, keyed exactly like
+    :func:`moczarr.pyramid.open_overview_order` — ``(store_root, manifest,
+    order, *, window=…)`` — so the dataset and telemetry surfaces read side
+    by side. ``order`` is the declared **ancestor** order ``k``, not the
+    §4.4 cell order the node is named by.
+
+    Returns ``{node decimal: record}`` in packed-word order, over the nodes
+    :func:`moczarr.pyramid.overview_nodes` names (the root MOC's source
+    shards coarsened to the order-``k`` prefix — shared with
+    ``open_overview_order``, so the two cannot disagree about which objects
+    the order has). A node with no readable sidecar is simply **absent from
+    the mapping**: a sidecar exists on success only and its PUT is fail-open
+    writer-side, so absence means "no telemetry", never "no data" — and
+    absence here does not even mean "no overview", since the object can be
+    perfectly present with its sidecar deleted (D9). Compare the returned
+    keys against ``open_overview_order``'s ``zagg_objects`` entries to tell
+    the two apart.
+
+    Enumeration needs the root ``coverage.moc``: an unusable one warns and
+    returns ``{}`` (as ``open_overview_order`` omits the order), because the
+    alternative — an empty mapping indistinguishable from "no telemetry
+    anywhere" — is the silence this reader's D9 posture is meant to avoid.
+    """
+    handle = _resolve_store(store_root, store, store_kwargs)
+    envelope = load_root_coverage(store_root, store=handle)
+    if envelope is None:
+        warnings.warn(
+            f"no usable root coverage.moc at {store_root}: overview nodes are named by "
+            f"coarsening the source domain, so order {order} cannot be enumerated and no "
+            f"stats records are returned (regenerate the root coverage)",
+            UserWarning,
+            stacklevel=2,
+        )
+        return {}
+    records = {}
+    for node in overview_nodes(manifest, ranges_words(envelope), order):
+        record = read_overview_stats(store_root, node, window=window, store=handle)
+        if record is not None:
+            records[node] = record
+    return records
 
 
 def read_stats_rollup(
@@ -623,6 +679,7 @@ __all__ = [
     "hash_arrays",
     "overview_sidecar_key",
     "overview_sidecar_path",
+    "read_overview_order_stats",
     "read_overview_stats",
     "read_stats",
     "read_stats_rollup",
