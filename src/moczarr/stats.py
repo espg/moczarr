@@ -297,11 +297,25 @@ def read_overview_order_stats(
 ) -> dict[str, dict]:
     """Every materialized node's D20 record at one declared overview order.
 
-    :func:`read_overview_stats` swept over an order, keyed exactly like
-    :func:`moczarr.pyramid.open_overview_order` — ``(store_root, manifest,
-    order, *, window=…)`` — so the dataset and telemetry surfaces read side
-    by side. ``order`` is the declared **ancestor** order ``k``, not the
-    §4.4 cell order the node is named by.
+    :func:`read_overview_stats` swept over an order, taking
+    :func:`moczarr.pyramid.open_overview_order`'s signature —
+    ``(store_root, manifest, order, *, window=…)`` — so the dataset and
+    telemetry surfaces read side by side. ``order`` is the declared
+    **ancestor** order ``k``, not the §4.4 cell order the node is named by.
+
+    **The one place the two surfaces deliberately differ is ``window=None``
+    on a windowed (``morton-hive/2``) store.** ``open_overview_order``
+    refuses it (``pass window=...``): a dataset node has to say which window
+    its cells are, and the all-time folds have no counterpart on the source
+    axis (espg/moczarr#30, #31). This accepts it, addressing the ``all.zarr``
+    fold — the same meaning ``window=None`` has in :func:`read_overview_stats`,
+    which is the primitive this sweeps and which has no order-level tree to
+    mislead about. The consequence is real and is the price of that
+    symmetry: on a product declaring ``all_time: false``, or one whose folds
+    were deleted (legal — §4.1 regenerable caches), the omitted-``window=``
+    sweep returns ``{}`` where the dataset surface would have raised. Pass
+    ``window=`` explicitly whenever per-window records are what you meant;
+    the mapping does not record which object family it read.
 
     Returns ``{node decimal: record}`` in packed-word order, over the nodes
     :func:`moczarr.pyramid.overview_nodes` names (the root MOC's source
