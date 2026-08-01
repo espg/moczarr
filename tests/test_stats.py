@@ -638,6 +638,18 @@ class TestVerifyOverviewArrays:
         # Absence of the whole sidecar reads the same way — never a pass.
         sidecar.unlink()
         assert verify_overview_arrays(str(root), "43312")["match"] is None
+        assert result["computed"], "an overview that EXISTS but records nothing"
+
+    def test_absent_object_is_none_with_nothing_computed(self, ov_flat):
+        # The other `match is None`: node 43313 was never swept, so the
+        # composed path names no object and `hash_arrays` lists nothing.
+        # Same verdict field, different fact — `computed` is what tells a
+        # caller "there is no overview here" from "it exists, unverifiable".
+        absent = verify_overview_arrays(ov_flat, "43313")
+        assert absent["match"] is None and absent["computed"] == {}
+        assert absent["combined"] == combined_hash({})
+        present = verify_overview_arrays(ov_flat, "43312")
+        assert present["computed"] and present["match"] is True
 
     def test_shares_the_source_leaf_recipe(self, ov_flat):
         # Same code path as `verify_arrays` below the addressing: the verdict
