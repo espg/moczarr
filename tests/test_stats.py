@@ -683,6 +683,36 @@ class TestReadOverviewOrderStats:
         }
         assert len({tuple(sorted(c.items())) for c in combined.values()}) == 3
 
+    def test_omitted_window_is_the_fold_where_the_dataset_surface_raises(
+        self, ov_windows, ov_windows_manifest, tmp_path
+    ):
+        # The ONE place this key means something different from
+        # open_overview_order's, deliberately (espg/moczarr#30, PR #34 Q1):
+        # the dataset surface refuses window=None on a windowed store, this
+        # one addresses the all.zarr fold — read_overview_stats' meaning,
+        # since a telemetry record has no tree node to misreport coverage
+        # with. Pinned so the divergence stays a decision, not an accident.
+        from moczarr.pyramid import open_overview_order
+
+        assert read_overview_order_stats(
+            ov_windows, ov_windows_manifest, 4
+        ) == read_overview_order_stats(ov_windows, ov_windows_manifest, 4, window="all")
+        with pytest.raises(ValueError, match="pass window="):
+            open_overview_order(ov_windows, ov_windows_manifest, 4)
+        # And its price, also pinned: where the folds do not exist (a
+        # product declaring all_time: false, or one whose folds were deleted
+        # — legal, §4.1 regenerable caches) the omitted window is an empty
+        # mapping rather than the raise, so `{}` there is about the objects
+        # addressed, not about the store's telemetry.
+        root = tmp_path / "store"
+        shutil.copytree(ov_windows, root)
+        for path in root.rglob("all.zarr"):
+            shutil.rmtree(path)
+        for path in root.rglob("all.stats.json"):
+            path.unlink()
+        assert read_overview_order_stats(str(root), ov_windows_manifest, 4) == {}
+        assert read_overview_order_stats(str(root), ov_windows_manifest, 4, window="2019")
+
     def test_keys_agree_with_open_overview_order(self, ov_flat, ov_manifest):
         # The two surfaces take the same key, so they must name the same
         # objects — the reason the candidate enumeration is shared.
