@@ -18,6 +18,7 @@ never a node; zero chunk GETs at open (the counting-store pattern).
 
 import json
 import shutil
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -606,14 +607,41 @@ class TestDegradation:
         # has no `{shard}_all` leaf — emptied. Refused loudly instead (§4.2:
         # `all` is excluded from the window grammar forever), which keeps the
         # all-time surface an open question rather than a misleading tree.
+        #
+        # UNIFORMLY across all three entry points (espg/moczarr#30): before
+        # the shared seam, only this one raised — open_hive returned the
+        # issue-#4 empty Dataset and open_store emptied quietly, so the same
+        # reserved token read as "no data in that window" twice out of three.
+        windows = f"{root}/atl06_windows"
         windows_manifest = json.loads((FIXTURE / "atl06_windows" / "morton_hive.json").read_text())
         with pytest.raises(ValueError, match="reserved all-time token"):
-            open_overview_order(f"{root}/atl06_windows", windows_manifest, 4, window="all")
-        # (open_hive runs first and still warns its pre-8b "no coverage" line
-        # for the missing `{shard}_all` leaves; the raise is what wins.)
-        with pytest.warns(UserWarning, match="intersects no coverage"):
+            open_overview_order(windows, windows_manifest, 4, window="all")
+        with pytest.raises(ValueError, match="reserved all-time token"):
+            open_hive(windows, window="all")
+        with pytest.raises(ValueError, match="reserved all-time token"):
+            open_store(root, products=["atl06_windows"], window="all")
+        # The raise now precedes the "no coverage" warning open_hive used to
+        # emit for the missing `{shard}_all` leaves — no warning at all.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
             with pytest.raises(ValueError, match="reserved all-time token"):
                 open_store(root, products=["atl06_windows"], window="all")
+
+    def test_all_time_token_beats_the_typo_check(self, root):
+        # open_store's own "no windowed product is selected" check would
+        # otherwise answer first on an unwindowed selection, giving the same
+        # token two different errors depending on `products=` (#30).
+        with pytest.raises(ValueError, match="reserved all-time token"):
+            open_store(root, products=["atl06"], window="all")
+
+    def test_empty_coverage_still_empties(self, root):
+        # The boundary #30 must not cross: only the reserved TOKEN raises.
+        # A declared window over coverage an AOI misses is a data answer —
+        # still the issue-#4 schema-correct empty Dataset plus a warning.
+        with pytest.warns(UserWarning, match="intersects no coverage"):
+            ds = open_hive(f"{root}/atl06_windows", window="2019", aoi=["-5111"])
+        assert ds.sizes["cells"] == 0
+        assert "count" in ds.data_vars
 
     def test_windowed_overview_requires_window(self, root, manifest):
         windows_manifest = json.loads((FIXTURE / "atl06_windows" / "morton_hive.json").read_text())

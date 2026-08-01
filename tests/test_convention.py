@@ -104,6 +104,26 @@ class TestLeafNames:
             with pytest.raises(ValueError):
                 convention.validate_label(bad)
 
+    def test_reserved_all_token_is_a_name_not_a_window(self):
+        # `all` is a legal BASENAME (the unwindowed leaf's, and the sweep's
+        # all-time overview fold's), so the charset validator must keep
+        # accepting it — the overview sidecar stem grammar spells it. Only
+        # the window-argument seam refuses it (espg/moczarr#30).
+        assert convention.validate_label(convention.ALL_TOKEN) == "all"
+        assert convention.validate_window("2019") == "2019"
+        with pytest.raises(ValueError, match="reserved all-time token"):
+            convention.validate_window(convention.ALL_TOKEN)
+        # The charset still runs first: a malformed label is a grammar error.
+        with pytest.raises(ValueError, match="frozen grammar"):
+            convention.validate_window("20_19")
+
+    def test_reserved_token_error_names_the_store(self):
+        with pytest.raises(ValueError, match="at s3://bucket/store") as excinfo:
+            convention.validate_window("all", where="s3://bucket/store")
+        # Pointed enough to act on: the spec clause, and the deferred surface.
+        assert "§4.2" in str(excinfo.value)
+        assert "espg/moczarr#31" in str(excinfo.value)
+
 
 class TestNodeInvariant:
     def test_golden_path_passes(self):
