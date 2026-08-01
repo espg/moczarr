@@ -9,6 +9,13 @@ records them — the O11 per-array content hashes. The unified second-pass
 sweep (englacial/zagg#300, D22) folds those sidecars up-tree into
 ``stats.rollup.json`` objects at digit nodes.
 
+Sweep-built **overviews** (the zagg spec §4 pyramid family) get the same D20
+record, so they have the same two readers — :func:`read_overview_stats` and
+:func:`verify_overview_arrays` — differing only in addressing: an overview
+lives at an ancestor NODE under a ``{window}.zarr`` basename, and its sidecar
+name is the §5.3 stem grammar at every spec revision
+(:func:`overview_sidecar_key`), never the store's own.
+
 Everything here is read-side and telemetry-class: sidecars and rollups are
 **never load-bearing** (D9 — deleting every one leaves leaf reads intact), so
 the readers are tolerant — absent or malformed objects read as ``None`` with
@@ -38,6 +45,7 @@ from typing import Any
 import numpy as np
 
 from moczarr.convention import (
+    ALL_TOKEN,
     HIVE_SPEC,
     HIVE_SPEC_V2,
     HIVE_SPEC_V3,
@@ -168,6 +176,111 @@ def _node_rel(decimal: str, path_grouping: int) -> str:
     """A node decimal's relative digit path, chunked per the manifest (D21)."""
     base = decimal_base(decimal)
     return "/".join([base, *group_digits(decimal[len(base) :], path_grouping)])
+
+
+def overview_sidecar_key(basename: str) -> str:
+    """Sidecar object name for an OVERVIEW leaf basename — stem grammar, always.
+
+    zagg spec §5.3, normative: a sweep-built overview's sidecar is named from
+    the overview's own basename — the stem plus ``.stats.json``
+    (``all.zarr`` -> ``all.stats.json``, ``2019.zarr`` ->
+    ``2019.stats.json``) — **unconditionally, at every store spec revision**,
+    unlike a source leaf's sidecar name (:func:`stats_sidecar_key`), which is
+    keyed to the ``spec``. One ancestor node holds every window's overview
+    (§4.2), so the legacy revision's bare name would resolve all of them to a
+    single ``stats.json`` at that node.
+
+    Implemented by asking :func:`stats_sidecar_key` for the ``/3`` grammar
+    rather than restating it: the point of this function is the *pin* — that
+    the store's own spec is not consulted here — and a second copy of the
+    stem rule could drift from the one the ``/3`` stores will use.
+    """
+    return stats_sidecar_key(basename, HIVE_SPEC_V3)
+
+
+def overview_sidecar_path(leaf: str) -> str:
+    """Store-relative path of an overview leaf's stats sidecar (its sibling)."""
+    return stats_sidecar_path(leaf, HIVE_SPEC_V3)
+
+
+def _overview_leaf(store_root: str, node, window: str | None, handle: Any) -> str:
+    """Store-relative path of one overview zarr at an ancestor node.
+
+    The node path is :func:`_node_rel` — the same arithmetic
+    :func:`read_stats_rollup` addresses digit nodes with — and the basename
+    is the D23 window naming overviews inherit: ``{window}.zarr``, or
+    ``all.zarr`` for the unwindowed store and the all-time fold.
+    """
+    manifest = read_manifest(store_root, store=handle)
+    if manifest is None:
+        raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
+    grouping = manifest_path_grouping(manifest)
+    if grouping != 1:
+        # Loud, not tolerant: this module's one strict surface is NAME
+        # arithmetic (see :func:`stats_sidecar_key`), and zagg's sweep writes
+        # ancestor nodes one component per digit regardless of grouping
+        # (``zagg.sweep._node_rel`` takes no grouping argument), so any key
+        # composed here would be neither the writer's nor a node of the leaf
+        # tree — and would read as an absent sidecar rather than as a bug.
+        # ``open_overview_order`` degrades by omission instead because a
+        # dataset open has other nodes to protect; a stats call has none.
+        raise ValueError(
+            f"{store_root} declares path_grouping {grouping}: the grouped-tree path of an "
+            f"overview ancestor node is not settled writer-side, so an overview sidecar "
+            f"cannot be named there (moczarr.pyramid.open_overview_order omits the order "
+            f"for the same reason)"
+        )
+    decimal = morton_decimal(node) if not isinstance(node, str) else node
+    # `all` is deliberately reachable here: it is the BASENAME of an object
+    # that exists, and one telemetry record cannot misreport coverage the way
+    # an all-time dataset node would — the split `convention.validate_window`
+    # documents (espg/moczarr#30).
+    label = ALL_TOKEN if window is None else validate_label(window)
+    return f"{_node_rel(decimal, grouping)}/{label}.zarr"
+
+
+def read_overview_stats(
+    store_root: str,
+    node,
+    *,
+    window: str | None = None,
+    store: Any = None,
+    **store_kwargs: Any,
+) -> dict | None:
+    """One OVERVIEW leaf's D20 stats record, or ``None`` when absent/unusable.
+
+    The overview counterpart of :func:`read_stats`, differing in the two
+    places zagg's overview writer differs (englacial/zagg PR #356):
+
+    - **Addressing is per node.** A sweep-built overview lives at an
+      *ancestor* node — order ``k < shard_order`` — so there is no shard id
+      at the store's shard order to name it with. ``node`` is any digit-tree
+      prefix, exactly as :func:`read_stats_rollup` takes one (packed word or
+      decimal string).
+    - **The sidecar name is spec-independent** — :func:`overview_sidecar_key`
+      (§5.3). On a ``/1`` or ``/2`` store the spec-keyed name would be
+      ``stats.json``, and the object would read as absent.
+
+    ``window`` selects the overview basename: a declared label, or ``None``
+    for the ``all.zarr`` object — which is both the unwindowed store's only
+    overview and, on a windowed store, the all-time fold
+    (``pyramid.overview.all_time``, §4.5). The reserved token is spellable
+    here, unlike at the dataset openers' ``window=`` (espg/moczarr#30): this
+    returns one object's telemetry record, not a coverage view.
+
+    Same D9 posture as :func:`read_stats` — absent, unparsable, or
+    non-mapping all read ``None`` with a debug log, and an overview that was
+    never swept (or was deleted, which is legal — overviews are regenerable
+    caches, §4.1) is simply absent. Name arithmetic stays the loud surface: a
+    ``path_grouping > 1`` store RAISES rather than composing a key the writer
+    never wrote.
+
+    For every node at an order in one call see
+    :func:`read_overview_order_stats`.
+    """
+    handle = _resolve_store(store_root, store, store_kwargs)
+    rel = _overview_leaf(store_root, node, window, handle)
+    return _read_tolerant(handle, overview_sidecar_path(rel), "overview stats sidecar")
 
 
 def read_stats_rollup(
@@ -434,6 +547,19 @@ def verify_arrays(
         morton_word(shard), window=window, path_grouping=manifest_path_grouping(manifest)
     )
     sidecar = _read_tolerant(handle, stats_sidecar_path(rel, manifest["spec"]), "stats sidecar")
+    return _verify(store_root, rel, sidecar, handle)
+
+
+def _verify(store_root: str, rel: str, sidecar: dict | None, handle: Any) -> dict:
+    """The recorded-vs-recomputed verdict for one already-addressed leaf.
+
+    Everything :func:`verify_arrays` documents, below the path arithmetic —
+    so a source leaf and a sweep-built overview leaf are verified by the same
+    code, not by two copies of the O11 recipe. They can be: zagg computes an
+    overview's ``content_hashes`` from the folded in-memory arrays with the
+    same §5.1 per-array recipe it uses for a source leaf (englacial/zagg
+    PR #356), so only the addressing above differs.
+    """
     recorded, recorded_combined = _recorded_hashes(sidecar)
     computed = hash_arrays(store_root, rel, store=handle)
     combined = combined_hash(computed)
@@ -458,6 +584,36 @@ def verify_arrays(
     }
 
 
+def verify_overview_arrays(
+    store_root: str,
+    node,
+    *,
+    window: str | None = None,
+    store: Any = None,
+    **store_kwargs: Any,
+) -> dict:
+    """Verify one OVERVIEW leaf against its sidecar's O11 hashes.
+
+    :func:`verify_arrays` with :func:`read_overview_stats`'s addressing —
+    ancestor ``node`` plus the overview basename, and the §5.3
+    spec-independent sidecar name. The return dict is
+    :func:`verify_arrays`'s, verbatim, including the posture that matters
+    most here: ``match is None`` means the overview records no
+    ``content_hashes`` (an older sweep, or a fail-open sidecar PUT), which is
+    **unverifiable, not tampered**.
+
+    Overviews are regenerable caches (§4.1), so a mismatch indicts the cache,
+    not the store: the fix is to re-run the sweep. What it localizes is
+    *which* folded array diverged — the same signal a source leaf's mismatch
+    gives, which is why this shares :func:`hash_arrays` rather than
+    approximating it.
+    """
+    handle = _resolve_store(store_root, store, store_kwargs)
+    rel = _overview_leaf(store_root, node, window, handle)
+    sidecar = _read_tolerant(handle, overview_sidecar_path(rel), "overview stats sidecar")
+    return _verify(store_root, rel, sidecar, handle)
+
+
 __all__ = [
     "STATS_ROLLUP_NAME",
     "STATS_SIDECAR_NAME",
@@ -465,9 +621,13 @@ __all__ = [
     "VLEN_LENGTH_PREFIX",
     "combined_hash",
     "hash_arrays",
+    "overview_sidecar_key",
+    "overview_sidecar_path",
+    "read_overview_stats",
     "read_stats",
     "read_stats_rollup",
     "stats_sidecar_key",
     "stats_sidecar_path",
     "verify_arrays",
+    "verify_overview_arrays",
 ]
