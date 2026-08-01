@@ -678,6 +678,24 @@ class TestReadOverviewOrderStats:
             assert record["content_hashes"]["combined"] == golden[node]["combined"]
             assert record == read_overview_stats(ov_flat, node)
 
+    def test_sweep_does_not_reread_the_manifest_per_node(self, ov_flat, ov_manifest, monkeypatch):
+        # The caller handed the manifest in, and `read_manifest` is a real GET
+        # with no cache: re-reading it per node would double the sweep's
+        # request count, and node counts grow 4x per declared order (the
+        # posture `open_overview_order` states as one sidecar read per open).
+        import moczarr.stats as stats_module
+
+        calls = []
+        real = stats_module.read_manifest
+        monkeypatch.setattr(
+            stats_module,
+            "read_manifest",
+            lambda *args, **kwargs: (calls.append(args), real(*args, **kwargs))[1],
+        )
+        records = read_overview_order_stats(ov_flat, ov_manifest, 4)
+        assert list(records) == ["43312", "43314", "43321", "43323"]
+        assert calls == []
+
     def test_coarser_order_is_one_node(self, ov_flat, ov_manifest):
         records = read_overview_order_stats(ov_flat, ov_manifest, 2)
         assert list(records) == ["433"]
