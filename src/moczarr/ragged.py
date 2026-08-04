@@ -26,6 +26,12 @@ layer and would need its own cell-identity binding. The element gates
 (:func:`parse_ragged_attrs`, :func:`decode_cell`) carry no such assumption.
 The HHDC tensor profile (:mod:`moczarr.hhdc`) composes on top.
 
+The sweeps accept ``subtree=`` (issue #29): the nested cells axis makes
+"everything below one morton node" a contiguous index span (zagg spec §1.5),
+so a restricted read fetches only the stored objects covering that span —
+never a whole-array sweep. Span grammar in
+:func:`moczarr.convention.subtree_cell_span`.
+
 Postures, inherited from the spec's conformance rules:
 
 - **Strict attrs gate.** ``spec`` is strict-checked: a missing block, a

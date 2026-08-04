@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- Span-restricted (subtree) reads for the ragged/HHDC layer
+  ([#29](https://github.com/espg/moczarr/issues/29); the counterpart of
+  englacial/zagg#351, normative property zagg spec §1.5 "Subtree spans"):
+  `moczarr.ragged.read_ragged` and `moczarr.hhdc.read_tensors` accept
+  `subtree=` — a packed morton AREA word or decimal string naming an
+  ancestor — and fetch only the stored objects overlapping the subtree's
+  contiguous cell span: on a sharded store the index suffix plus the
+  covering inner chunks, on the flat layout the covering chunk objects
+  (`read_cell`'s 2-GET pattern generalized; pinned by GET-count tests). A
+  well-formed word disjoint from the axis warns once per call and yields
+  nothing (the warning is the only discriminator vs "in-domain, nothing
+  stored"); malformed / too-deep words raise; finer-than-chunk words raise
+  pointing at `read_cell` (the ratified v1 refusal). With `block_order` the
+  composed floor is `max(subtree_order, axis_root_order) <= block_order <=
+  chunk_order` — blocks tile the visited span. The span grammar lives in
+  `convention.normalize_subtree` / `convention.subtree_cell_span` (names
+  parallel with zagg's `readers/_layout` pair; the nested-placement
+  identity is checked against a written anchor word, never assumed), and
+  the `moczarr[zagg]` leg pins live bit-identical parity with zagg's
+  subtree reader (first released in zagg 0.42).
+
 - New public `open_leaf(store_root, shard, ...)`: the leaf-direct twin of
   `open_hive` for the per-leaf readers (`moczarr.hhdc.read_tensors`,
   `moczarr.ragged.open_ragged`, ...). It owns the three layers a caller
