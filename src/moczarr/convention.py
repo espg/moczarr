@@ -232,8 +232,10 @@ def normalize_subtree(subtree) -> tuple[int, str, int]:
 
     Both currencies of the readers' ``subtree=`` keyword (issue #29, mirroring
     zagg's ``readers._layout`` pair): a packed morton AREA word (``int``) or a
-    decimal morton string (``str``). A parsed string always yields the area
-    word (the §4 tie-break), so no kind flag is needed. Raises ``ValueError``
+    decimal morton string (``str``). An UNMARKED string always yields the area
+    word (the §4 tie-break); a ``p``-marked order-29 id parses as the POINT
+    word and is refused below, so no separate kind flag is needed.
+    Raises ``ValueError``
     on a malformed member of either currency — an unparsable string, a
     negative int (not a packed word; parse a decimal id by passing it as a
     string), an invalid packed word, or an order-29 POINT word (kind rides
