@@ -586,7 +586,9 @@ class TestSubtreeReadRagged:
         obj = (grid / "g/field/c/0").read_bytes()
         idx = np.frombuffer(obj[-n0:-4], dtype="<u8").reshape(-1, 2)
         chunk3_start = int(idx[3][0])
-        assert chunk3_start > 0
+        # Bound it inside the object: the §1.5 absent sentinel (2**64 - 1)
+        # would leave the range assertion below vacuously true.
+        assert 0 < chunk3_start < len(obj)
         assert all(int(r.end) <= chunk3_start for _k, r, _n in chunk_gets)
 
     def test_subtree_resolution_shares_the_sweep_listing(self, tmp_path):
