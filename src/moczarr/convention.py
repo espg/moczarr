@@ -36,6 +36,7 @@ implementation against zagg's writer so the two cannot drift silently.
 from __future__ import annotations
 
 import re
+import warnings
 
 import numpy as np
 
@@ -224,6 +225,122 @@ def rank_tail(rank: int, depth: int) -> str:
         digits.append(str(rank % 4 + 1))
         rank //= 4
     return "".join(reversed(digits))
+
+
+def normalize_subtree(subtree) -> tuple[int, str, int]:
+    """Normalize a ``subtree=`` argument to ``(word, decimal, order)``.
+
+    Both currencies of the readers' ``subtree=`` keyword (issue #29, mirroring
+    zagg's ``readers._layout`` pair): a packed morton AREA word (``int``) or a
+    decimal morton string (``str``). A parsed string always yields the area
+    word (the §4 tie-break), so no kind flag is needed. Raises ``ValueError``
+    on a malformed member of either currency — an unparsable string, a
+    negative int (not a packed word; parse a decimal id by passing it as a
+    string), an invalid packed word, or an order-29 POINT word (kind rides
+    the §1 suffix; a subtree names an AREA ancestor, and points have no
+    descendants).
+    """
+    word = morton_word(subtree) if isinstance(subtree, str) else int(subtree)
+    if word < 0:
+        raise ValueError(
+            f"subtree {subtree!r} is a negative int, not a packed morton word; "
+            f"parse a decimal id by passing it as a string instead"
+        )
+    if is_point_word(word):
+        raise ValueError(
+            f"subtree {subtree!r} is an order-29 POINT word: a subtree names an "
+            f"AREA ancestor (spec §1/§4 — points have no descendants)"
+        )
+    decimal = morton_decimal(word)  # raises on an invalid packed word
+    return word, decimal, decimal_order(decimal)
+
+
+def subtree_cell_span(
+    subtree,
+    anchor: int,
+    anchor_index: int,
+    cell_order: int,
+    n_cells: int,
+    field: str,
+    *,
+    stacklevel: int = 2,
+) -> tuple[int, int]:
+    """Cell-index span ``[start, stop)`` of ``subtree`` on a nested cells axis.
+
+    The zagg spec §1.5 subtree-span identity, resolved by pure arithmetic
+    (issue #29; logic-parallel with zagg ``readers/_layout.subtree_cell_span``):
+    a cell's axis position is its HEALPix NESTED id, so the order-``k``
+    subtree below a word with nested id ``h`` occupies ``[h·4^d, (h+1)·4^d)``
+    (``d = cell_order - k``) in fullsphere coordinates. A single-root
+    power-of-four axis (a hive leaf's shard subtree) subtracts its root's own
+    span start, with the root derived from ``anchor`` — any WRITTEN cell word
+    (the morton anchor slice the caller already read); no store bytes are
+    touched here.
+
+    That identity is CHECKED, not assumed: ``anchor`` sits at ``anchor_index``
+    on the axis, so ``nested(anchor) - root_start`` must equal
+    ``anchor_index`` or the axis is not in canonical nested placement and
+    this arithmetic would hand back plausible-but-wrong cells silently — a
+    mismatch raises ``ValueError``.
+
+    The span is returned intersected with the axis: a word at or above the
+    axis root clips to the whole axis (every stored cell is its descendant),
+    and a well-formed word DISJOINT from the axis warns — naming the word and
+    the axis root — and returns the empty span ``(0, 0)``. An empty read is
+    therefore ambiguous between "in-domain, nothing stored" and "outside the
+    domain" unless the warning is observed; DELIVERY is the caller's
+    ``warnings`` filter's call (the default action dedups a repeat of the
+    same warning in the same process), so the guarantee is "at most once per
+    call". ``stacklevel`` is the caller's depth from here — the readers pass
+    the depth that attributes the warning to THEIR caller rather than to a
+    moczarr frame. Raises ``ValueError`` for a malformed word, or one deeper
+    than the cells-axis order (grammatically impossible — nothing stored
+    could be its descendant).
+    """
+    from mortie import clip2order, mort2healpix
+
+    word, decimal, order = normalize_subtree(subtree)
+    if order > cell_order:
+        raise ValueError(
+            f"subtree {decimal} is order {order} — deeper than {field!r}'s "
+            f"order-{cell_order} cells axis, so nothing stored can be its descendant "
+            f"(a subtree names an ancestor, at any order up to the cell order)"
+        )
+    d = cell_order - order
+    (h,), _o = mort2healpix(np.asarray([word], dtype=np.uint64))
+    lo = int(h) * 4**d
+    n = int(n_cells)
+    depth = (n.bit_length() - 1) // 2
+    # A fullsphere axis (12·4^c cells) starts at 0 — the nested id IS the axis
+    # position, and every well-formed word's span lies inside it. A single-root
+    # power-of-four axis starts at its root's own span start.
+    single_root = 4**depth == n
+    root_order, root, root_start = cell_order - depth, 0, 0
+    if single_root:
+        root = int(clip2order(root_order, np.asarray([anchor], dtype=np.uint64))[0])
+        (rh,), _ro = mort2healpix(np.asarray([root], dtype=np.uint64))
+        root_start = int(rh) * 4**depth
+    (ah,), _ao = mort2healpix(np.asarray([anchor], dtype=np.uint64))
+    if int(ah) - root_start != int(anchor_index):
+        raise ValueError(
+            f"{field!r}'s cells axis is not in canonical nested placement: cell "
+            f"{int(anchor_index)} carries morton {morton_decimal(int(anchor))}, whose "
+            f"nested id puts it at axis position {int(ah) - root_start}. A subtree "
+            f"span is derived arithmetically (cell position == nested id minus the "
+            f"axis root's start), so this axis would yield the wrong cells"
+        )
+    if not single_root:
+        return lo, lo + 4**d
+    lo -= root_start
+    start, stop = max(lo, 0), min(lo + 4**d, n)
+    if start >= stop:
+        warnings.warn(
+            f"subtree {decimal} is outside this axis' order-{root_order} root "
+            f"{morton_decimal(root)} — yielding nothing",
+            stacklevel=stacklevel,
+        )
+        return 0, 0
+    return start, stop
 
 
 def is_base_component(name: str) -> bool:
