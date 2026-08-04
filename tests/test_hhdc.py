@@ -700,17 +700,27 @@ class TestSubtreeLiveParity:
     warn/raise behavior at the contract's edges.
     """
 
-    CASES = ("chunk-1", "chunk-4", "root-word", "root-block")
+    #: The ``above-root`` pair sits ABOVE the leaf's root, so it is the only
+    #: case exercising the ``max(subtree_order, axis_root_order)`` clip (the
+    #: leaf-store floor) in the parity leg — see
+    #: :meth:`TestSubtreeReadTensors.test_ancestor_word_block_order_floor_is_the_axis_root`.
+    #: ``BLOCK_ORDER`` is 4, so ``above-root-block`` sits exactly ON that
+    #: clipped floor — the value a naive ``subtree_order`` floor would allow
+    #: below.
+    CASES = ("chunk-1", "chunk-4", "root-word", "root-block", "above-root", "above-root-block")
 
     @staticmethod
     def _kwargs(case):
         from moczarr.convention import morton_word
 
+        above = EXPECTED["shard"][:-1]  # 4331, order 3 — above the axis root
         kwargs = {
             "chunk-1": {"subtree": EXPECTED["shard"] + "1"},
             "chunk-4": {"subtree": EXPECTED["shard"] + "4"},
             "root-word": {"subtree": morton_word(EXPECTED["shard"])},
             "root-block": {"subtree": EXPECTED["shard"], "block_order": BLOCK_ORDER},
+            "above-root": {"subtree": above},
+            "above-root-block": {"subtree": above, "block_order": BLOCK_ORDER},
         }
         return kwargs[case]
 
@@ -751,3 +761,7 @@ class TestSubtreeLiveParity:
                 list(reader(_store(), SIGNAL, subtree=EXPECTED["shard"] + "11"))
             with pytest.raises(ValueError, match="deeper than"):
                 list(reader(_store(), SIGNAL, subtree=EXPECTED["shard"] + "111"))
+            # The composed floor is the AXIS ROOT's order, not the (coarser)
+            # subtree's: block_order=3 is out of range for the '4331' word.
+            with pytest.raises(ValueError, match="must be between 4 and the chunk order 5"):
+                list(reader(_store(), SIGNAL, subtree=EXPECTED["shard"][:-1], block_order=3))
