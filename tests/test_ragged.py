@@ -490,3 +490,198 @@ class TestSweepGetPosture:
         store.gets.clear()
         assert len(list(read_ragged(store, "g/field"))) == len(CELLS)
         assert len([g for g in store.gets if "morton/c/" in g[0]]) == 1
+
+
+class TestSubtreeReadRagged:
+    """Issue #29: ``subtree=`` on the generic sweep (zagg's #351 contract).
+
+    Golden contract: ``read_ragged(..., subtree=w)`` equals the whole-store
+    sweep filtered to the cells that are descendants of ``w`` — the filter
+    is INDEPENDENT of the reader's span arithmetic (each yielded cell's own
+    morton word coarsened with ``mortie.clip2order``), so the two paths
+    cannot share a bug.
+    """
+
+    @staticmethod
+    def _filtered(out, subtree_key):
+        """Whole-sweep entries whose CELL word descends from ``subtree_key``."""
+        from mortie import clip2order
+
+        from moczarr.convention import decimal_order, morton_decimal
+
+        word = morton_word(subtree_key)
+        order = decimal_order(morton_decimal(word))
+        return [
+            entry
+            for entry in out
+            if int(clip2order(order, np.asarray([entry[0]], dtype=np.uint64))[0]) == word
+        ]
+
+    @staticmethod
+    def _assert_same(got, expected):
+        assert [entry[0] for entry in got] == [entry[0] for entry in expected]
+        for g, e in zip(got, expected):
+            for a, b in zip(g[1:], e[1:]):
+                np.testing.assert_array_equal(a, b)
+
+    @pytest.mark.parametrize("sharded", [True, False], ids=["sharded", "flat"])
+    @pytest.mark.parametrize("key", [SHARD + "1", SHARD + "4"])
+    def test_equals_filtered_sweep_both_currencies(self, tmp_path, sharded, key):
+        grid, _ = build_store(tmp_path, sharded=sharded)
+        store = LocalStore(grid)
+        sweep = list(read_ragged(store, "g/field"))
+        expected = self._filtered(sweep, key)
+        assert len(expected) > 0
+        # Both ratified currencies: packed area word (int) and decimal string.
+        self._assert_same(list(read_ragged(store, "g/field", subtree=key)), expected)
+        self._assert_same(list(read_ragged(store, "g/field", subtree=morton_word(key))), expected)
+
+    def test_locations_ride_the_restricted_sweep(self, tmp_path):
+        grid, _ = build_store(tmp_path, sharded=True, located=True)
+        store = LocalStore(grid)
+        sweep = list(read_ragged(store, "g/field", locations=True))
+        got = list(read_ragged(store, "g/field", locations=True, subtree=SHARD + "1"))
+        self._assert_same(got, self._filtered(sweep, SHARD + "1"))
+        assert len(got) == 2  # cells 0 and 3; each entry (word, values, locations)
+        assert all(len(entry) == 3 for entry in got)
+
+    def test_flat_get_accounting_skips_disjoint_objects(self, tmp_path):
+        """The §1.5 read plan on the flat layout: only the covering chunk
+        objects are fetched — the stored-but-disjoint chunk 3 never is."""
+        grid, _ = build_store(tmp_path, sharded=False)
+        store = CountingStore(grid)
+        store.gets.clear()
+        out = list(read_ragged(store, "g/field", subtree=SHARD + "1"))
+        assert [entry[0] for entry in out] == [morton_word(SHARD + t) for t in ("11", "14")]
+        data_gets = [g for g in store.gets if "field/c/" in g[0]]
+        assert len(data_gets) == 1 and data_gets[0][0].endswith("c/0")
+
+    def test_sharded_get_accounting_fetches_only_the_covering_span(self, tmp_path):
+        """Sharded: the shard-index suffix plus ONLY the covering inner
+        chunks — ranged GETs that never reach the disjoint chunk 3's bytes."""
+        grid, _ = build_store(tmp_path, sharded=True)
+        store = CountingStore(grid)
+        store.gets.clear()
+        out = list(read_ragged(store, "g/field", subtree=SHARD + "1"))
+        assert len(out) == 2
+        data_gets = [g for g in store.gets if "field/c/" in g[0]]
+        assert all(rng is not None for _k, rng, _n in data_gets)
+        (obj_key, _r0, n0), *chunk_gets = data_gets
+        assert n0 == 16 * 4 + 4  # the K=4 shard-index suffix
+        assert len(chunk_gets) >= 1
+        # Decode the shard index: chunk 3's payload starts after chunk 0's,
+        # so every fetched range must end before it.
+        obj = (grid / "g/field/c/0").read_bytes()
+        idx = np.frombuffer(obj[-n0:-4], dtype="<u8").reshape(-1, 2)
+        chunk3_start = int(idx[3][0])
+        assert chunk3_start > 0
+        assert all(int(r.end) <= chunk3_start for _k, r, _n in chunk_gets)
+
+    def test_subtree_resolution_shares_the_sweep_listing(self, tmp_path):
+        """The span resolves against the same ``stored_chunk_spans`` listing
+        the sweep consumes — one LIST of the data keys, not two."""
+        grid, _ = build_store(tmp_path, sharded=True)
+
+        class ListCountingStore(CountingStore):
+            def __init__(self, *args, **kwargs):
+                super().__init__(*args, **kwargs)
+                self.lists: list = []
+
+            def with_read_only(self, read_only=True):
+                s = ListCountingStore(self.root, read_only=read_only)
+                s.gets, s.lists = self.gets, self.lists
+                return s
+
+            def list_prefix(self, prefix):
+                self.lists.append(prefix)
+                return super().list_prefix(prefix)
+
+        store = ListCountingStore(grid)
+        store.lists.clear()
+        assert len(list(read_ragged(store, "g/field", subtree=SHARD))) == len(CELLS)
+        assert store.lists.count("g/field/c/") == 1
+
+    def test_ancestor_of_the_axis_root_clips_to_the_whole_axis(self, tmp_path):
+        grid, _ = build_store(tmp_path, sharded=True)
+        store = LocalStore(grid)
+        got = list(read_ragged(store, "g/field", subtree=SHARD[:-1]))
+        self._assert_same(got, list(read_ragged(store, "g/field")))
+        assert len(got) == len(CELLS)
+
+    def test_out_of_domain_word_warns_once_then_yields_nothing(self, tmp_path):
+        import warnings
+
+        grid, _ = build_store(tmp_path, sharded=True)
+        disjoint = SHARD.lstrip("-")  # the northern mirror: well-formed, disjoint
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            out = list(read_ragged(LocalStore(grid), "g/field", subtree=disjoint))
+        assert out == []
+        msgs = [str(w.message) for w in rec if "outside this axis" in str(w.message)]
+        assert msgs == [
+            f"subtree {disjoint} is outside this axis' order-6 root {SHARD} — yielding nothing"
+        ]
+
+    def test_out_of_domain_warning_is_attributed_to_the_caller(self, tmp_path):
+        import warnings
+
+        grid, _ = build_store(tmp_path, sharded=True)
+        # The reader is a generator, so the warning fires on the consumer's
+        # first next() — the stacklevel must reach THIS frame, not a moczarr one.
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            list(read_ragged(LocalStore(grid), "g/field", subtree=SHARD.lstrip("-")))
+        (w,) = [r for r in rec if "outside this axis" in str(r.message)]
+        assert w.filename == __file__
+
+    def test_in_domain_empty_subtree_yields_nothing_silently(self, tmp_path):
+        import warnings
+
+        grid, _ = build_store(tmp_path, sharded=True)
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            assert list(read_ragged(LocalStore(grid), "g/field", subtree=SHARD + "2")) == []
+        assert [w for w in rec if "outside this axis" in str(w.message)] == []
+
+    def test_sub_chunk_subtree_refused_pointing_at_read_cell(self, tmp_path):
+        grid, _ = build_store(tmp_path, sharded=True)
+        with pytest.raises(ValueError, match="read_cell"):
+            list(read_ragged(LocalStore(grid), "g/field", subtree=SHARD + "11"))
+
+    @pytest.mark.parametrize("bad", ["", "abc", "913", 3, -5])
+    def test_malformed_subtree_raises(self, tmp_path, bad):
+        grid, _ = build_store(tmp_path, sharded=True)
+        with pytest.raises(ValueError):
+            list(read_ragged(LocalStore(grid), "g/field", subtree=bad))
+
+    def test_deeper_than_the_cells_axis_raises(self, tmp_path):
+        grid, _ = build_store(tmp_path, sharded=True)
+        with pytest.raises(ValueError, match="deeper than"):
+            list(read_ragged(LocalStore(grid), "g/field", subtree=SHARD + "111"))
+
+    def test_misplaced_morton_coordinate_raises(self, tmp_path):
+        """The identity the span arithmetic rests on — axis position ==
+        nested id minus the root's start — is checked, not assumed: a rolled
+        coordinate still shares its chunk ancestor, so only the anchor check
+        catches it before the arithmetic names plausible-but-wrong cells."""
+        words = np.roll(np.array([morton_word(SHARD + t) for t in TAILS], dtype="<u8"), 1)
+        grid, _ = build_store(tmp_path, sharded=True, morton_words=words)
+        with pytest.raises(ValueError, match="not in canonical nested placement"):
+            list(read_ragged(LocalStore(grid), "g/field", subtree=SHARD))
+
+    def test_empty_store_yields_nothing_but_malformed_still_raises(self, tmp_path):
+        grid = tmp_path / "empty"
+        attrs = {"ragged": {"spec": RAGGED_SPEC, "element": dict(ELEMENT)}}
+        _write(grid, "g/field/zarr.json", _vlen_meta(16, 4, sharded=True, attrs=attrs))
+        _write(grid, "g/morton/zarr.json", _uint64_meta(16))
+        assert list(read_ragged(LocalStore(grid), "g/field", subtree=SHARD)) == []
+        with pytest.raises(ValueError):
+            list(read_ragged(LocalStore(grid), "g/field", subtree="abc"))
+
+    def test_subtree_none_is_the_default_sweep(self, tmp_path):
+        grid, _ = build_store(tmp_path, sharded=True)
+        store = LocalStore(grid)
+        self._assert_same(
+            list(read_ragged(store, "g/field", subtree=None)),
+            list(read_ragged(store, "g/field")),
+        )
