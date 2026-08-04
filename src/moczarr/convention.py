@@ -236,17 +236,18 @@ def normalize_subtree(subtree) -> tuple[int, str, int]:
     word (the §4 tie-break); a ``p``-marked order-29 id parses as the POINT
     word and is refused below, so no separate kind flag is needed.
     Raises ``ValueError``
-    on a malformed member of either currency — an unparsable string, a
-    negative int (not a packed word; parse a decimal id by passing it as a
-    string), an invalid packed word, or an order-29 POINT word (kind rides
+    on a malformed member of either currency — an unparsable string, an int
+    outside the uint64 range (not a packed word; parse a decimal id by
+    passing it as a string), an invalid packed word, or an order-29 POINT
+    word (kind rides
     the §1 suffix; a subtree names an AREA ancestor, and points have no
     descendants).
     """
     word = morton_word(subtree) if isinstance(subtree, str) else int(subtree)
-    if word < 0:
+    if not 0 <= word < 2**64:
         raise ValueError(
-            f"subtree {subtree!r} is a negative int, not a packed morton word; "
-            f"parse a decimal id by passing it as a string instead"
+            f"subtree {subtree!r} is outside the uint64 range, not a packed morton "
+            f"word; parse a decimal id by passing it as a string instead"
         )
     if is_point_word(word):
         raise ValueError(
