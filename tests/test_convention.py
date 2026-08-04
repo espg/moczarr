@@ -375,7 +375,7 @@ class TestNormalizeSubtree:
         word, decimal, order = convention.normalize_subtree(SHARD)
         assert (word, decimal, order) == (SHARD_WORD, SHARD, 6)
 
-    @pytest.mark.parametrize("bad", ["", "abc", "913", 3, -5, 0])
+    @pytest.mark.parametrize("bad", ["", "abc", "913", 3, -5, 0, 2**64, 2**70])
     def test_malformed_raises(self, bad):
         with pytest.raises(ValueError):
             convention.normalize_subtree(bad)
