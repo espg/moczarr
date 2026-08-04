@@ -424,6 +424,17 @@ class TestSubtreeCellSpan:
             "subtree 43313 is outside this axis' order-4 root 43314 — yielding nothing"
         ]
 
+    def test_warning_is_attributed_to_the_caller(self):
+        """``stacklevel`` threading: the default depth blames the caller's frame."""
+        import warnings
+
+        args = dict(anchor=STRATA_CELL_0, anchor_index=0, cell_order=6, n_cells=16, field="f")
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            convention.subtree_cell_span("43313", **args)  # default depth: this frame
+            convention.subtree_cell_span("43313", **args, stacklevel=1)  # moczarr's own
+        assert [w.filename for w in rec] == [__file__, convention.__file__]
+
     def test_fullsphere_axis_positions_are_nested_ids(self):
         full = dict(anchor_index=STRATA_NESTED_0, n_cells=12 * 4**6)
         assert self._span(STRATA_ROOT, **full) == (STRATA_NESTED_0, STRATA_NESTED_0 + 16)
