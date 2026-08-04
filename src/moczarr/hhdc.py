@@ -536,7 +536,7 @@ def read_tensors(
 
     span, spans = _subtree_span(arr, morton, field, subtree)
     _refuse_sub_chunk(span, subtree, field, cells_per_chunk)
-    chunks = iter_populated_chunks(arr, span, spans)
+    chunks = iter_populated_chunks(arr, span=span, spans=spans)
     first = next(chunks, None)
     if first is None:
         return

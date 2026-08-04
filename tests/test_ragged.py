@@ -419,6 +419,16 @@ class TestNoneCells:
         assert sorted(chunks) == [0, 12]  # cells 0/3 in chunk 0, cell 13 in chunk 3
         assert [rank for rank, _raw in chunks[0]] == [0, 3]
 
+    def test_span_and_spans_are_keyword_only(self, tmp_path):
+        """``span`` and ``spans`` are adjacent, same-shaped and easy to swap,
+        and a swapped positional call reads as valid — so the public surface
+        (this name is in ``__all__``) takes them by keyword only."""
+        grid, _ = build_store(tmp_path, sharded=True)
+        arr, _element = open_ragged(LocalStore(grid), "g/field")
+        with pytest.raises(TypeError, match="positional"):
+            list(iter_populated_chunks(arr, (0, 4)))
+        assert [start for start, _cells in iter_populated_chunks(arr, span=(0, 4))] == [0]
+
 
 class TestReadCell:
     def test_roundtrip_and_empty_fill(self, tmp_path):
