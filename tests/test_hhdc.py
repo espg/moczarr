@@ -12,12 +12,19 @@ Parity is pinned two ways against the committed SERC strata fixture
 - **Live parity** (additionally needs zagg's post-#339 reader surface): the
   two readers run side by side on the same store and must agree exactly —
   end to end and helper by helper, since the reader logic is a port, not
-  just the imported algebra. The gate is a surface probe, not a version
-  compare: 0.39.0 (the extra's declared floor) has no such reader, so the
-  leg skipped there and the goldens were the only enforcement; **zagg
-  0.40.0 is the first release that carries it**, and this suite passes
-  against it. Bumping the extra's floor to ``>=0.40`` would make the leg
-  always-on; that is a dependency change for sign-off, so the probe stays.
+  just the imported algebra. **zagg 0.40.0 is the first release carrying
+  that surface, and the extra's declared floor is ``zagg>=0.40``** — so
+  this leg is effectively always-on wherever the extra installs. The gates
+  stay surface probes rather than version compares, because the surface,
+  not the version string, is what the port depends on.
+- **Subtree parity** (additionally needs zagg's ``subtree=`` read surface,
+  englacial/zagg#351 — first released in **zagg 0.42.0**): the same
+  side-by-side comparison for span-restricted reads, plus the warn/raise
+  edges. This one is genuinely conditional — ``needs_zagg_subtree`` skips
+  it on 0.40/0.41, where the goldens and the always-on live leg remain the
+  enforcement. Raising the extra's floor to ``>=0.42`` would make it
+  always-on too; that is a dependency change for sign-off, so the probe
+  stays.
 
 The layout kernel, the occupancy predicate and the whole mask channel, the
 ``open_hive`` no-choke check, and the missing-extra error hint all run
@@ -63,10 +70,11 @@ BLOCK_ORDER = int(EXPECTED["goldens"]["params"]["block_order"])
 LEAF_DEPTH = 2
 #: The zagg commit whose ``readers/tdigest_tensor.py`` the ported reader logic
 #: in :mod:`moczarr.hhdc` mirrors: the englacial/zagg#336 fold. It carries no
-#: tag, and 0.39.0 (the extra's declared floor) has neither
-#: ``has_exact_occupancy`` nor ``rank_to_rowcol`` — so the parity legs below
-#: skip against the floor. zagg **0.40.0** is the first release carrying the
-#: surface, which is what makes them reachable from PyPI at all.
+#: tag; zagg **0.40.0** is the first release carrying ``has_exact_occupancy``
+#: and ``rank_to_rowcol``, which is what made the live-parity leg reachable
+#: from PyPI at all — and the extra's declared floor is ``>=0.40``, so that
+#: leg runs wherever the extra installs. The ``subtree=`` leg needs 0.42.0
+#: (englacial/zagg#351) and stays probe-gated above the floor.
 ZAGG_PORT_COMMIT = "3890cb5"
 
 HAS_ZAGG = importlib.util.find_spec("zagg") is not None
@@ -419,7 +427,8 @@ class TestPortedSurface:
     them. Value parity below can only compare what still EXISTS — a rename or
     retirement upstream would silently reduce this file to self-certification,
     which is what these two checks catch. Gated like :class:`TestLiveParity`:
-    reachable from zagg 0.40.0 onward, skipped against the ``>=0.39`` floor.
+    the surface probe passes from zagg 0.40.0 onward, which the extra's
+    ``>=0.40`` floor already guarantees.
     """
 
     PORTED = (
