@@ -43,7 +43,7 @@ from moczarr.exceptions import NoCoverageError
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.hhdc import has_exact_occupancy, read_tensors
 from moczarr.join import join_coarse, parent_cells
-from moczarr.open import open_hive, open_store
+from moczarr.open import open_hive, open_leaf, open_store
 from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.pyramid import (
     finest_source_at,
@@ -143,6 +143,7 @@ __all__ = [
     "named_lanes",
     "node_objects",
     "open_hive",
+    "open_leaf",
     "open_object_store",
     "open_overview_order",
     "open_store",

@@ -563,6 +563,80 @@ def open_hive(
     return result
 
 
+def open_leaf(
+    store_root: str,
+    shard: str | int,
+    *,
+    window: str | None = None,
+    product: str | None = None,
+    manifest: dict | None = None,
+    anonymous: bool = False,
+    **store_kwargs: Any,
+):
+    """Open ONE shard's leaf zarr as a read-only zarr store.
+
+    The leaf-direct twin of :func:`open_hive`, for the per-leaf readers
+    (:func:`moczarr.hhdc.read_tensors`, :func:`moczarr.ragged.open_ragged`,
+    ...): it owns the three layers a caller otherwise hand-assembles — the
+    leaf path from the manifest's grammar (``convention.leaf_path`` under the
+    manifest's ``path_grouping``), the transport with the SAME credential /
+    ``anonymous`` handling as :func:`open_hive`, and the
+    ``zarr.storage.ObjectStore`` read-only wrapper the readers take. No
+    external path arithmetic, no bare-obstore incantation.
+
+    Parameters
+    ----------
+    store_root : str
+        The hive store root (``s3://...`` or a local directory).
+    shard : str or int
+        The leaf's shard — packed morton word or decimal string.
+    window : str, optional
+        Time-window label for a windowed leaf (``{id}_{window}.zarr``).
+    product : str, optional
+        Product name under a multi-product root (D19) — the open re-roots on
+        the product subtree, exactly as :func:`open_hive` does.
+    manifest : dict, optional
+        An already-read root manifest. Passing it skips this call's manifest
+        GET — the iterate-many-leaves case reads it once and threads it here.
+    anonymous : bool
+        Skip request signing (public buckets).
+    **store_kwargs
+        Forwarded to :func:`moczarr.store.open_object_store`
+        (``region=...``, explicit keys, ...).
+
+    Returns
+    -------
+    zarr.storage.ObjectStore
+        Read-only store rooted at the leaf; pass it with a field path like
+        ``"{cell_order}/{name}"`` to the per-leaf readers.
+
+    Raises
+    ------
+    ValueError
+        When ``store_root`` (or the product subtree) has no manifest — the
+        path grammar (``path_grouping``) is manifest-declared, so a leaf
+        path cannot be derived without one.
+    """
+    from zarr.storage import ObjectStore
+
+    from moczarr.convention import leaf_path, manifest_path_grouping
+
+    if anonymous:
+        store_kwargs.setdefault("anonymous", True)
+    if product is not None:
+        from moczarr.products import validate_product_name
+
+        validate_product_name(product)
+        store_root = f"{store_root.rstrip('/')}/{product}"
+    if manifest is None:
+        manifest = read_manifest(store_root, **store_kwargs)
+        if manifest is None:
+            raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
+    rel = leaf_path(shard, window, path_grouping=manifest_path_grouping(manifest))
+    leaf_root = f"{store_root.rstrip('/')}/{rel}"
+    return ObjectStore(open_object_store(leaf_root, **store_kwargs), read_only=True)
+
+
 def _degenerate_node_name(manifest: dict) -> str:
     """The one child's node name for a bare single-product store.
 

@@ -65,12 +65,40 @@ def open_object_store(path: str, *, anonymous: bool = False, **kwargs: Any):
     (the writer creates stores; the reader never does). ``anonymous=True``
     skips request signing for public buckets (the source.coop case);
     ``kwargs`` pass through to ``S3Store.from_url`` (``region=...`` etc.).
+
+    Ambient credentials (no explicit keys, no ``anonymous``): obstore's
+    native chain reads env vars then falls back to EC2 instance metadata —
+    it cannot see AWS profiles/SSO, so a laptop with ``AWS_PROFILE`` set
+    gets an IMDS ``HostUnreachable``, not a credential error. When boto3 is
+    importable and resolves credentials, prefer its resolver via
+    ``Boto3CredentialProvider``, and adopt the session's region when the
+    caller passed none (an unset region surfaces as an opaque us-east-1
+    redirect error). Environments without boto3, or where boto3 resolves
+    nothing, keep the bare store — env/IMDS behavior unchanged.
     """
     if path.startswith("s3://"):
         from obstore.store import S3Store
 
         if anonymous:
             kwargs.setdefault("skip_signature", True)
+        elif not kwargs.keys() & {
+            "access_key_id",
+            "secret_access_key",
+            "session_token",
+            "credential_provider",
+            "skip_signature",
+        }:
+            try:
+                import boto3
+                from obstore.auth.boto3 import Boto3CredentialProvider
+
+                session = boto3.Session()
+                if session.get_credentials() is not None:
+                    kwargs["credential_provider"] = Boto3CredentialProvider(session)
+                    if "region" not in kwargs and session.region_name:
+                        kwargs["region"] = session.region_name
+            except ImportError:
+                pass
         return S3Store.from_url(path, **kwargs)
     from obstore.store import LocalStore
 
