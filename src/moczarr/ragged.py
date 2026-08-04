@@ -554,10 +554,14 @@ def read_ragged(
         Restrict the sweep to the cells below this morton ancestor — a
         packed area word (``int``) or its decimal string (``str``), the
         spec §1.5 subtree-span identity (issue #29; zagg's issue #351
-        contract). Only stored objects overlapping the subtree's contiguous
-        cell span are fetched: on a sharded store the index suffix plus the
-        covering inner chunks, on the flat layout the covering chunk
-        objects — the :func:`read_cell` 2-GET pattern generalized. The
+        contract). Only the PAYLOAD objects overlapping the subtree's
+        contiguous cell span are fetched: on a sharded store the index
+        suffix plus the covering inner chunks, on the flat layout the
+        covering chunk objects — the :func:`read_cell` 2-GET pattern
+        generalized. On top of those, resolving the span reads the FIRST
+        stored object of the ``morton`` sibling (the anchor — no payload
+        bytes, but a head-of-axis coordinate object wherever on the axis the
+        subtree sits). The
         subtree must be at or coarser than the READ-CHUNK order — a finer
         word raises pointing at :func:`read_cell` (the ratified v1
         refusal). A well-formed word DISJOINT from this axis warns at most
