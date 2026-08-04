@@ -598,9 +598,11 @@ def read_ragged(
     cells_per_chunk = int(arr.chunks[0])
     for span_start, span_stop in stored_chunk_spans(arr) if spans is None else spans:
         if span is not None:
-            # Clip to the whole read chunks covering the subtree span (a
-            # legal span is chunk-aligned — the sub-chunk refusal above —
-            # so the clip only ever drops non-overlapping chunks).
+            # Clip to the whole read chunks OVERLAPPING the subtree span —
+            # an I/O optimization only. It is exact just when the read chunk
+            # divides the span's 4^d length (any power-of-two chunk); this
+            # generic layer requires no such chunk shape, so membership is
+            # enforced per cell below rather than assumed from alignment.
             span_start = max(span_start, span[0] - span[0] % cells_per_chunk)
             span_stop = min(span_stop, span[1] + -span[1] % cells_per_chunk)
             if span_start >= span_stop:
@@ -611,6 +613,15 @@ def read_ragged(
         for pos in range(span_stop - span_start):
             raw = data[pos]
             if _is_empty(raw):
+                continue
+            # Per-cell membership: the widened chunks carry non-descendants
+            # unless the chunk divides the span (zagg's per-cell readers keep
+            # this guard beside the identical clip — readers/tdigest_tensor.py
+            # read_raw_values). It belongs here only: iter_populated_chunks
+            # yields WHOLE chunks by contract, and its consumer read_tensors
+            # refuses sub-chunk spans on a square power-of-four chunk, where
+            # the clip is exact by construction.
+            if span is not None and not span[0] <= span_start + pos < span[1]:
                 continue
             word = int(words[pos])
             if word == 0:
