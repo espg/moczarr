@@ -562,12 +562,20 @@ class TestSubtreeReadRagged:
 
     def test_sharded_get_accounting_fetches_only_the_covering_span(self, tmp_path):
         """Sharded: the shard-index suffix plus ONLY the covering inner
-        chunks — ranged GETs that never reach the disjoint chunk 3's bytes."""
+        chunks — ranged GETs that never reach the disjoint chunk 3's bytes.
+
+        The ``morton`` sibling is pinned alongside, because the payload
+        objects are not the whole cost: resolving the span anchors on the
+        coordinate's first stored object. Here that is the ONE object the
+        fixture's coordinate has, served to the sweep from the same cached
+        window — so the restricted read costs exactly one coordinate GET,
+        the same as the unrestricted sweep."""
         grid, _ = build_store(tmp_path, sharded=True)
         store = CountingStore(grid)
         store.gets.clear()
         out = list(read_ragged(store, "g/field", subtree=SHARD + "1"))
         assert len(out) == 2
+        assert len([g for g in store.gets if "morton/c/" in g[0]]) == 1
         data_gets = [g for g in store.gets if "field/c/" in g[0]]
         assert all(rng is not None for _k, rng, _n in data_gets)
         (obj_key, _r0, n0), *chunk_gets = data_gets
