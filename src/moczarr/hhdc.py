@@ -70,9 +70,15 @@ import zarr
 from mortie import clip2order, rank_to_xy, xy_to_rank
 from zarr.abc.store import Store
 
-from moczarr.convention import COMMIT_ATTR, decimal_order, morton_decimal
+from moczarr.convention import COMMIT_ATTR
 from moczarr.coverage import decode_bitmap, parse_leaf_coverage
-from moczarr.ragged import _morton_words, decode_cell, iter_populated_chunks, open_ragged
+from moczarr.ragged import (
+    _cells_order,
+    _morton_words,
+    decode_cell,
+    iter_populated_chunks,
+    open_ragged,
+)
 
 __all__ = [
     "chunk_z_range",
@@ -286,17 +292,6 @@ def _coverage_occupancy(store: Store) -> tuple[str, dict, bytes] | None:
     if payload is None:
         return None
     return "bitmap", coverage, payload
-
-
-def _cells_order(words: np.ndarray, field: str, start: int) -> int:
-    """HEALPix order of a chunk's written cell words (the cells-axis order)."""
-    written = words[words != 0]
-    if written.size == 0:
-        raise ValueError(
-            f"chunk at cell {start} of {field!r} has ragged payloads but no written "
-            f"'morton' coordinate — the dense coordinate write did not cover it"
-        )
-    return decimal_order(morton_decimal(int(written[0])))
 
 
 def _chunk_word(words: np.ndarray, field: str, start: int) -> int:

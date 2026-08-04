@@ -64,6 +64,13 @@ import numpy as np
 import zarr
 from zarr.abc.store import Store
 
+from moczarr.convention import (
+    decimal_order,
+    morton_decimal,
+    normalize_subtree,
+    subtree_cell_span,
+)
+
 __all__ = [
     "RAGGED2_DATA_TYPE",
     "RAGGED2_SPEC",
@@ -344,6 +351,86 @@ def iter_populated_chunks(arr: zarr.Array) -> Iterator[tuple[int, list[tuple[int
                 yield span_start + offset, populated
 
 
+def _cells_order(words: np.ndarray, field: str, start: int) -> int:
+    """HEALPix order of a chunk's written cell words (the cells-axis order).
+
+    ``words`` are per-cell morton coordinates (packed uint64 area words at
+    the cell order; ``0`` is the unwritten fill).
+    """
+    written = words[words != 0]
+    if written.size == 0:
+        raise ValueError(
+            f"chunk at cell {start} of {field!r} has ragged payloads but no written "
+            f"'morton' coordinate — the dense coordinate write did not cover it"
+        )
+    return decimal_order(morton_decimal(int(written[0])))
+
+
+def _subtree_span(arr, morton, field: str, subtree) -> tuple[tuple[int, int] | None, list | None]:
+    """Resolve the readers' ``subtree=`` to ``(span, spans)`` on this axis.
+
+    ``span`` is ``None`` = no restriction (no ``subtree`` given); ``(0, 0)``
+    = visit nothing (a disjoint word —
+    :func:`~moczarr.convention.subtree_cell_span` already warned — or an
+    empty store, which has nothing below any word). The anchor is the first
+    stored span's first read chunk of the ``morton`` coordinate — one small
+    slice, no payload bytes (the dense coordinate write covers every chunk
+    of a stored span); its own axis index is passed alongside so
+    :func:`~moczarr.convention.subtree_cell_span` can CHECK the
+    nested-placement identity it derives from. A malformed ``subtree``
+    raises even on an empty store.
+
+    ``spans`` is the :func:`stored_chunk_spans` listing the span was
+    resolved against (``None`` when there was no ``subtree`` and nothing was
+    listed): the caller threads it back into its sweep so the restricted
+    read LISTs the array once, not twice.
+    """
+    if subtree is None:
+        return None, None
+    spans = stored_chunk_spans(arr)
+    if not spans:
+        normalize_subtree(subtree)  # malformed still raises; nothing to visit
+        return (0, 0), spans
+    words = morton[spans[0][0] : spans[0][0] + int(arr.chunks[0])]
+    cell_order = _cells_order(words, field, spans[0][0])
+    written = int(np.flatnonzero(words)[0])
+    return (
+        subtree_cell_span(
+            subtree,
+            int(words[written]),
+            spans[0][0] + written,
+            cell_order,
+            int(arr.shape[0]),
+            field,
+            # The disjoint-word warning belongs to the READER's caller: from
+            # subtree_cell_span that is here (2), the reader's own frame (3)
+            # — a generator, so it runs on the consumer's first next() — and
+            # the consumer (4). Anything less points inside moczarr.
+            stacklevel=4,
+        ),
+        spans,
+    )
+
+
+def _refuse_sub_chunk(span, subtree, field: str, cells_per_chunk: int) -> None:
+    """The ratified v1 refusal: a finer-than-chunk ``subtree`` raises.
+
+    The store's smallest fetch unit is the inner chunk (no I/O win below
+    it), and the chunk-granular sweeps yield whole read chunks — serving a
+    sub-chunk word would either over-yield cells outside the span or grow a
+    rank filter the contract keeps out of v1 (issue #29, mirroring zagg's
+    ``read_tensors`` refusal). :func:`read_cell` addresses any single cell
+    in 2 GETs.
+    """
+    if span is not None and span != (0, 0) and span[1] - span[0] < cells_per_chunk:
+        raise ValueError(
+            f"subtree {subtree!r} is finer than {field!r}'s read chunks "
+            f"({cells_per_chunk} cells): the sweep readers yield whole read "
+            f"chunks only; use read_cell, which addresses any single cell of "
+            f"the span in 2 GETs"
+        )
+
+
 def _open_morton(store: Store, field: str, zarr_format: Literal[2, 3]) -> zarr.Array:
     """The sibling per-cell ``morton`` coordinate array (cell identity source)."""
     parent, _, _name = field.rpartition("/")
@@ -406,6 +493,7 @@ def read_ragged(
     field: str,
     *,
     locations: bool = False,
+    subtree: int | str | None = None,
     zarr_format: Literal[2, 3] = 3,
 ) -> Iterator[tuple]:
     """Yield every populated cell of a ragged field, decoded per its attrs.
@@ -433,6 +521,24 @@ def read_ragged(
         Also decode the located sibling (spec §1.1/§2.2), bound by the
         payload array's ``locations`` attrs declaration — never by naming
         convention. Raises ``ValueError`` on an unlocated field.
+    subtree : int or str, optional
+        Restrict the sweep to the cells below this morton ancestor — a
+        packed area word (``int``) or its decimal string (``str``), the
+        spec §1.5 subtree-span identity (issue #29; zagg's issue #351
+        contract). Only stored objects overlapping the subtree's contiguous
+        cell span are fetched: on a sharded store the index suffix plus the
+        covering inner chunks, on the flat layout the covering chunk
+        objects — the :func:`read_cell` 2-GET pattern generalized. The
+        subtree must be at or coarser than the READ-CHUNK order — a finer
+        word raises pointing at :func:`read_cell` (the ratified v1
+        refusal). A well-formed word DISJOINT from this axis warns at most
+        once per call (naming the word and the axis root) and yields
+        nothing — so an **empty yield is ambiguous** between "in-domain,
+        nothing stored" and "outside the domain"; the warning is the only
+        discriminator, and its DELIVERY is the caller's ``warnings``
+        filter's call (the default action dedups a repeat of the same
+        warning in the same process). Malformed / too-deep words raise
+        ``ValueError``.
     zarr_format : int, optional
         Zarr format version (default 3).
 
@@ -442,11 +548,13 @@ def read_ragged(
         On the strict attrs gate (:func:`parse_ragged_attrs`), a missing
         ``morton`` sibling, a populated cell with no written morton word, a
         located sibling whose row count disagrees with the payload (the
-        §1.1 row-alignment MUST), or ``locations=True`` on an unlocated
-        field.
+        §1.1 row-alignment MUST), ``locations=True`` on an unlocated
+        field, or a malformed / too-deep / finer-than-chunk ``subtree``.
     """
     arr, element = open_ragged(store, field, zarr_format=zarr_format)
     morton = _morton_words(store, field, zarr_format)
+    span, spans = _subtree_span(arr, morton, field, subtree)
+    _refuse_sub_chunk(span, subtree, field, int(arr.chunks[0]))
     loc_arr = loc_element = None
     if locations:
         if element.locations is None:
@@ -458,12 +566,21 @@ def read_ragged(
         loc_arr, loc_element = open_ragged(
             store, _sibling_path(field, element.locations), zarr_format=zarr_format
         )
-    for span_start, span_stop in stored_chunk_spans(arr):
-        span = cast(np.ndarray, arr[span_start:span_stop])
+    cells_per_chunk = int(arr.chunks[0])
+    for span_start, span_stop in stored_chunk_spans(arr) if spans is None else spans:
+        if span is not None:
+            # Clip to the whole read chunks covering the subtree span (a
+            # legal span is chunk-aligned — the sub-chunk refusal above —
+            # so the clip only ever drops non-overlapping chunks).
+            span_start = max(span_start, span[0] - span[0] % cells_per_chunk)
+            span_stop = min(span_stop, span[1] + -span[1] % cells_per_chunk)
+            if span_start >= span_stop:
+                continue
+        data = cast(np.ndarray, arr[span_start:span_stop])
         words = morton[span_start:span_stop]
         loc_span = cast(np.ndarray, loc_arr[span_start:span_stop]) if loc_arr is not None else None
         for pos in range(span_stop - span_start):
-            raw = span[pos]
+            raw = data[pos]
             if _is_empty(raw):
                 continue
             word = int(words[pos])
