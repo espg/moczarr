@@ -701,6 +701,44 @@ class TestSubtreeReadRagged:
         self._assert_same(got, self._filtered(sweep, SHARD + "4"))
         np.testing.assert_array_equal(got[0][1], expected[13])
 
+    def test_undividing_read_chunk_yields_only_descendants(self, tmp_path):
+        """The whole-chunk clip is exact only when the read chunk DIVIDES the
+        span's ``4^d`` length, and nothing in this generic layer requires a
+        power-of-four (or -two) cells chunk — the tensor profile states that
+        for itself. With 6 cells per chunk on a 64-cell axis the clip widens
+        ``[16, 32)`` to ``[12, 36)``, so membership has to be checked per
+        cell or the sweep hands back cells from sibling subtrees."""
+        tails = [a + b + c for a in "1234" for b in "1234" for c in "1234"]
+        grid = tmp_path / "store"
+        rng = np.random.default_rng(29)
+        values = {
+            c: rng.integers(-500, 500, (n, 3)).astype("<i2")
+            for c, n in {12: 2, 17: 1, 34: 3}.items()
+        }
+        blocks: dict[int, list] = {}
+        for cell, v in values.items():
+            blocks.setdefault(cell // 6, [b""] * 6)[cell % 6] = v.tobytes()
+        attrs = {"ragged": {"spec": RAGGED_SPEC, "element": dict(ELEMENT)}}
+        _write(grid, "g/field/zarr.json", _vlen_meta(64, 6, sharded=False, attrs=attrs))
+        for ordinal, cells in blocks.items():
+            _write(grid, f"g/field/c/{ordinal}", _inner_chunk(cells))
+        _write(grid, "g/morton/zarr.json", _uint64_meta(64))
+        _write(
+            grid,
+            "g/morton/c/0",
+            np.array([morton_word(SHARD + t) for t in tails], dtype="<u8").tobytes(),
+        )
+
+        store = LocalStore(grid)
+        sweep = list(read_ragged(store, "g/field"))
+        assert [entry[0] for entry in sweep] == [
+            morton_word(SHARD + tails[c]) for c in (12, 17, 34)
+        ]
+        # Cells 12 and 34 sit in the clip's widened chunks but outside the span.
+        got = list(read_ragged(store, "g/field", subtree=SHARD + "2"))
+        self._assert_same(got, self._filtered(sweep, SHARD + "2"))
+        assert [entry[0] for entry in got] == [morton_word(SHARD + tails[17])]
+
     def test_subtree_none_is_the_default_sweep(self, tmp_path):
         grid, _ = build_store(tmp_path, sharded=True)
         store = LocalStore(grid)
