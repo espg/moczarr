@@ -397,9 +397,14 @@ def _subtree_span(arr, morton, field: str, subtree) -> tuple[tuple[int, int] | N
     = visit nothing (a disjoint word —
     :func:`~moczarr.convention.subtree_cell_span` already warned — or an
     empty store, which has nothing below any word). The anchor is the first
-    stored span's first read chunk of the ``morton`` coordinate — one small
-    slice, no payload bytes (the dense coordinate write covers every chunk
-    of a stored span); its own axis index is passed alongside so
+    WRITTEN word of the ``morton`` coordinate over the whole first stored
+    span — one coordinate slice, no payload bytes. The window is the whole
+    span, not its first read chunk, because a stored span's leading inner
+    chunks may be absent and the coordinate holds its FILL across them
+    (zagg spec §7: "a reader MUST NOT assume the coordinate is dense across
+    a shard"); the wider window is free, since :class:`_MortonWords` reads
+    that stored coordinate object either way. The anchor's own axis index is
+    passed alongside so
     :func:`~moczarr.convention.subtree_cell_span` can CHECK the
     nested-placement identity it derives from. A malformed ``subtree``
     raises even on an empty store.
@@ -415,7 +420,7 @@ def _subtree_span(arr, morton, field: str, subtree) -> tuple[tuple[int, int] | N
     if not spans:
         normalize_subtree(subtree)  # malformed still raises; nothing to visit
         return (0, 0), spans
-    words = morton[spans[0][0] : spans[0][0] + int(arr.chunks[0])]
+    words = morton[spans[0][0] : spans[0][1]]
     cell_order = _cells_order(words, field, spans[0][0])
     written = int(np.flatnonzero(words)[0])
     return (
