@@ -327,6 +327,48 @@ def _deep_digest_store(tmp_path, chunks=(0, 2)):
     return LocalStore(grid)
 
 
+def _gapped_digest_store(tmp_path, chunks=(0, 4, 5, 6, 7, 12)):
+    """A synthetic sharded digest field with a GAP between root and chunk order.
+
+    Every other fixture here has the axis root and the read chunk on adjacent
+    orders (the strata leaf: root 4, chunk 5; :func:`_deep_digest_store`: root
+    6, chunk 7), so no subtree word can sit strictly between them and the
+    composed ``max(subtree_order, axis_root_order)`` block-order floor is
+    always one of the two ends. This one leaves room: 64 cells (order 9) in 16
+    read chunks of 4 (order 8) below ``test_ragged``'s order-6 ``SHARD``, so an
+    order-7 subtree is finer than the root, coarser than the chunk, and spans a
+    PROPER 16-cell sub-span assembled from 4 read chunks.
+
+    ``chunks`` selects the populated read chunks; the default fills the whole
+    order-7 subtree ``SHARD + "2"`` (chunks 4-7, cells 16-31) plus chunks 0 and
+    12 OUTSIDE it, so filtering the unrestricted sweep is not a no-op. Cells
+    carry ``_deep_digest_store``'s one-centroid weight-1 digests so the block
+    algebra stays exact.
+    """
+    from test_ragged import SHARD, _shard_object, _uint64_meta, _vlen_meta, _write
+
+    from moczarr.convention import morton_word
+
+    tails = [a + b + c for a in "1234" for b in "1234" for c in "1234"]
+    attrs = {"ragged": {"spec": "zagg-ragged/1", "element": {"dtype": "float32", "shape": [-1, 2]}}}
+    grid = tmp_path / "gapped"
+    payload = [
+        [
+            np.array([[DEEP_BASE + (chunk * 4 + pos) % 16, 1.0]], dtype="<f4").tobytes()
+            for pos in range(4)
+        ]
+        if chunk in chunks
+        else None
+        for chunk in range(16)
+    ]
+    _write(grid, "g/h_tdigest/zarr.json", _vlen_meta(64, 4, sharded=True, attrs=attrs))
+    _write(grid, "g/h_tdigest/c/0", _shard_object(payload))
+    _write(grid, "g/morton/zarr.json", _uint64_meta(64))
+    words = np.array([morton_word(SHARD + t) for t in tails], dtype="<u8")
+    _write(grid, "g/morton/c/0", words.tobytes())
+    return LocalStore(grid)
+
+
 @needs_zagg
 class TestDepth2Placement:
     """Cell placement at depth 2, where Z-order and row-major diverge."""
@@ -630,6 +672,39 @@ class TestSubtreeReadTensors:
         with pytest.raises(ValueError, match="must be between 4 and the chunk order 5"):
             list(read_tensors(_store(), SIGNAL, subtree=above, block_order=3))
         assert len(list(read_tensors(_store(), SIGNAL, subtree=above, block_order=4))) == 1
+
+    def test_block_assembly_over_a_strict_sub_span(self, tmp_path):
+        """The composed floor's real case: ``min_order`` is the SUBTREE's own
+        order, strictly between the axis root's and the chunk's, with the block
+        assembled from SEVERAL read chunks over a PROPER sub-span of the axis.
+        On every adjacent-order fixture the floor collapses onto one end (see
+        :func:`_gapped_digest_store`), so nothing else covers this.
+        """
+        from test_ragged import SHARD
+
+        from moczarr.convention import morton_word
+
+        store = _gapped_digest_store(tmp_path)
+        field, sub = "g/h_tdigest", SHARD + "2"  # order 7: root 6 < 7 < chunk 8
+        word = morton_word(sub)
+
+        # Below the floor: an order-6 block would reach past the 16-cell span.
+        with pytest.raises(ValueError, match="must be between 7 and the chunk order 8"):
+            list(read_tensors(store, field, subtree=sub, block_order=6))
+
+        # ON the floor: one 4x4 block assembled from the span's 4 read chunks.
+        sweep7 = list(read_tensors(store, field, block_order=7))
+        assert len(sweep7) == 3  # chunks 0 and 12 sit outside — the filter bites
+        got = list(read_tensors(store, field, subtree=sub, block_order=7))
+        assert [o[0].shape for o in got] == [(4, 4, 128)]
+        self._assert_same(got, self._filtered(sweep7, word, 7))
+
+        # At the chunk order: the four per-chunk blocks of the same span.
+        per_chunk = list(read_tensors(store, field, subtree=sub, block_order=8))
+        assert [o[0].shape for o in per_chunk] == [(2, 2, 128)] * 4
+        self._assert_same(
+            per_chunk, self._filtered(list(read_tensors(store, field, block_order=8)), word, 7)
+        )
 
     def test_subtree_keeps_the_three_state_mask(self):
         """The occupancy machinery is untouched by the restriction: chunk 4's
