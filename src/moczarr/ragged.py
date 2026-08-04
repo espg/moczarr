@@ -331,6 +331,7 @@ def stored_chunk_spans(arr: zarr.Array) -> list[tuple[int, int]]:
 
 def iter_populated_chunks(
     arr: zarr.Array,
+    *,
     span: tuple[int, int] | None = None,
     spans: list[tuple[int, int]] | None = None,
 ) -> Iterator[tuple[int, list[tuple[int, object]]]]:
@@ -353,10 +354,16 @@ def iter_populated_chunks(
     overlapping the ``[start, stop)`` cell span, clipped to whole read
     chunks — the spec §1.5 contiguous-slice read plan: only the covering
     portion of each overlapping object is sliced, and non-overlapping
-    stored objects are skipped without a fetch. ``spans`` threads in an
+    stored objects are skipped without a fetch. The restriction is
+    WHOLE-CHUNK granular: a span that does not fall on chunk boundaries is
+    rounded OUTWARD, so the yielded chunks carry cells outside it. A
+    finer-than-chunk restriction is the caller's rank filter — this
+    generator always yields whole read chunks. ``spans`` threads in an
     ALREADY-LISTED :func:`stored_chunk_spans` result (the one
     :func:`_subtree_span` resolved against) so a restricted read LISTs the
-    array's data keys once, not twice; ``None`` lists here.
+    array's data keys once, not twice; ``None`` lists here. Both are
+    keyword-only: they are adjacent, same-shaped and easy to swap, and a
+    swap reads as a valid call.
     """
     cells_per_chunk = int(arr.chunks[0])
     for span_start, span_stop in stored_chunk_spans(arr) if spans is None else spans:
