@@ -351,3 +351,108 @@ def test_words_are_uint64_scale():
     # Packed words exceed 2^53: the reason range endpoints are strings.
     assert convention.morton_word(SHARD) > 2**53
     assert np.uint64(convention.morton_word(SHARD)) == SHARD_WORD
+
+
+# Strata-fixture goldens (tests/data/strata_hive.expected.json): the order-6
+# cell words at ranks 0 and 15 of shard 43314's 16-cell subtree, and their
+# fullsphere nested ids as mortie reports them — pinned so the span
+# arithmetic is checked against committed data, not against itself.
+STRATA_CELL_0 = 5345772757688778758
+STRATA_CELL_15 = 5349994882339438598
+STRATA_NESTED_0 = 14896
+STRATA_ROOT = "43314"
+
+
+class TestNormalizeSubtree:
+    """Issue #29: both ``subtree=`` currencies normalize to one packed word."""
+
+    def test_both_currencies_agree(self):
+        word = convention.morton_word(STRATA_ROOT)
+        assert convention.normalize_subtree(STRATA_ROOT) == (word, STRATA_ROOT, 4)
+        assert convention.normalize_subtree(word) == (word, STRATA_ROOT, 4)
+
+    def test_negative_hemisphere_string(self):
+        word, decimal, order = convention.normalize_subtree(SHARD)
+        assert (word, decimal, order) == (SHARD_WORD, SHARD, 6)
+
+    @pytest.mark.parametrize("bad", ["", "abc", "913", 3, -5, 0])
+    def test_malformed_raises(self, bad):
+        with pytest.raises(ValueError):
+            convention.normalize_subtree(bad)
+
+    def test_point_word_raises_both_currencies(self):
+        """Kind rides the §1 suffix: a POINT names no area subtree."""
+        marked = "4" + "3" * 29 + "p"
+        with pytest.raises(ValueError, match="POINT"):
+            convention.normalize_subtree(marked)
+        with pytest.raises(ValueError, match="POINT"):
+            convention.normalize_subtree(convention.morton_word(marked))
+
+
+class TestSubtreeCellSpan:
+    """The spec §1.5 span identity on both axis geometries (issue #29).
+
+    Single-root spans run against shard ``43314``'s 16-cell order-6 axis (the
+    strata fixture's leaf geometry); fullsphere spans against the same words
+    on the 12·4^6-cell axis, anchored by the committed nested-id golden.
+    """
+
+    def _span(self, subtree, **kw):
+        args = dict(anchor=STRATA_CELL_0, anchor_index=0, cell_order=6, n_cells=16, field="f")
+        args.update(kw)
+        return convention.subtree_cell_span(subtree, **args)
+
+    def test_children_partition_the_single_root_axis(self):
+        spans = [self._span(STRATA_ROOT + t) for t in "1234"]
+        assert spans == [(0, 4), (4, 8), (8, 12), (12, 16)]
+
+    def test_single_cell_span(self):
+        # An order-6 word IS one cell: rank 15 of the shard subtree.
+        assert self._span(STRATA_CELL_15) == (15, 16)
+
+    @pytest.mark.parametrize("word", [STRATA_ROOT, "4331", "433", "4"])
+    def test_root_and_ancestors_clip_to_the_whole_axis(self, word):
+        assert self._span(word) == (0, 16)
+
+    def test_disjoint_word_warns_and_is_empty(self):
+        import warnings
+
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            assert self._span("43313") == (0, 0)
+        assert [str(w.message) for w in rec] == [
+            "subtree 43313 is outside this axis' order-4 root 43314 — yielding nothing"
+        ]
+
+    def test_fullsphere_axis_positions_are_nested_ids(self):
+        full = dict(anchor_index=STRATA_NESTED_0, n_cells=12 * 4**6)
+        assert self._span(STRATA_ROOT, **full) == (STRATA_NESTED_0, STRATA_NESTED_0 + 16)
+        assert self._span(STRATA_CELL_0, **full) == (STRATA_NESTED_0, STRATA_NESTED_0 + 1)
+        # Rank 15 of the shard sits at the golden nested id + 15.
+        assert self._span(STRATA_CELL_15, **full) == (
+            STRATA_NESTED_0 + 15,
+            STRATA_NESTED_0 + 16,
+        )
+
+    def test_fullsphere_disjoint_never_happens(self):
+        """Every well-formed word's span lies inside the fullsphere axis."""
+        import warnings
+
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            lo, hi = self._span("43313", anchor_index=STRATA_NESTED_0, n_cells=12 * 4**6)
+        assert hi - lo == 16 and rec == []
+
+    def test_misplaced_anchor_raises(self):
+        with pytest.raises(ValueError, match="not in canonical nested placement"):
+            self._span(STRATA_ROOT, anchor_index=1)
+        with pytest.raises(ValueError, match="not in canonical nested placement"):
+            self._span(STRATA_ROOT, anchor_index=0, n_cells=12 * 4**6)
+
+    def test_deeper_than_the_cells_axis_raises(self):
+        with pytest.raises(ValueError, match="deeper than"):
+            self._span(STRATA_ROOT + "111")
+
+    def test_malformed_raises(self):
+        with pytest.raises(ValueError):
+            self._span("abc")
