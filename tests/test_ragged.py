@@ -131,35 +131,39 @@ def _write(root, rel, payload):
 CELLS = {0: 2, 3: 1, 13: 4}
 
 
-def _payloads():
+def _payloads(cells=None):
     """Deterministic per-cell ``(values, raw_bytes)`` in the declared element."""
     rng = np.random.default_rng(19)
     out = {}
-    for cell, rows in CELLS.items():
+    for cell, rows in (cells or CELLS).items():
         values = rng.integers(-500, 500, (rows, 3)).astype("<i2")
         out[cell] = (values, values.tobytes())
     return out
 
 
-def build_store(root, *, sharded, located=False, morton_words=None, loc_counts=None):
+def build_store(root, *, sharded, located=False, morton_words=None, loc_counts=None, cells=None):
     """A spec-text-only store: 16 cells, 4 inner chunks; chunks 1-2 empty.
 
     Chunk 0 holds cells 0 and 3 (cells 1-2 keep the ``b""`` fill), chunk 3
     holds cell 13. On the sharded layout chunks 1-2 are the index absence
-    sentinel; on the flat layout their objects are simply missing. Returns
+    sentinel; on the flat layout their objects are simply missing. ``cells``
+    overrides :data:`CELLS` (``{cell: n_rows}``); an inner chunk with no
+    populated cell is absent either way. Returns
     ``(store_root_path, {cell: expected_values})``.
     """
-    payloads = _payloads()
+    payloads = _payloads(cells)
     attrs = {"ragged": {"spec": RAGGED_SPEC, "element": dict(ELEMENT)}}
     if located:
         attrs["ragged"]["locations"] = "geo_words"  # deliberately NOT {field}_locations
     grid = root / "store"
 
     def chunk_cells(chunk, source):
-        return [source.get(chunk * 4 + i, b"") for i in range(4)]
+        """One inner chunk's 4 cells, or ``None`` when none is populated."""
+        out = [source.get(chunk * 4 + i, b"") for i in range(4)]
+        return out if any(out) else None
 
     raw = {c: b for c, (v, b) in payloads.items()}
-    chunks = [chunk_cells(0, raw), None, None, chunk_cells(3, raw)]
+    chunks = [chunk_cells(c, raw) for c in range(4)]
     _write(grid, "g/field/zarr.json", _vlen_meta(16, 4, sharded=sharded, attrs=attrs))
     if sharded:
         _write(grid, "g/field/c/0", _shard_object(chunks))
@@ -172,7 +176,7 @@ def build_store(root, *, sharded, located=False, morton_words=None, loc_counts=N
         counts = loc_counts or {c: len(v) for c, (v, _b) in payloads.items()}
         loc_words = {c: np.arange(1, counts[c] + 1, dtype="<u8") * 7 for c in payloads}
         loc_raw = {c: w.tobytes() for c, w in loc_words.items()}
-        loc_chunks = [chunk_cells(0, loc_raw), None, None, chunk_cells(3, loc_raw)]
+        loc_chunks = [chunk_cells(c, loc_raw) for c in range(4)]
         loc_attrs = {"ragged": {"spec": RAGGED_SPEC, "element": {"dtype": "uint64", "shape": [-1]}}}
         _write(grid, "g/geo_words/zarr.json", _vlen_meta(16, 4, sharded=sharded, attrs=loc_attrs))
         if sharded:
@@ -677,6 +681,25 @@ class TestSubtreeReadRagged:
         assert list(read_ragged(LocalStore(grid), "g/field", subtree=SHARD)) == []
         with pytest.raises(ValueError):
             list(read_ragged(LocalStore(grid), "g/field", subtree="abc"))
+
+    def test_absent_leading_inner_chunk_still_anchors(self, tmp_path):
+        """The anchor must window the whole first stored SPAN, not its first
+        read chunk: a shard's leading inner chunks may be absent, and zagg
+        spec §7 is explicit that the ``morton`` coordinate holds its fill
+        across them ("a reader MUST NOT assume the coordinate is dense
+        across a shard"). Windowing chunk 0 made such a leaf read fine
+        unrestricted but raise the payload-flavoured "no written 'morton'
+        coordinate" error under ``subtree=``."""
+        words = np.zeros(16, dtype="<u8")
+        words[12:] = [morton_word(SHARD + t) for t in TAILS[12:]]  # only chunk 3 written
+        grid, expected = build_store(tmp_path, sharded=True, cells={13: 4}, morton_words=words)
+        store = LocalStore(grid)
+        sweep = list(read_ragged(store, "g/field"))
+        assert [entry[0] for entry in sweep] == [morton_word(SHARD + TAILS[13])]
+        self._assert_same(list(read_ragged(store, "g/field", subtree=SHARD)), sweep)
+        got = list(read_ragged(store, "g/field", subtree=SHARD + "4"))
+        self._assert_same(got, self._filtered(sweep, SHARD + "4"))
+        np.testing.assert_array_equal(got[0][1], expected[13])
 
     def test_subtree_none_is_the_default_sweep(self, tmp_path):
         grid, _ = build_store(tmp_path, sharded=True)
