@@ -628,3 +628,115 @@ class TestSubtreeReadTensors:
         (block,) = list(read_tensors(_store(), SIGNAL, subtree=EXPECTED["shard"] + "4"))
         _t, mask, _w, _m = block
         assert int((mask == 1).sum()) >= 1
+
+
+def _zagg_subtree_reader():
+    """zagg's reader IF it carries the ``subtree=`` surface (zagg #351/#357)."""
+    import inspect
+
+    reference = _zagg_reader()
+    if reference is None or "subtree" not in inspect.signature(reference.read_tensors).parameters:
+        return None
+    return reference
+
+
+needs_zagg_subtree = pytest.mark.skipif(
+    _zagg_subtree_reader() is None,
+    reason="needs zagg's subtree read surface (englacial/zagg#351; first released in 0.42)",
+)
+
+
+@needs_zagg
+class TestSubtreeGetPosture:
+    """The issue #29 acceptance pin: only covering stored objects fetched.
+
+    The fixture leaf is ONE sharded object (K=4 inner chunks of 4 cells), so
+    the §1.5 read plan for a chunk-order subtree is the shard-index suffix
+    plus only the covering inner chunks — ranged GETs that never reach a
+    disjoint chunk's bytes, generalizing ``read_cell``'s 2-GET recipe.
+    """
+
+    def test_sharded_fetches_only_the_covering_span(self):
+        from test_ragged import CountingStore
+
+        store = CountingStore(LEAF)
+        store.gets.clear()
+        out = list(read_tensors(store, SIGNAL, subtree=EXPECTED["shard"] + "1"))
+        assert len(out) == 1
+        data_gets = [g for g in store.gets if f"{SIGNAL}/c/" in g[0]]
+        assert all(rng is not None for _k, rng, _n in data_gets)
+        (obj_key, _r0, n0), *chunk_gets = data_gets
+        k = EXPECTED["chunks_per_shard"]
+        assert n0 == 16 * k + 4  # the shard-index suffix
+        assert len(chunk_gets) >= 1
+        # Decode the shard index: the digest-bearing chunk 4 (cell 15) starts
+        # after chunk 1's payload, and no fetched range may reach it.
+        obj = (LEAF / f"{SIGNAL}/c/0").read_bytes()
+        idx = np.frombuffer(obj[-n0:-4], dtype="<u8").reshape(-1, 2)
+        chunk3_start = int(idx[3][0])
+        assert chunk3_start > 0
+        assert all(int(r.end) <= chunk3_start for _k, r, _n in chunk_gets)
+        # The morton coordinate keeps the one-GET-per-stored-object posture.
+        assert len([g for g in store.gets if f"{GROUP}/morton/c/" in g[0]]) == 1
+
+
+@needs_zagg_subtree
+class TestSubtreeLiveParity:
+    """moczarr and zagg serve the same ``subtree=`` read bit-identically.
+
+    The issue #29 acceptance criterion, live: both readers on the shared
+    committed fixture, same kwargs, byte-equal yields — and the same
+    warn/raise behavior at the contract's edges.
+    """
+
+    CASES = ("chunk-1", "chunk-4", "root-word", "root-block")
+
+    @staticmethod
+    def _kwargs(case):
+        from moczarr.convention import morton_word
+
+        kwargs = {
+            "chunk-1": {"subtree": EXPECTED["shard"] + "1"},
+            "chunk-4": {"subtree": EXPECTED["shard"] + "4"},
+            "root-word": {"subtree": morton_word(EXPECTED["shard"])},
+            "root-block": {"subtree": EXPECTED["shard"], "block_order": BLOCK_ORDER},
+        }
+        return kwargs[case]
+
+    @pytest.mark.parametrize("stratum", ["signal", "noise"])
+    @pytest.mark.parametrize("case", list(CASES))
+    def test_subtree_read_bit_identical(self, stratum, case):
+        reference = _zagg_subtree_reader()
+        kwargs = self._kwargs(case)
+        field = f"{GROUP}/h_tdigest_{stratum}"
+        ours = list(read_tensors(_store(), field, **kwargs))
+        theirs = list(reference.read_tensors(_store(), field, **kwargs))
+        assert len(ours) == len(theirs) > 0
+        for (t1, m1, w1, i1), (t2, m2, w2, i2) in zip(ours, theirs):
+            assert t1.dtype == t2.dtype
+            np.testing.assert_array_equal(t1, t2)
+            np.testing.assert_array_equal(m1, m2)
+            assert w1 == w2
+            assert int(i1) == int(i2)
+
+    def test_disjoint_warning_parity(self):
+        import warnings
+
+        reference = _zagg_subtree_reader()
+        sibling = EXPECTED["shard"][:-1] + "3"
+        messages = []
+        for reader in (read_tensors, reference.read_tensors):
+            with warnings.catch_warnings(record=True) as rec:
+                warnings.simplefilter("always")
+                assert list(reader(_store(), SIGNAL, subtree=sibling)) == []
+            (w,) = [r for r in rec if "outside this axis" in str(r.message)]
+            messages.append(str(w.message))
+        assert messages[0] == messages[1]
+
+    def test_refusal_parity(self):
+        reference = _zagg_subtree_reader()
+        for reader in (read_tensors, reference.read_tensors):
+            with pytest.raises(ValueError, match="finer than"):
+                list(reader(_store(), SIGNAL, subtree=EXPECTED["shard"] + "11"))
+            with pytest.raises(ValueError, match="deeper than"):
+                list(reader(_store(), SIGNAL, subtree=EXPECTED["shard"] + "111"))
