@@ -25,10 +25,12 @@ Postures, per the design's D9 discipline:
 
 from __future__ import annotations
 
+import functools
 import json
 import logging
 import warnings
 from collections.abc import Iterator, Sequence
+from datetime import timedelta
 from pathlib import Path
 from typing import Any
 
@@ -58,6 +60,58 @@ logger = logging.getLogger(__name__)
 _stale_warned: set[str] = set()
 
 
+#: Kwarg stems that mean the caller settled auth (or the endpoint) itself, so
+#: the ambient probe below must stay out of it. Compared against ``aws_``-
+#: stripped, lower-cased kwarg AND ``config=`` keys, since obstore accepts
+#: several spellings per option (``aws_access_key_id``/``access_key_id``,
+#: ``token``/``session_token``). ``endpoint`` is in the set because a custom
+#: endpoint (MinIO, R2) wants ITS region and credentials, never the ambient
+#: AWS session's.
+_EXPLICIT_S3_KEYS = frozenset(
+    {
+        "access_key_id",
+        "secret_access_key",
+        "session_token",
+        "token",
+        "credential_provider",
+        "skip_signature",
+        "endpoint",
+        "endpoint_url",
+    }
+)
+
+
+@functools.lru_cache(maxsize=1)
+def _ambient_provider():
+    """boto3's resolved ambient credentials as an obstore provider, or ``None``.
+
+    Memoized per process: a fresh ``boto3.Session`` re-mints SSO/AssumeRole
+    credentials on every construction, so opening N leaves in a loop would
+    pay (and throttle on) N credential resolutions. Call
+    ``_ambient_provider.cache_clear()`` to re-probe.
+
+    Broad ``except`` on purpose: besides ``ImportError`` (no boto3),
+    ``session.get_credentials()`` raises botocore's ``ProfileNotFound`` /
+    ``ConfigParseError`` on a stale ``AWS_PROFILE`` or a malformed config —
+    none of which should take down a caller whose env vars are perfectly
+    valid for obstore's own chain.
+    """
+    try:
+        import boto3
+        from obstore.auth.boto3 import Boto3CredentialProvider
+
+        session = boto3.Session()
+        if session.get_credentials() is None:
+            return None
+        # 5 minutes, not obstore's 30: a lease longer than the credentials
+        # themselves (SSO/AssumeRole are commonly short-lived) hands out
+        # expired keys until it turns over.
+        return Boto3CredentialProvider(session, ttl=timedelta(minutes=5))
+    except Exception as e:
+        logger.debug(f"ambient boto3 credentials unavailable ({e}); using obstore's native chain")
+        return None
+
+
 def open_object_store(path: str, *, anonymous: bool = False, **kwargs: Any):
     """Open an obstore store at ``path`` (``s3://...`` or a local directory).
 
@@ -66,39 +120,29 @@ def open_object_store(path: str, *, anonymous: bool = False, **kwargs: Any):
     skips request signing for public buckets (the source.coop case);
     ``kwargs`` pass through to ``S3Store.from_url`` (``region=...`` etc.).
 
-    Ambient credentials (no explicit keys, no ``anonymous``): obstore's
-    native chain reads env vars then falls back to EC2 instance metadata —
-    it cannot see AWS profiles/SSO, so a laptop with ``AWS_PROFILE`` set
-    gets an IMDS ``HostUnreachable``, not a credential error. When boto3 is
-    importable and resolves credentials, prefer its resolver via
-    ``Boto3CredentialProvider``, and adopt the session's region when the
-    caller passed none (an unset region surfaces as an opaque us-east-1
-    redirect error). Environments without boto3, or where boto3 resolves
-    nothing, keep the bare store — env/IMDS behavior unchanged.
+    Ambient credentials (no explicit keys/endpoint, no ``anonymous``):
+    obstore's native chain reads env vars then falls back to EC2 instance
+    metadata — it cannot see AWS profiles/SSO, so a laptop with
+    ``AWS_PROFILE`` set gets an IMDS ``HostUnreachable``, not a credential
+    error. When boto3 is importable and resolves credentials, prefer its
+    resolver via ``Boto3CredentialProvider`` (which carries the session's
+    region into the store config itself). Environments without boto3, or
+    where boto3 resolves nothing, keep the bare store — env/IMDS behavior
+    unchanged.
     """
     if path.startswith("s3://"):
         from obstore.store import S3Store
 
         if anonymous:
             kwargs.setdefault("skip_signature", True)
-        elif not kwargs.keys() & {
-            "access_key_id",
-            "secret_access_key",
-            "session_token",
-            "credential_provider",
-            "skip_signature",
-        }:
-            try:
-                import boto3
-                from obstore.auth.boto3 import Boto3CredentialProvider
-
-                session = boto3.Session()
-                if session.get_credentials() is not None:
-                    kwargs["credential_provider"] = Boto3CredentialProvider(session)
-                    if "region" not in kwargs and session.region_name:
-                        kwargs["region"] = session.region_name
-            except ImportError:
-                pass
+        else:
+            supplied = {k.lower().removeprefix("aws_") for k in kwargs} | {
+                k.lower().removeprefix("aws_") for k in (kwargs.get("config") or {})
+            }
+            if not supplied & _EXPLICIT_S3_KEYS:
+                provider = _ambient_provider()
+                if provider is not None:
+                    kwargs["credential_provider"] = provider
         return S3Store.from_url(path, **kwargs)
     from obstore.store import LocalStore
 

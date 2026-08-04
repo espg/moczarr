@@ -2,6 +2,46 @@
 
 ## Unreleased
 
+- New public `open_leaf(store_root, shard, ...)`: the leaf-direct twin of
+  `open_hive` for the per-leaf readers (`moczarr.hhdc.read_tensors`,
+  `moczarr.ragged.open_ragged`, ...). It owns the three layers a caller
+  otherwise hand-assembles — the leaf path from the manifest's grammar
+  (`convention.leaf_path` under the manifest's `path_grouping`), the
+  transport with `open_hive`'s credential/`anonymous` policy, and the
+  read-only `zarr.storage.ObjectStore` wrapper — so no caller does path
+  arithmetic or bare-obstore incantation. `product=` re-roots on a D19
+  product subtree (and a manifest-less multi-product root names its
+  products, as `open_hive` does); `window=` runs the same seam every entry
+  point does, required on a `morton-hive/2` store, refused on an unwindowed
+  one, and refusing the reserved all-time token `all`
+  ([#30](https://github.com/espg/moczarr/issues/30)); a `shard` at the wrong
+  order (a cell id where a shard id belongs) raises against the manifest's
+  `shard_order`. `manifest=` threads an already-read manifest (of the
+  product subtree when `product=` is given) to skip the GET in an
+  iterate-many-leaves loop, and `store=` shares the root handle for that
+  read ([#5](https://github.com/espg/moczarr/issues/5)); the leaf store
+  itself is always a fresh leaf-rooted open. The returned store is
+  deliberately bare, so `manifest=` / `read_manifest` is also how a caller
+  gets the `cell_order` its field paths need.
+
+- Ambient AWS credentials in `open_object_store` — a behavior change for
+  **every** `s3://` open (`open_hive`, `open_store`, `open_leaf`,
+  `list_products`, ...). obstore's native chain reads env vars then falls
+  back to EC2 instance metadata, so a laptop with only `AWS_PROFILE`/SSO set
+  used to get an IMDS `HostUnreachable` instead of a credential error. When
+  nothing explicit is supplied, moczarr now prefers boto3's resolver via
+  `obstore.auth.boto3.Boto3CredentialProvider` (which carries the session's
+  region into the store config itself). The probe is skipped whenever the
+  caller settled it — any credential kwarg in any obstore spelling
+  (`aws_`-prefixed, `token`/`session_token`, a `config=` dict),
+  `skip_signature`, `anonymous=True`, or a custom `endpoint` (MinIO/R2 want
+  their own credentials and region) — is memoized per process (a fresh
+  session re-mints SSO/AssumeRole credentials, which an N-leaf loop would
+  otherwise pay for N times) with a 5-minute credential lease, and degrades
+  with a debug log on anything the probe raises: no boto3 installed, or
+  botocore's `ProfileNotFound`/`ConfigParseError` from a stale profile
+  beside perfectly valid env keys. boto3 stays a non-dependency.
+
 - Resolution (pyramid-order) nodes in `open_store` (issue #15 phase 8b,
   completing the DataTree reader model): a product whose manifest declares
   sweep-generated overviews (zagg spec §4.5 — the reader binds

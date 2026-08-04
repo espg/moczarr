@@ -29,9 +29,12 @@ import numpy as np
 
 from moczarr.convention import (
     HIVE_SPEC_V2,
+    decimal_order,
     leaf_path,
     manifest_path_grouping,
+    morton_decimal,
     morton_word,
+    parse_manifest,
     split_leaf_name,
     validate_window,
 )
@@ -571,6 +574,7 @@ def open_leaf(
     product: str | None = None,
     manifest: dict | None = None,
     anonymous: bool = False,
+    store: Any = None,
     **store_kwargs: Any,
 ):
     """Open ONE shard's leaf zarr as a read-only zarr store.
@@ -592,14 +596,25 @@ def open_leaf(
         The leaf's shard — packed morton word or decimal string.
     window : str, optional
         Time-window label for a windowed leaf (``{id}_{window}.zarr``).
+        Required on a windowed (``morton-hive/2``) store and refused on an
+        unwindowed one, matching :func:`open_hive`; the reserved all-time
+        token ``all`` is refused at the same seam (espg/moczarr#30).
     product : str, optional
         Product name under a multi-product root (D19) — the open re-roots on
         the product subtree, exactly as :func:`open_hive` does.
     manifest : dict, optional
-        An already-read root manifest. Passing it skips this call's manifest
-        GET — the iterate-many-leaves case reads it once and threads it here.
+        An already-read manifest **of the subtree actually opened** — the
+        PRODUCT's manifest when ``product`` is given, not the root's.
+        Passing it skips this call's manifest GET (the iterate-many-leaves
+        case reads it once and threads it here) and is validated through
+        :func:`moczarr.convention.parse_manifest` like any read one.
     anonymous : bool
         Skip request signing (public buckets).
+    store : obstore store, optional
+        A shared handle for the manifest GET (issue #5), rooted at the
+        subtree this call opens — the PRODUCT subtree when ``product`` is
+        given. The returned leaf store is always a fresh, leaf-rooted open;
+        only the manifest read can share a handle.
     **store_kwargs
         Forwarded to :func:`moczarr.store.open_object_store`
         (``region=...``, explicit keys, ...).
@@ -608,18 +623,21 @@ def open_leaf(
     -------
     zarr.storage.ObjectStore
         Read-only store rooted at the leaf; pass it with a field path like
-        ``"{cell_order}/{name}"`` to the per-leaf readers.
+        ``"{cell_order}/{name}"`` to the per-leaf readers. Deliberately bare
+        — it carries no manifest — so a caller that needs ``cell_order`` for
+        those paths takes it from ``manifest=`` (the one it threaded) or
+        from :func:`moczarr.store.read_manifest`.
 
     Raises
     ------
     ValueError
         When ``store_root`` (or the product subtree) has no manifest — the
         path grammar (``path_grouping``) is manifest-declared, so a leaf
-        path cannot be derived without one.
+        path cannot be derived without one — when ``window`` disagrees with
+        the manifest's spec, and when ``shard`` is not at the manifest's
+        ``shard_order`` (a cell id where a shard id belongs).
     """
     from zarr.storage import ObjectStore
-
-    from moczarr.convention import leaf_path, manifest_path_grouping
 
     if anonymous:
         store_kwargs.setdefault("anonymous", True)
@@ -628,11 +646,46 @@ def open_leaf(
 
         validate_product_name(product)
         store_root = f"{store_root.rstrip('/')}/{product}"
+    if window is not None:
+        # The same window seam every non-overview entry point runs through;
+        # it is also what refuses the reserved all-time token (#30).
+        validate_window(window, where=store_root)
     if manifest is None:
-        manifest = read_manifest(store_root, **store_kwargs)
+        manifest = read_manifest(store_root, store=store, **store_kwargs)
         if manifest is None:
+            if product is None:
+                # A multi-product root has no root manifest by design (§6.5);
+                # probe so the error is pointed, exactly as open_hive's is.
+                names = [p["name"] for p in list_products(store_root, store=store, **store_kwargs)]
+                if names:
+                    raise ValueError(
+                        f"{store_root} is a multi-product store root (products: {names}); "
+                        f"pass product=... to open one (D19, mortie spec §6.5)"
+                    )
             raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
+    else:
+        manifest = parse_manifest(manifest)
+    windowed = manifest["spec"] == HIVE_SPEC_V2
+    if window is not None and not windowed:
+        raise ValueError(
+            f"window={window!r} on a {manifest['spec']} store: unwindowed stores "
+            f"have no window leaves (schedule: none)"
+        )
+    if window is None and windowed:
+        # open_hive lists the labels it walked; a leaf-direct open names ONE
+        # object and never enumerates, so it says what it needs instead.
+        raise ValueError(
+            f"{store_root} is a windowed ({HIVE_SPEC_V2}) store; pass window=... "
+            f"(a leaf-direct open names one object, so there is nothing to enumerate)"
+        )
     rel = leaf_path(shard, window, path_grouping=manifest_path_grouping(manifest))
+    order = decimal_order(morton_decimal(shard))
+    if order != int(manifest["shard_order"]):
+        raise ValueError(
+            f"shard {shard!r} is an order-{order} id, but {store_root} shards at order "
+            f"{manifest['shard_order']} — leaves are named by SHARD id (a cell id "
+            f"names no leaf)"
+        )
     leaf_root = f"{store_root.rstrip('/')}/{rel}"
     return ObjectStore(open_object_store(leaf_root, **store_kwargs), read_only=True)
 
