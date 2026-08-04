@@ -75,6 +75,8 @@ from moczarr.coverage import decode_bitmap, parse_leaf_coverage
 from moczarr.ragged import (
     _cells_order,
     _morton_words,
+    _refuse_sub_chunk,
+    _subtree_span,
     decode_cell,
     iter_populated_chunks,
     open_ragged,
@@ -416,6 +418,7 @@ def read_tensors(
     fit: FitMode = "raise",
     dtype: TensorDtype = "uint32",
     block_order: int | None = None,
+    subtree: int | str | None = None,
     max_block_bytes: int = 2 * 1024**3,
     zarr_format: Literal[2, 3] = 3,
 ) -> Iterator[tuple[np.ndarray, np.ndarray, tuple[float, float], int]]:
@@ -463,7 +466,32 @@ def read_tensors(
     block_order : int, optional
         HEALPix order of the emitted blocks (default ``None`` — one block
         per read chunk). Must be at or coarser than the chunk order; a block
-        is assembled from whole read chunks with one shared z-window.
+        is assembled from whole read chunks with one shared z-window. With a
+        ``subtree`` the floor is the order of the span actually VISITED —
+        the subtree CLIPPED to this axis — so the composed bound is
+        ``max(subtree_order, axis_root_order) <= block_order <=
+        chunk_order``: blocks tile the visited span, and a word above the
+        axis root (which clips to the whole axis) takes the ROOT's order as
+        its floor, not its own.
+    subtree : int or str, optional
+        Restrict the sweep to the read chunks below this morton ancestor —
+        packed area word or decimal string, as in
+        :func:`moczarr.ragged.read_ragged` (issue #29; zagg spec §1.5):
+        only stored objects overlapping the subtree's cell span are
+        fetched. The subtree must be at or coarser than the READ-CHUNK
+        order — a finer word raises pointing at
+        :func:`moczarr.ragged.read_cell` (the ratified v1 refusal: a
+        sub-chunk block would re-derive its z-window from fewer cells and
+        stop being a slice of the chunk tensor; recover a sub-chunk region
+        client-side as a corner slice of the chunk tensor, keeping its
+        shared ``(offset, gain)``). A well-formed word disjoint from this
+        axis warns at most once per call (naming the word and the axis
+        root) and yields nothing — so an **empty yield is ambiguous**
+        between "in-domain, nothing stored" and "outside the domain"; the
+        warning is the only discriminator, and its DELIVERY is the caller's
+        ``warnings`` filter's call (the default action dedups a repeat of
+        the same warning in the same process). Malformed / too-deep words
+        raise ``ValueError``.
     max_block_bytes : int, optional
         Refuse a block whose emitted tensor would exceed this many bytes
         (default 2 GiB). Raise it deliberately to allow a bigger block.
@@ -491,7 +519,8 @@ def read_tensors(
         On an unknown ``dtype``/``fit``, the strict ragged attrs gate, a
         missing ``morton`` sibling, an out-of-range ``block_order``, a block
         tensor over ``max_block_bytes``, a corrupt/misaligned occupancy
-        sidecar, or (with ``fit="raise"``) a window overflow.
+        sidecar, a ``subtree`` finer than the read chunks (or malformed /
+        too-deep), or (with ``fit="raise"``) a window overflow.
     ImportError
         When zagg's digest algebra is not installed (``moczarr[zagg]``).
     """
@@ -505,7 +534,9 @@ def read_tensors(
     side, depth = _tensor_side(arr, field)
     cells_per_chunk = side * side
 
-    chunks = iter_populated_chunks(arr)
+    span, spans = _subtree_span(arr, morton, field, subtree)
+    _refuse_sub_chunk(span, subtree, field, cells_per_chunk)
+    chunks = iter_populated_chunks(arr, span, spans)
     first = next(chunks, None)
     if first is None:
         return
@@ -518,11 +549,18 @@ def read_tensors(
         # the block subtree must be whole read chunks (coarser or equal).
         cell_order = _cells_order(first_words, field, first[0])
         chunk_order = cell_order - depth
-        if not 0 <= int(block_order) <= chunk_order:
+        min_order = 0
+        if span is not None:
+            # Blocks must tile INSIDE the subtree span (subtree_order ≤
+            # block_order): a coarser block would reach past the span and
+            # label a partial assembly with the bigger block's word.
+            min_order = cell_order - ((span[1] - span[0]).bit_length() - 1) // 2
+        if not min_order <= int(block_order) <= chunk_order:
             raise ValueError(
                 f"block_order {block_order} is out of range: a block assembles whole "
-                f"read chunks, so it must be between 0 and the chunk order "
-                f"{chunk_order} (block_order=None reads per chunk)"
+                f"read chunks within the visited span, so it must be between "
+                f"{min_order} and the chunk order {chunk_order} "
+                f"(block_order=None reads per chunk)"
             )
         block_depth = cell_order - int(block_order)
         block_cells = 4**block_depth

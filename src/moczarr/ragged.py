@@ -323,7 +323,11 @@ def stored_chunk_spans(arr: zarr.Array) -> list[tuple[int, int]]:
     return [(o * span, min((o + 1) * span, int(arr.shape[0]))) for o in ordinals]
 
 
-def iter_populated_chunks(arr: zarr.Array) -> Iterator[tuple[int, list[tuple[int, object]]]]:
+def iter_populated_chunks(
+    arr: zarr.Array,
+    span: tuple[int, int] | None = None,
+    spans: list[tuple[int, int]] | None = None,
+) -> Iterator[tuple[int, list[tuple[int, object]]]]:
     """Yield ``(chunk_start, [(rank, raw_bytes), ...])`` per populated read chunk.
 
     The bulk-sweep primitive shared by :func:`read_ragged` and the profile
@@ -338,12 +342,26 @@ def iter_populated_chunks(arr: zarr.Array) -> Iterator[tuple[int, list[tuple[int
     includes the §1.5 shard-index absence sentinel. ``rank`` is the cell's
     chunk-local NESTED rank — the same index the writer placed it at on the
     nested-ordered cells axis, never a row-major position.
+
+    ``span`` (issue #29) restricts the sweep to the stored objects
+    overlapping the ``[start, stop)`` cell span, clipped to whole read
+    chunks — the spec §1.5 contiguous-slice read plan: only the covering
+    portion of each overlapping object is sliced, and non-overlapping
+    stored objects are skipped without a fetch. ``spans`` threads in an
+    ALREADY-LISTED :func:`stored_chunk_spans` result (the one
+    :func:`_subtree_span` resolved against) so a restricted read LISTs the
+    array's data keys once, not twice; ``None`` lists here.
     """
     cells_per_chunk = int(arr.chunks[0])
-    for span_start, span_stop in stored_chunk_spans(arr):
-        span = cast(np.ndarray, arr[span_start:span_stop])
+    for span_start, span_stop in stored_chunk_spans(arr) if spans is None else spans:
+        if span is not None:
+            span_start = max(span_start, span[0] - span[0] % cells_per_chunk)
+            span_stop = min(span_stop, span[1] + -span[1] % cells_per_chunk)
+            if span_start >= span_stop:
+                continue
+        data = cast(np.ndarray, arr[span_start:span_stop])
         for offset in range(0, span_stop - span_start, cells_per_chunk):
-            block = span[offset : offset + cells_per_chunk]
+            block = data[offset : offset + cells_per_chunk]
             populated = [
                 (pos, block[pos]) for pos in range(len(block)) if not _is_empty(block[pos])
             ]

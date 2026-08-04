@@ -510,3 +510,121 @@ class TestOpenHiveCheckItem:
         for name in ("h_tdigest_signal", "h_tdigest_noise"):
             assert name in ds.data_vars
             assert ds[name].dtype == object  # surfaced, not decoded
+
+
+class TestSubtreeRefusalsAndWarnings:
+    """Issue #29 ``subtree=`` gates that need no digest algebra: the span
+    resolves (and warns/raises) before any payload byte is decoded."""
+
+    def test_sub_chunk_subtree_refused_pointing_at_read_cell(self):
+        # An order-6 word IS one cell — finer than the 4-cell read chunks.
+        with pytest.raises(ValueError, match="read_cell"):
+            list(read_tensors(_store(), SIGNAL, subtree=EXPECTED["shard"] + "11"))
+
+    def test_malformed_and_too_deep_raise(self):
+        with pytest.raises(ValueError):
+            list(read_tensors(_store(), SIGNAL, subtree="abc"))
+        with pytest.raises(ValueError, match="deeper than"):
+            list(read_tensors(_store(), SIGNAL, subtree=EXPECTED["shard"] + "111"))
+
+    def test_out_of_domain_word_warns_once_then_yields_nothing(self):
+        import warnings
+
+        sibling = EXPECTED["shard"][:-1] + "3"  # 43313: well-formed, disjoint
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            assert list(read_tensors(_store(), SIGNAL, subtree=sibling)) == []
+        msgs = [str(w.message) for w in rec if "outside this axis" in str(w.message)]
+        assert msgs == [
+            f"subtree {sibling} is outside this axis' order-4 root "
+            f"{EXPECTED['shard']} — yielding nothing"
+        ]
+
+    def test_in_domain_empty_subtree_yields_nothing_silently(self):
+        import warnings
+
+        empty = EXPECTED["shard"] + str(EXPECTED["empty_chunk"] + 1)  # chunk 2: no digests
+        with warnings.catch_warnings(record=True) as rec:
+            warnings.simplefilter("always")
+            assert list(read_tensors(_store(), SIGNAL, subtree=empty)) == []
+        assert [w for w in rec if "outside this axis" in str(w.message)] == []
+
+
+@needs_zagg
+class TestSubtreeReadTensors:
+    """Issue #29 ``subtree=`` on :func:`read_tensors`.
+
+    Golden contract (zagg's #351 acceptance): the subtree read equals the
+    whole-store sweep filtered to the blocks below ``w`` — bit-wise, because
+    blocks are whole read chunks: each block derives its z-window from the
+    same populated cell set in both reads, so tensor, mask, ``(offset,
+    gain)`` and morton id all match exactly.
+    """
+
+    @staticmethod
+    def _filtered(out, word, order):
+        """Whole-sweep blocks whose morton id descends from ``word``."""
+        from mortie import clip2order
+
+        return [
+            o for o in out if int(clip2order(order, np.asarray([o[3]], dtype=np.uint64))[0]) == word
+        ]
+
+    @staticmethod
+    def _assert_same(got, expected):
+        assert [o[3] for o in got] == [o[3] for o in expected]
+        for (t1, m1, s1, _w1), (t2, m2, s2, _w2) in zip(got, expected):
+            np.testing.assert_array_equal(t1, t2)
+            np.testing.assert_array_equal(m1, m2)
+            assert s1 == s2
+
+    @pytest.mark.parametrize("stratum", ["signal", "noise"])
+    @pytest.mark.parametrize("child", ["1", "4"])
+    def test_equals_filtered_sweep_both_currencies(self, stratum, child):
+        from moczarr.convention import morton_word
+
+        field = f"{GROUP}/h_tdigest_{stratum}"
+        key = EXPECTED["shard"] + child
+        sweep = list(read_tensors(_store(), field))
+        expected = self._filtered(sweep, morton_word(key), 5)
+        assert len(expected) == 1
+        for sub in (key, morton_word(key)):
+            self._assert_same(list(read_tensors(_store(), field, subtree=sub)), expected)
+
+    def test_root_subtree_equals_the_unrestricted_sweep(self):
+        self._assert_same(
+            list(read_tensors(_store(), SIGNAL, subtree=EXPECTED["shard"])),
+            list(read_tensors(_store(), SIGNAL)),
+        )
+
+    def test_block_assembly_inside_the_subtree(self):
+        """``subtree`` + ``block_order``: the assembled block equals the same
+        block of the unrestricted block-order sweep (the golden one)."""
+        got = list(
+            read_tensors(_store(), SIGNAL, subtree=EXPECTED["shard"], block_order=BLOCK_ORDER)
+        )
+        self._assert_same(got, list(read_tensors(_store(), SIGNAL, block_order=BLOCK_ORDER)))
+        assert len(got) == 1
+        np.testing.assert_array_equal(got[0][0], np.load(GOLDENS / "signal_block_tensor.npy"))
+
+    def test_block_order_coarser_than_the_subtree_raises(self):
+        key = EXPECTED["shard"] + "1"  # order 5 == the chunk order
+        with pytest.raises(ValueError, match="must be between 5 and the chunk order 5"):
+            list(read_tensors(_store(), SIGNAL, subtree=key, block_order=4))
+        assert len(list(read_tensors(_store(), SIGNAL, subtree=key, block_order=5))) == 1
+
+    def test_ancestor_word_block_order_floor_is_the_axis_root(self):
+        """A word above the leaf's root clips to the whole axis, so the
+        floor is the ROOT's order — the documented composed bound
+        ``max(subtree_order, axis_root_order) <= block_order <= chunk_order``."""
+        above = EXPECTED["shard"][:-1]  # 4331, order 3
+        with pytest.raises(ValueError, match="must be between 4 and the chunk order 5"):
+            list(read_tensors(_store(), SIGNAL, subtree=above, block_order=3))
+        assert len(list(read_tensors(_store(), SIGNAL, subtree=above, block_order=4))) == 1
+
+    def test_subtree_keeps_the_three_state_mask(self):
+        """The occupancy machinery is untouched by the restriction: chunk 4's
+        noise-only cell 13 still reads as ``1`` on the signal field."""
+        (block,) = list(read_tensors(_store(), SIGNAL, subtree=EXPECTED["shard"] + "4"))
+        _t, mask, _w, _m = block
+        assert int((mask == 1).sum()) >= 1
