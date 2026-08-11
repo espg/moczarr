@@ -18,17 +18,25 @@ tier discipline applied twice:
    o19 vs GEDI o18), the finer store's cells coarsen to the coarser order by
    4:1 OR-coarsening (``clip2order`` + unique: a coarse cell is occupied iff
    any of its four children is) before the AND. All results are at
-   ``min(cell_order_a, cell_order_b)``.
+   ``min(cell_order_a, cell_order_b)`` — the manifests set the harmonized
+   OUTPUT order, but the order of a leaf's decoded cells is what that
+   leaf's OWN envelope declares (``coverage["cell_order"]``, which is what
+   the sidecar decoded against). Reading the manifest's value there is a
+   silent false negative: a word carries its order in its low bits, so words
+   at two orders are never bit-equal and the AND simply matches nothing.
 
-Degradation, documented: a shared leaf WITHOUT exact occupancy — a stamp
-with no usable coverage envelope, a box-only envelope, or a ``"bitmap"``
-envelope whose sidecar object is missing — contributes its conservative
-cover instead (the tier-0 box, or the whole shard subtree when even the box
-is unusable). The intersection is then a conservative SUPERSET for cells
-under that leaf: false positives possible, false negatives impossible — the
-same posture as the box tier everywhere else — and the first such leaf per
-call raises a ``UserWarning``. Debris and absent leaves contribute nothing
-(absence is definitive; a clean GET miss is trustworthy on its own).
+Degradation, documented: a shared leaf WITHOUT exact occupancy at the
+harmonized order — a stamp with no usable coverage envelope, a box-only
+envelope, a ``"bitmap"`` envelope whose sidecar object is missing, or an
+envelope whose declared ``cell_order`` sits BELOW the harmonized order (its
+cells name subtrees there, not cells) — contributes its conservative cover
+instead (the tier-0 box, the decoded cells read as a cover, or the whole
+shard subtree when even the box is unusable). The intersection is then a
+conservative SUPERSET for cells under that leaf: false positives possible,
+false negatives impossible — the same posture as the box tier everywhere
+else — and the first such leaf per call raises a ``UserWarning``. Debris and
+absent leaves contribute nothing (absence is definitive; a clean GET miss is
+trustworthy on its own).
 
 Both API shapes of the zagg#422 open question 7 are implemented behind one
 shared test until the comparison picks the public surface:
@@ -64,6 +72,20 @@ from moczarr.store import (
 
 #: Internal occupancy kinds of one shared leaf (see ``_leaf_occupancy``).
 _EMPTY, _FULL, _CELLS, _BOX = "empty", "full", "cells", "box"
+
+
+class _Occupancy(NamedTuple):
+    """One leaf's classified occupancy: kind tag, payload, payload order.
+
+    ``order`` is the order the payload words actually live at — for
+    ``"cells"`` the LEAF ENVELOPE's ``cell_order`` (the value the sidecar
+    was decoded against), which is the only authority on how far those cells
+    must coarsen. ``-1`` where there is no payload.
+    """
+
+    kind: str
+    words: np.ndarray | None
+    order: int = -1
 
 
 class _Side(NamedTuple):
@@ -128,40 +150,53 @@ def _load_stamps(side: _Side, leaf_words: np.ndarray, concurrency) -> None:
     side.stamps.update(zip(unique, stamps))
 
 
-def _leaf_occupancy(side: _Side, word: int, warned: list) -> tuple[str, np.ndarray | None]:
-    """Classify one leaf's occupancy: kind tag plus its payload.
+def _leaf_occupancy(side: _Side, word: int, warned: list, out_order: int) -> _Occupancy:
+    """Classify one leaf's occupancy: kind tag, payload, payload order.
 
-    ``("empty", None)`` for debris/absent (nothing there — definitive);
-    ``("full", None)`` for ``encoding: "full"`` (whole subtree, exact, no
-    sidecar GET — the short-circuit) AND for the conservative stand-in when
-    a stamped leaf has no usable envelope at all; ``("cells", words)`` for a
-    decoded bitmap sidecar (exact); ``("box", words)`` for the conservative
-    tier-0 box (box-only envelopes, and bitmap envelopes whose sidecar
-    object is missing). The conservative kinds warn once per call.
+    ``"empty"`` for debris/absent (nothing there — definitive); ``"full"``
+    for ``encoding: "full"`` (whole subtree, exact, no sidecar GET — the
+    short-circuit) AND for the conservative stand-in when a stamped leaf has
+    no usable envelope at all; ``"cells"`` for a decoded bitmap sidecar
+    whose envelope order can still be made exact at ``out_order``;
+    ``"box"`` for a conservative cover — the tier-0 box (box-only envelopes,
+    and bitmap envelopes whose sidecar object is missing), or decoded cells
+    read AS a cover when the envelope's ``cell_order`` is below
+    ``out_order`` (those words name subtrees at the harmonized order, and
+    refining them would invent occupancy). The conservative kinds warn once
+    per call.
     """
     rel = side.leaves[word]
     stamp = side.stamps.get(word)
     if stamp is None:
-        return _EMPTY, None
+        return _Occupancy(_EMPTY, None)
     coverage = parse_leaf_coverage(stamp)
     if coverage is None:
         _warn_degraded(warned, side, rel, "stamp carries no usable coverage envelope")
-        return _FULL, None
+        return _Occupancy(_FULL, None)
     if coverage.get("encoding") == "full":
-        return _FULL, None
+        return _Occupancy(_FULL, None)
     if coverage.get("encoding") == "bitmap":
         cells = read_coverage_bitmap(side.root, rel, coverage=coverage, store=side.handle)
         if cells is not None:
-            return _CELLS, cells
+            env_order = int(coverage["cell_order"])
+            if env_order >= out_order:
+                return _Occupancy(_CELLS, cells, env_order)
+            _warn_degraded(
+                warned,
+                side,
+                rel,
+                f"envelope cell_order {env_order} is below the harmonized order {out_order}",
+            )
+            return _Occupancy(_BOX, cells, env_order)
     try:
         box = np.asarray(box_words(coverage), dtype=np.uint64)
     except (KeyError, TypeError, ValueError):
         box = np.empty(0, dtype=np.uint64)
     if box.size == 0:
         _warn_degraded(warned, side, rel, "coverage envelope has no exact encoding and no box")
-        return _FULL, None
+        return _Occupancy(_FULL, None)
     _warn_degraded(warned, side, rel, "no exact occupancy (box-only envelope or missing sidecar)")
-    return _BOX, box
+    return _Occupancy(_BOX, box)
 
 
 def _warn_degraded(warned: list, side: _Side, rel: str, why: str) -> None:
@@ -202,33 +237,35 @@ def _expand_to(words: np.ndarray, order: int) -> np.ndarray:
 
 
 def _region_cells(
-    side: _Side, kind: str, payload, region: int, region_order: int, out_order: int
+    side: _Side, occ: _Occupancy, region: int, region_order: int, out_order: int
 ) -> np.ndarray | None:
     """One side's occupancy inside ``region``, harmonized to ``out_order``.
 
     ``None`` means the whole region subtree (full — exact or conservative);
     otherwise sorted unique cell words at ``out_order``. Exact bitmap cells
-    restrict to the region by ancestor equality, then 4:1 OR-coarsen when the
-    side's cells out-resolve ``out_order``. The conservative box intersects
-    the region as a MOC and expands.
+    restrict to the region by ancestor equality (their envelope order is
+    at-or-below ``out_order``, which the compose guard puts at-or-below
+    ``region_order``, so the clip is always legal), then 4:1 OR-coarsen when
+    the ENVELOPE's order out-resolves ``out_order``. A conservative cover
+    intersects the region as a MOC and expands.
     """
     from mortie import clip2order
 
-    if kind == _EMPTY:
+    if occ.kind == _EMPTY:
         return np.empty(0, dtype=np.uint64)
-    if kind == _FULL:
+    if occ.kind == _FULL:
         return None
-    if kind == _CELLS:
-        cells = payload
+    if occ.kind == _CELLS:
+        cells = occ.words
         if side.shard_order < region_order:
             ancestors = np.asarray(clip2order(region_order, cells), dtype=np.uint64)
             cells = cells[ancestors == np.uint64(region)]
-        if side.cell_order > out_order:
+        if occ.order > out_order:
             cells = np.unique(np.asarray(clip2order(out_order, cells), dtype=np.uint64))
         return cells
     from mortie import moc_and
 
-    overlap = np.asarray(moc_and(payload, np.asarray([region], dtype=np.uint64)), dtype=np.uint64)
+    overlap = np.asarray(moc_and(occ.words, np.asarray([region], dtype=np.uint64)), dtype=np.uint64)
     return _expand_to(overlap, out_order)
 
 
@@ -277,16 +314,15 @@ def _iter_shared(
             )
         _load_stamps(side, leaf_words[id(side)], concurrency)
     warned: list = []
-    occupancy: dict[tuple[int, int], tuple[str, np.ndarray | None]] = {}
+    occupancy: dict[tuple[int, int], _Occupancy] = {}
     for i, region in enumerate(int(r) for r in regions):
         cells = []
         for side in (a, b):
             leaf = int(leaf_words[id(side)][i])
             key = (id(side), leaf)
             if key not in occupancy:
-                occupancy[key] = _leaf_occupancy(side, leaf, warned)
-            kind, payload = occupancy[key]
-            cells.append(_region_cells(side, kind, payload, region, region_order, out_order))
+                occupancy[key] = _leaf_occupancy(side, leaf, warned, out_order)
+            cells.append(_region_cells(side, occupancy[key], region, region_order, out_order))
         if cells[0] is None and cells[1] is None:
             full = np.asarray([region], dtype=np.uint64)
             yield region, _expand_to(full, out_order) if expand_full else None
