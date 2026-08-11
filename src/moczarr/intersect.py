@@ -128,6 +128,23 @@ class _Side(NamedTuple):
     stamps: dict[int, dict | None]  # shard word -> commit stamp (None = debris/absent)
 
 
+class _Plan(NamedTuple):
+    """One call's prepared state: everything :func:`_setup` resolves eagerly.
+
+    ``regions`` are the shared shard words at ``region_order``; ``leaf_words``
+    maps ``id(side)`` to that side's participating leaf per region (index
+    aligned with ``regions``), with its commit stamps already fetched.
+    ``out_order`` is the harmonized cell order every result sits at.
+    """
+
+    a: _Side
+    b: _Side
+    regions: np.ndarray
+    leaf_words: dict[int, np.ndarray]
+    region_order: int
+    out_order: int
+
+
 def _open_side(root: str, store: Any, window: str | None, aoi, concurrency, store_kwargs) -> _Side:
     """Open one store and enumerate its candidate leaves (root MOC or walk)."""
     from moczarr.open import _aoi_words, _candidate_leaves
@@ -348,7 +365,7 @@ def _and_parts(part_a: _Part, part_b: _Part, out_order: int) -> _Part:
     return _Part(_COVER, _clip_cover(members, out_order), out_order)
 
 
-def _iter_shared(
+def _setup(
     root_a: str,
     root_b: str,
     aoi,
@@ -358,14 +375,15 @@ def _iter_shared(
     store_b: Any,
     concurrency,
     store_kwargs: dict[str, Any],
-) -> Iterator[tuple[int, _Part]]:
-    """The shared core both API shapes consume.
+) -> _Plan:
+    """Everything both shapes do EAGERLY, before the first region is asked for.
 
-    Yields ``(region word, part)`` per shared region with a nonempty
-    intersection — an ``"exact"`` part whenever EITHER side knew its cells
-    exactly, otherwise the compact ``"cover"`` both sides agreed on (a
-    region full on both, or degraded on both). Shape (a) expands that cover;
-    shape (b) carries it straight into the flat MOC.
+    Opens both stores, validates the orders, resolves the shared regions and
+    each side's participating leaf per region, and batches the commit-stamp
+    GETs. Split out so shape (a) can be a plain function returning a
+    generator: a bad root or an incomposable pair of stores is a call-time
+    ``ValueError``, not a surprise at the consumer's first ``next()`` in some
+    unrelated frame.
     """
     a = _open_side(root_a, store_a, window_a, aoi, concurrency, store_kwargs)
     b = _open_side(root_b, store_b, window_b, aoi, concurrency, store_kwargs)
@@ -378,30 +396,43 @@ def _iter_shared(
             f"region has no cell representation in both stores"
         )
     regions = _shared_regions(a, b)
-    if regions.size == 0:
-        return
-    from mortie import clip2order
+    leaf_words: dict[int, np.ndarray] = {}
+    if regions.size:
+        from mortie import clip2order
 
-    leaf_words = {}
-    for side in (a, b):
-        if side.shard_order == region_order:
-            leaf_words[id(side)] = regions
-        else:
-            leaf_words[id(side)] = np.asarray(
-                clip2order(side.shard_order, regions), dtype=np.uint64
-            )
-        _load_stamps(side, leaf_words[id(side)], concurrency)
+        for side in (a, b):
+            if side.shard_order == region_order:
+                leaf_words[id(side)] = regions
+            else:
+                leaf_words[id(side)] = np.asarray(
+                    clip2order(side.shard_order, regions), dtype=np.uint64
+                )
+            _load_stamps(side, leaf_words[id(side)], concurrency)
+    return _Plan(a, b, regions, leaf_words, region_order, out_order)
+
+
+def _iter_parts(plan: _Plan) -> Iterator[tuple[int, _Part]]:
+    """The shared core both API shapes consume, over a prepared :class:`_Plan`.
+
+    Yields ``(region word, part)`` per shared region with a nonempty
+    intersection — an ``"exact"`` part whenever EITHER side knew its cells
+    exactly, otherwise the compact ``"cover"`` both sides agreed on (a
+    region full on both, or degraded on both). Shape (a) expands that cover;
+    shape (b) carries it straight into the flat MOC.
+    """
     warned: list = []
     occupancy: dict[tuple[int, int], _Occupancy] = {}
-    for i, region in enumerate(int(r) for r in regions):
+    for i, region in enumerate(int(r) for r in plan.regions):
         parts = []
-        for side in (a, b):
-            leaf = int(leaf_words[id(side)][i])
+        for side in (plan.a, plan.b):
+            leaf = int(plan.leaf_words[id(side)][i])
             key = (id(side), leaf)
             if key not in occupancy:
-                occupancy[key] = _leaf_occupancy(side, leaf, warned, out_order)
-            parts.append(_region_part(side, occupancy[key], region, region_order, out_order))
-        hit = _and_parts(parts[0], parts[1], out_order)
+                occupancy[key] = _leaf_occupancy(side, leaf, warned, plan.out_order)
+            parts.append(
+                _region_part(side, occupancy[key], region, plan.region_order, plan.out_order)
+            )
+        hit = _and_parts(parts[0], parts[1], plan.out_order)
         if hit.words.size:
             yield region, hit
 
@@ -442,9 +473,11 @@ def iter_occupancy_and(
 
     Degradation and its ``UserWarning`` are per the module docstring: leaves
     without exact occupancy contribute their conservative cover, making the
-    result a superset under those leaves only. Raises ``ValueError`` when a
-    root has no manifest, or when the orders do not compose (one store's
-    cell order above the other's shard order).
+    result a superset under those leaves only. Raises ``ValueError`` AT CALL
+    TIME — not at the first ``next()`` — when a root has no manifest, or when
+    the orders do not compose (one store's cell order above the other's shard
+    order): both stores are opened and validated before the iterator exists,
+    so a store-root typo surfaces where it was made.
 
     Cost: yielding CELLS is what shape (a) is for, and a region whose result
     is a cover on BOTH sides — full-on-both (exact, and bounded by the
@@ -455,17 +488,24 @@ def iter_occupancy_and(
     at all; reach for it when the harmonized order is far below the shard
     order.
     """
-    for region, part in _iter_shared(
-        root_a,
-        root_b,
-        aoi,
-        window_a,
-        window_b,
-        store_a,
-        store_b,
-        concurrency,
-        store_kwargs,
-    ):
+    return _iter_cells(
+        _setup(
+            root_a,
+            root_b,
+            aoi,
+            window_a,
+            window_b,
+            store_a,
+            store_b,
+            concurrency,
+            store_kwargs,
+        )
+    )
+
+
+def _iter_cells(plan: _Plan) -> Iterator[tuple[int, np.ndarray]]:
+    """Shape (a)'s generator half: parts as cells, covers expanded once."""
+    for region, part in _iter_parts(plan):
         cells = part.words if part.kind == _EXACT else _expand_to(part.words, part.order)
         if cells.size:
             yield region, cells
@@ -500,20 +540,10 @@ def occupancy_and(
     depth (the expansion :func:`iter_occupancy_and` documents is the price
     of yielding cells, not of the intersection).
     """
-    parts = [
-        part.words
-        for _region, part in _iter_shared(
-            root_a,
-            root_b,
-            aoi,
-            window_a,
-            window_b,
-            store_a,
-            store_b,
-            concurrency,
-            store_kwargs,
-        )
-    ]
+    plan = _setup(
+        root_a, root_b, aoi, window_a, window_b, store_a, store_b, concurrency, store_kwargs
+    )
+    parts = [part.words for _region, part in _iter_parts(plan)]
     if not parts:
         return np.empty(0, dtype=np.uint64)
     from mortie import compress_moc

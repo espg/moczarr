@@ -423,3 +423,18 @@ class TestEdges:
         empty.mkdir()
         with pytest.raises(ValueError, match="morton_hive.json"):
             occupancy_and(root_a, str(empty))
+
+    def test_iterator_errors_fire_at_call_time(self, tmp_path, golden_pair):
+        # iter_occupancy_and opens and validates both stores EAGERLY and
+        # returns a generator over the prepared state — so the documented
+        # ValueErrors land at the call, not at whatever frame first calls
+        # next() (note: no list() below).
+        root_a, _root_b = golden_pair
+        empty = tmp_path / "empty"
+        empty.mkdir()
+        with pytest.raises(ValueError, match="morton_hive.json"):
+            iter_occupancy_and(root_a, str(empty))
+        root_c = build_store(tmp_path / "c", {}, cell_order=6, shard_order=6)
+        root_d = build_store(tmp_path / "d", {}, cell_order=9, shard_order=7)
+        with pytest.raises(ValueError, match="do not compose"):
+            iter_occupancy_and(root_c, root_d)
