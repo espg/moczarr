@@ -34,9 +34,13 @@ instead (the tier-0 box, the decoded cells read as a cover, or the whole
 shard subtree when even the box is unusable). The intersection is then a
 conservative SUPERSET for cells under that leaf: false positives possible,
 false negatives impossible — the same posture as the box tier everywhere
-else — and the first such leaf per call raises a ``UserWarning``. Debris and
-absent leaves contribute nothing (absence is definitive; a clean GET miss is
-trustworthy on its own).
+else — and the first such leaf per call raises a ``UserWarning``. That is
+the ``degrade="conservative"`` default; ``degrade="skip"`` drops such leaves
+instead (nothing is yielded under them, so everything returned IS exact —
+exact-or-under rather than superset) and ``degrade="raise"`` refuses the
+call, naming the first one. Debris and absent leaves contribute nothing
+under every policy (absence is definitive; a clean GET miss is trustworthy
+on its own).
 
 Both API shapes of the zagg#422 open question 7 are implemented behind one
 shared test until the comparison picks the public surface:
@@ -84,6 +88,9 @@ from moczarr.store import (
 _EMPTY, _FULL, _CELLS, _BOX = "empty", "full", "cells", "box"
 #: Internal currencies of one region's contribution (see ``_region_part``).
 _EXACT, _COVER = "exact", "cover"
+#: ``degrade=`` policies for a leaf without exact occupancy (see ``_degrade``).
+_CONSERVATIVE, _SKIP, _RAISE = "conservative", "skip", "raise"
+_DEGRADE_MODES = (_CONSERVATIVE, _SKIP, _RAISE)
 
 
 class _Part(NamedTuple):
@@ -134,7 +141,8 @@ class _Plan(NamedTuple):
     ``regions`` are the shared shard words at ``region_order``; ``leaf_words``
     maps ``id(side)`` to that side's participating leaf per region (index
     aligned with ``regions``), with its commit stamps already fetched.
-    ``out_order`` is the harmonized cell order every result sits at.
+    ``out_order`` is the harmonized cell order every result sits at, and
+    ``degrade`` the policy for leaves that cannot answer exactly there.
     """
 
     a: _Side
@@ -143,6 +151,7 @@ class _Plan(NamedTuple):
     leaf_words: dict[int, np.ndarray]
     region_order: int
     out_order: int
+    degrade: str
 
 
 def _open_side(root: str, store: Any, window: str | None, aoi, concurrency, store_kwargs) -> _Side:
@@ -196,7 +205,9 @@ def _load_stamps(side: _Side, leaf_words: np.ndarray, concurrency) -> None:
     side.stamps.update(zip(unique, stamps))
 
 
-def _leaf_occupancy(side: _Side, word: int, warned: list, out_order: int) -> _Occupancy:
+def _leaf_occupancy(
+    side: _Side, word: int, warned: list, out_order: int, policy: str
+) -> _Occupancy:
     """Classify one leaf's occupancy: kind tag, payload, payload order.
 
     ``"empty"`` for debris/absent (nothing there — definitive); ``"full"``
@@ -208,8 +219,8 @@ def _leaf_occupancy(side: _Side, word: int, warned: list, out_order: int) -> _Oc
     and bitmap envelopes whose sidecar object is missing), or decoded cells
     read AS a cover when the envelope's ``cell_order`` is below
     ``out_order`` (those words name subtrees at the harmonized order, and
-    refining them would invent occupancy). The conservative kinds warn once
-    per call.
+    refining them would invent occupancy). Every conservative outcome goes
+    through :func:`_degrade`, which the caller's ``degrade=`` policy governs.
     """
     rel = side.leaves[word]
     stamp = side.stamps.get(word)
@@ -217,8 +228,8 @@ def _leaf_occupancy(side: _Side, word: int, warned: list, out_order: int) -> _Oc
         return _Occupancy(_EMPTY, None)
     coverage = parse_leaf_coverage(stamp)
     if coverage is None:
-        _warn_degraded(warned, side, rel, "stamp carries no usable coverage envelope")
-        return _Occupancy(_FULL, None)
+        why = "stamp carries no usable coverage envelope"
+        return _degrade(policy, warned, side, rel, why, _Occupancy(_FULL, None))
     if coverage.get("encoding") == "full":
         return _Occupancy(_FULL, None)
     if coverage.get("encoding") == "bitmap":
@@ -227,36 +238,53 @@ def _leaf_occupancy(side: _Side, word: int, warned: list, out_order: int) -> _Oc
             env_order = int(coverage["cell_order"])
             if env_order >= out_order:
                 return _Occupancy(_CELLS, cells, env_order)
-            _warn_degraded(
-                warned,
-                side,
-                rel,
-                f"envelope cell_order {env_order} is below the harmonized order {out_order}",
-            )
-            return _Occupancy(_BOX, cells, env_order)
+            why = f"envelope cell_order {env_order} is below the harmonized order {out_order}"
+            return _degrade(policy, warned, side, rel, why, _Occupancy(_BOX, cells, env_order))
     try:
         box = np.asarray(box_words(coverage), dtype=np.uint64)
     except (KeyError, TypeError, ValueError):
         box = np.empty(0, dtype=np.uint64)
     if box.size == 0:
-        _warn_degraded(warned, side, rel, "coverage envelope has no exact encoding and no box")
-        return _Occupancy(_FULL, None)
-    _warn_degraded(warned, side, rel, "no exact occupancy (box-only envelope or missing sidecar)")
-    return _Occupancy(_BOX, box)
+        why = "coverage envelope has no exact encoding and no box"
+        return _degrade(policy, warned, side, rel, why, _Occupancy(_FULL, None))
+    why = "box-only envelope or missing sidecar"
+    return _degrade(policy, warned, side, rel, why, _Occupancy(_BOX, box))
 
 
-def _warn_degraded(warned: list, side: _Side, rel: str, why: str) -> None:
-    """One ``UserWarning`` per call for the first leaf without exact occupancy."""
-    if warned:
-        return
-    warned.append(rel)
-    warnings.warn(
-        f"leaf {rel} of {side.root} contributes a conservative cover ({why}): the "
-        f"intersection is a SUPERSET for cells under such leaves — false positives "
-        f"possible, false negatives impossible. Further degraded leaves in this call "
-        f"do not re-warn.",
-        stacklevel=2,
-    )
+def _degrade(
+    policy: str, warned: list, side: _Side, rel: str, why: str, fallback: _Occupancy
+) -> _Occupancy:
+    """Apply the call's ``degrade=`` policy to one leaf without exact occupancy.
+
+    ``"conservative"`` (the default) takes ``fallback`` — the leaf's
+    conservative cover — and raises ONE ``UserWarning`` per call, for the
+    first such leaf. ``"skip"`` drops the leaf: it contributes nothing, so
+    the call's result is exact-or-under rather than a superset, which is the
+    discriminator a consumer keying on per-cell truth needs. ``"raise"``
+    stops and names the first such leaf.
+
+    No ``stacklevel`` on the warning: the leaf is classified inside a
+    generator driven by the consumer, so no stack level reaches the call
+    site — the message names the store and leaf instead, and module-scoped
+    ``-W`` filters key on ``moczarr.intersect``.
+    """
+    if policy == _RAISE:
+        raise ValueError(
+            f"leaf {rel} of {side.root} has no exact occupancy ({why}) and degrade='raise' "
+            f"refuses a conservative answer — use degrade='conservative' to accept the "
+            f"superset, or degrade='skip' to drop such leaves"
+        )
+    if policy == _SKIP:
+        return _Occupancy(_EMPTY, None)
+    if not warned:
+        warned.append(rel)
+        warnings.warn(
+            f"leaf {rel} of {side.root} contributes a conservative cover ({why}): the "
+            f"intersection is a SUPERSET for cells under such leaves — false positives "
+            f"possible, false negatives impossible. Further degraded leaves in this call "
+            f"do not re-warn; degrade='skip' drops them and degrade='raise' refuses them."
+        )
+    return fallback
 
 
 def _expand_to(words: np.ndarray, order: int) -> np.ndarray:
@@ -375,16 +403,19 @@ def _setup(
     store_b: Any,
     concurrency,
     store_kwargs: dict[str, Any],
+    degrade: str,
 ) -> _Plan:
     """Everything both shapes do EAGERLY, before the first region is asked for.
 
-    Opens both stores, validates the orders, resolves the shared regions and
-    each side's participating leaf per region, and batches the commit-stamp
-    GETs. Split out so shape (a) can be a plain function returning a
-    generator: a bad root or an incomposable pair of stores is a call-time
-    ``ValueError``, not a surprise at the consumer's first ``next()`` in some
-    unrelated frame.
+    Validates ``degrade``, opens both stores, validates the orders, resolves
+    the shared regions and each side's participating leaf per region, and
+    batches the commit-stamp GETs. Split out so shape (a) can be a plain
+    function returning a generator: a bad root, a bad knob, or an
+    incomposable pair of stores is a call-time ``ValueError``, not a surprise
+    at the consumer's first ``next()`` in some unrelated frame.
     """
+    if degrade not in _DEGRADE_MODES:
+        raise ValueError(f"degrade={degrade!r} is not one of {_DEGRADE_MODES}")
     a = _open_side(root_a, store_a, window_a, aoi, concurrency, store_kwargs)
     b = _open_side(root_b, store_b, window_b, aoi, concurrency, store_kwargs)
     out_order = min(a.cell_order, b.cell_order)
@@ -408,7 +439,7 @@ def _setup(
                     clip2order(side.shard_order, regions), dtype=np.uint64
                 )
             _load_stamps(side, leaf_words[id(side)], concurrency)
-    return _Plan(a, b, regions, leaf_words, region_order, out_order)
+    return _Plan(a, b, regions, leaf_words, region_order, out_order, degrade)
 
 
 def _iter_parts(plan: _Plan) -> Iterator[tuple[int, _Part]]:
@@ -428,7 +459,7 @@ def _iter_parts(plan: _Plan) -> Iterator[tuple[int, _Part]]:
             leaf = int(plan.leaf_words[id(side)][i])
             key = (id(side), leaf)
             if key not in occupancy:
-                occupancy[key] = _leaf_occupancy(side, leaf, warned, plan.out_order)
+                occupancy[key] = _leaf_occupancy(side, leaf, warned, plan.out_order, plan.degrade)
             parts.append(
                 _region_part(side, occupancy[key], region, plan.region_order, plan.out_order)
             )
@@ -447,6 +478,7 @@ def iter_occupancy_and(
     store_a: Any = None,
     store_b: Any = None,
     concurrency: int | None = 32,
+    degrade: str = _CONSERVATIVE,
     **store_kwargs: Any,
 ) -> Iterator[tuple[int, np.ndarray]]:
     """Exact shared occupancy of two hive stores, streamed per shared leaf.
@@ -471,9 +503,16 @@ def iter_occupancy_and(
     credentials — ``store_kwargs`` apply to BOTH roots otherwise).
     ``concurrency`` bounds the batched stamp GETs and walk LISTs.
 
-    Degradation and its ``UserWarning`` are per the module docstring: leaves
-    without exact occupancy contribute their conservative cover, making the
-    result a superset under those leaves only. Raises ``ValueError`` AT CALL
+    ``degrade`` picks what a leaf without exact occupancy at the harmonized
+    order does — the module docstring lists which leaves those are:
+    ``"conservative"`` (default) contributes its cover, so the result is a
+    SUPERSET under that leaf (false positives possible, false negatives
+    impossible) and the first such leaf per call raises one ``UserWarning``;
+    ``"skip"`` drops it, so the leaf contributes nothing and EVERYTHING
+    yielded is exact — exact-or-under instead of superset, the discriminator
+    a per-cell consumer needs — at the price of silently missing real shared
+    occupancy under it; ``"raise"`` refuses, naming the first such leaf.
+    Raises ``ValueError`` AT CALL
     TIME — not at the first ``next()`` — when a root has no manifest, or when
     the orders do not compose (one store's cell order above the other's shard
     order): both stores are opened and validated before the iterator exists,
@@ -499,6 +538,7 @@ def iter_occupancy_and(
             store_b,
             concurrency,
             store_kwargs,
+            degrade,
         )
     )
 
@@ -521,6 +561,7 @@ def occupancy_and(
     store_a: Any = None,
     store_b: Any = None,
     concurrency: int | None = 32,
+    degrade: str = _CONSERVATIVE,
     **store_kwargs: Any,
 ) -> np.ndarray:
     """Exact shared occupancy of two hive stores as one flat compacted MOC.
@@ -531,8 +572,8 @@ def occupancy_and(
     compacts to its ancestor word, so dense overlap stays small, and the
     empty intersection is an empty array. Expanding every member to the
     coarser cell order yields exactly the union of the iterator's cells
-    (pinned by the shared golden test). Parameters, degradation, and errors
-    are identical to :func:`iter_occupancy_and`.
+    (pinned by the shared golden test). Parameters (``degrade`` included),
+    degradation, and errors are identical to :func:`iter_occupancy_and`.
 
     Cost: this shape stays in MOC currency end to end — a region that is
     full or degraded on both sides contributes its ancestor WORD, not its
@@ -541,7 +582,16 @@ def occupancy_and(
     of yielding cells, not of the intersection).
     """
     plan = _setup(
-        root_a, root_b, aoi, window_a, window_b, store_a, store_b, concurrency, store_kwargs
+        root_a,
+        root_b,
+        aoi,
+        window_a,
+        window_b,
+        store_a,
+        store_b,
+        concurrency,
+        store_kwargs,
+        degrade,
     )
     parts = [part.words for _region, part in _iter_parts(plan)]
     if not parts:
