@@ -295,6 +295,60 @@ class TestDifferentShardOrders:
         assert list(got) == [morton_word(S1 + "1")]
         np.testing.assert_array_equal(got[morton_word(S1 + "1")], _words(S1 + "12"))
 
+    def _mixed_pair(self, tmp_path):
+        """Both harmonizations at once — the issue's ATL03-o19-vs-GEDI-o18 shape.
+
+        A shards at order 6 and cells at o9; D shards at order 7 and cells at
+        o8. So regions sit at order 7 (D's leaves), results at order 8, and
+        A's cells cross BOTH steps: restricted to a region by ancestor
+        equality at o7, then 4:1 OR-coarsened o9 -> o8.
+        """
+        root_a = build_store(tmp_path / "a", {S1: ("bitmap", ["111", "123", "311"])}, cell_order=9)
+        root_d = build_store(
+            tmp_path / "d",
+            {S1 + "1": ("bitmap", ["1", "3"]), S1 + "3": ("bitmap", ["2"])},
+            cell_order=8,
+            shard_order=7,
+        )
+        return root_a, root_d
+
+    def test_mixed_shard_and_cell_orders(self, tmp_path):
+        got, _moc = _both_shapes(*self._mixed_pair(tmp_path), out_order=8)
+        # Region S1+"1": A's o9 cells under it are {111, 123}, which coarsen
+        # to {11, 12}; D's leaf there holds {11, 13} -> {11}.
+        # Region S1+"3": A's {311} coarsens to {31}, D's leaf holds {32} ->
+        # empty, so the region is skipped.
+        assert list(got) == [morton_word(S1 + "1")]
+        np.testing.assert_array_equal(got[morton_word(S1 + "1")], _words(S1 + "11"))
+
+    def test_swapped_operands_agree_on_the_mixed_pair(self, tmp_path):
+        # _shared_regions is the one function whose two branches are
+        # asymmetric by construction, so pin symmetry for BOTH shapes here
+        # rather than only on the equal-shard-order golden pair.
+        root_a, root_d = self._mixed_pair(tmp_path)
+        forward = dict(iter_occupancy_and(root_a, root_d))
+        reverse = dict(iter_occupancy_and(root_d, root_a))
+        assert list(forward) == list(reverse)
+        for region, cells in forward.items():
+            np.testing.assert_array_equal(reverse[region], cells)
+        np.testing.assert_array_equal(occupancy_and(root_a, root_d), occupancy_and(root_d, root_a))
+
+    def test_coarse_full_leaf_spans_several_fine_regions(self, tmp_path):
+        # ONE coarse "full" leaf covers BOTH of the fine store's shards: the
+        # short-circuit answers each region separately off that one cached
+        # leaf, and each keeps its own restricted intersection.
+        root_a = build_store(tmp_path / "a", {S1: "full"}, cell_order=8)
+        root_d = build_store(
+            tmp_path / "d",
+            {S1 + "1": ("bitmap", ["2"]), S1 + "3": ("bitmap", ["1"])},
+            cell_order=8,
+            shard_order=7,
+        )
+        got, _moc = _both_shapes(root_a, root_d, out_order=8)
+        assert list(got) == [morton_word(S1 + "1"), morton_word(S1 + "3")]
+        np.testing.assert_array_equal(got[morton_word(S1 + "1")], _words(S1 + "12"))
+        np.testing.assert_array_equal(got[morton_word(S1 + "3")], _words(S1 + "31"))
+
 
 class TestEnvelopeOrderAuthority:
     """The decoded cells' order is the leaf ENVELOPE's, never the manifest's."""
