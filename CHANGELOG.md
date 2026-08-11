@@ -14,16 +14,25 @@
   `iter_occupancy_and` (an iterator of `(leaf_id, intersected cell words)`
   per shared leaf) and `occupancy_and` (one flat compacted MOC). Leaves
   without exact occupancy (box-only envelopes, missing sidecars, stamps
-  without envelopes) contribute their conservative cover — the result is a
+  without envelopes, or an envelope whose own `cell_order` sits below the
+  harmonized order) contribute their conservative cover — the result is a
   documented SUPERSET under such leaves, with a once-per-call
-  `UserWarning`; debris and absent leaves contribute nothing.
+  `UserWarning`; debris and absent leaves contribute nothing. `degrade=`
+  chooses that default (`"conservative"`) or `"skip"` (drop such leaves, so
+  everything returned is exact) or `"raise"`. Conservative covers stay
+  compact MOCs through the whole intersection: `occupancy_and` never
+  materializes a subtree, and `iter_occupancy_and` only where it has to
+  yield the cells of a region that stayed a cover on BOTH sides.
 
 - `convention.morton_word` now parses via mortie's **public**
   `decimal_to_word` ([#38](https://github.com/espg/moczarr/issues/38);
   espg/mortie#114/#156) instead of the deprecated private
   `_decimal_to_word`, which carried no compatibility promise across mortie
-  releases. Output is unchanged (pinned by the existing golden vectors plus
-  a new scalar/batched parity pin); no mortie floor change.
+  releases, and the batched `decimals_to_words` replaces the per-label
+  loops in `coverage.ranges_words` and `coverage.decode_bitmap` (one
+  Python→Rust crossing per envelope instead of per shard / per occupied
+  cell). Output is unchanged (pinned by the existing golden vectors plus a
+  new scalar/batched parity pin); no mortie floor change.
 
 - Span-restricted (subtree) reads for the ragged/HHDC layer
   ([#29](https://github.com/espg/moczarr/issues/29); the counterpart of
