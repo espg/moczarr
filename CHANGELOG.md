@@ -18,6 +18,13 @@
   documented SUPERSET under such leaves, with a once-per-call
   `UserWarning`; debris and absent leaves contribute nothing.
 
+- `convention.morton_word` now parses via mortie's **public**
+  `decimal_to_word` ([#38](https://github.com/espg/moczarr/issues/38);
+  espg/mortie#114/#156) instead of the deprecated private
+  `_decimal_to_word`, which carried no compatibility promise across mortie
+  releases. Output is unchanged (pinned by the existing golden vectors plus
+  a new scalar/batched parity pin); no mortie floor change.
+
 - Span-restricted (subtree) reads for the ragged/HHDC layer
   ([#29](https://github.com/espg/moczarr/issues/29); the counterpart of
   englacial/zagg#351, normative property zagg spec §1.5 "Subtree spans"):

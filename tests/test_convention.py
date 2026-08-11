@@ -34,6 +34,24 @@ class TestIds:
     def test_golden_word(self):
         assert convention.morton_word(SHARD) == SHARD_WORD
 
+    def test_public_mortie_parsers_match_the_goldens(self):
+        # issue #38: morton_word rides the public decimal_to_word
+        # (espg/mortie#114) instead of the deprecated private
+        # _decimal_to_word. Pin BOTH public forms — the scalar the seam
+        # calls and the batched decimals_to_words a batch caller reaches
+        # for — against the frozen golden word, so a behavior change in
+        # either fails here before it can drift morton_word.
+        import mortie
+
+        assert int(mortie.decimal_to_word(SHARD)) == SHARD_WORD
+        np.testing.assert_array_equal(
+            np.asarray(mortie.decimals_to_words([SHARD, NORTH]), dtype=np.uint64),
+            np.asarray(
+                [convention.morton_word(SHARD), convention.morton_word(NORTH)],
+                dtype=np.uint64,
+            ),
+        )
+
     def test_order_base_rank(self, shard):
         assert convention.decimal_order(shard) == 6
         assert convention.decimal_base(shard) == ("-5" if shard.startswith("-") else "5")
