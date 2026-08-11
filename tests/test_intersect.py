@@ -351,6 +351,23 @@ class TestDegradation:
         # The envelope's box is the whole shard -> the exact side passes through.
         np.testing.assert_array_equal(got[morton_word(S8)], _words(S8 + "1", S8 + "2"))
 
+    def test_degraded_against_exact_never_expands(self, tmp_path, monkeypatch):
+        # A conservative cover stays a cover: the AND against an exact side
+        # is a containment filter over the exact side's cells, so no subtree
+        # is ever materialized. (Expanding the cover to every cell at the
+        # harmonized order is 4^depth words per degraded leaf — GB-scale at
+        # ATL03 depths, for an answer bounded by the other side.)
+        calls = []
+        real = intersect._expand_to
+        monkeypatch.setattr(
+            intersect, "_expand_to", lambda words, order: calls.append(order) or real(words, order)
+        )
+        root_e = build_store(tmp_path / "e", {S8: ("box", [S8 + "1"])}, cell_order=8)
+        with pytest.warns(UserWarning, match="conservative"):
+            got, _moc = _both_shapes(root_e, self._coarse(tmp_path), out_order=7)
+        np.testing.assert_array_equal(got[morton_word(S8)], _words(S8 + "1"))
+        assert calls == []
+
     def test_debris_and_absent_leaves_contribute_nothing(self, tmp_path):
         root_i = build_store(
             tmp_path / "i",

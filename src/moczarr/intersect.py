@@ -48,6 +48,16 @@ shared test until the comparison picks the public surface:
   intersection (a fully-shared subtree compacts to its ancestor word, so
   dense overlap stays small).
 
+The AND itself runs in MOC currency and never materializes a subtree:
+exact cells against a conservative cover are filtered by containment
+(``coverage.aoi_mask``), cover against cover is a ``moc_and``, so the work
+is bounded by the exact side wherever one exists. Cells are materialized
+only where shape (a) has to yield them, and only for a region that is a
+cover on BOTH sides — full-on-both (exact by construction; its whole
+subtree IS the answer) or degraded on both — at
+``4^(out_order - region_order)`` words. Shape (b) never expands. That
+asymmetry is itself an input to the zagg#422 shape decision.
+
 Spec + fixtures only, per the moczarr contract: everything here decodes
 from zagg ``docs/specification.md`` via this package's own convention /
 coverage / store layers — no zagg import.
@@ -62,7 +72,7 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from moczarr.convention import morton_word, split_leaf_name
-from moczarr.coverage import box_words, parse_leaf_coverage
+from moczarr.coverage import aoi_mask, box_words, parse_leaf_coverage
 from moczarr.store import (
     open_object_store,
     read_commits,
@@ -72,6 +82,25 @@ from moczarr.store import (
 
 #: Internal occupancy kinds of one shared leaf (see ``_leaf_occupancy``).
 _EMPTY, _FULL, _CELLS, _BOX = "empty", "full", "cells", "box"
+#: Internal currencies of one region's contribution (see ``_region_part``).
+_EXACT, _COVER = "exact", "cover"
+
+
+class _Part(NamedTuple):
+    """One side's contribution to ONE region, in one of two currencies.
+
+    ``"exact"`` — cell words AT ``order`` (the harmonized order), the truth.
+    ``"cover"`` — a compact mixed-order MOC (members between the region's
+    own order and ``order``) standing in conservatively for cells that are
+    not known exactly. A cover is NEVER expanded to cells inside the
+    intersection: a degraded leaf at zagg's depths is 4^13 words, and every
+    AND below has a form that keeps it compact. ``order`` travels with the
+    part so a consumer that does want cells knows what to expand to.
+    """
+
+    kind: str
+    words: np.ndarray
+    order: int
 
 
 class _Occupancy(NamedTuple):
@@ -236,25 +265,46 @@ def _expand_to(words: np.ndarray, order: int) -> np.ndarray:
     return np.unique(np.concatenate(parts))
 
 
-def _region_cells(
-    side: _Side, occ: _Occupancy, region: int, region_order: int, out_order: int
-) -> np.ndarray | None:
-    """One side's occupancy inside ``region``, harmonized to ``out_order``.
+def _clip_cover(words: np.ndarray, order: int) -> np.ndarray:
+    """A cover with no member finer than ``order`` — deeper members clip up.
 
-    ``None`` means the whole region subtree (full — exact or conservative);
-    otherwise sorted unique cell words at ``out_order``. Exact bitmap cells
-    restrict to the region by ancestor equality (their envelope order is
-    at-or-below ``out_order``, which the compose guard puts at-or-below
-    ``region_order``, so the clip is always legal), then 4:1 OR-coarsen when
-    the ENVELOPE's order out-resolves ``out_order``. A conservative cover
-    intersects the region as a MOC and expands.
+    Enlarging a member to its ancestor is conservative in the direction the
+    cover tier already allows (superset), and it caps every cover in this
+    module at ``out_order`` so a cover can never out-resolve the exact tier
+    it is ANDed against. ``clip2order`` is per-element: coarser members pass
+    through untouched.
+    """
+    if words.size == 0:
+        return np.empty(0, dtype=np.uint64)
+    from mortie import clip2order
+
+    return np.unique(np.asarray(clip2order(order, words), dtype=np.uint64))
+
+
+def _region_part(
+    side: _Side, occ: _Occupancy, region: int, region_order: int, out_order: int
+) -> _Part:
+    """One side's contribution to ``region``: exact cells, or a compact cover.
+
+    Exact bitmap cells restrict to the region by ancestor equality (their
+    envelope order is at-or-above ``out_order``, which the compose guard puts
+    at-or-above ``region_order``, so the clip is always legal), then 4:1
+    OR-coarsen when the ENVELOPE's order out-resolves ``out_order`` — an
+    ``"exact"`` part, always at ``out_order``.
+
+    Everything conservative stays a ``"cover"``: mixed-order MOC members
+    intersected with the region (``moc_and``, so members land at-or-below
+    ``region_order``) and clipped up to ``out_order``. ``"full"`` is just
+    the cover ``[region]``. Nothing here materializes a subtree — the whole
+    point of keeping covers compact (a degraded leaf at ATL03 depths is
+    4^13 cells).
     """
     from mortie import clip2order
 
     if occ.kind == _EMPTY:
-        return np.empty(0, dtype=np.uint64)
+        return _Part(_EXACT, np.empty(0, dtype=np.uint64), out_order)
     if occ.kind == _FULL:
-        return None
+        return _Part(_COVER, np.asarray([region], dtype=np.uint64), out_order)
     if occ.kind == _CELLS:
         cells = occ.words
         if side.shard_order < region_order:
@@ -262,11 +312,40 @@ def _region_cells(
             cells = cells[ancestors == np.uint64(region)]
         if occ.order > out_order:
             cells = np.unique(np.asarray(clip2order(out_order, cells), dtype=np.uint64))
-        return cells
+        return _Part(_EXACT, cells, out_order)
     from mortie import moc_and
 
     overlap = np.asarray(moc_and(occ.words, np.asarray([region], dtype=np.uint64)), dtype=np.uint64)
-    return _expand_to(overlap, out_order)
+    return _Part(_COVER, _clip_cover(overlap, out_order), out_order)
+
+
+def _and_parts(part_a: _Part, part_b: _Part, out_order: int) -> _Part:
+    """AND two region parts, staying in the cheaper of the two currencies.
+
+    - exact ∧ exact — ``np.intersect1d``; both already sit at ``out_order``.
+    - exact ∧ cover — keep the exact side's cells that meet the cover
+      (:func:`moczarr.coverage.aoi_mask`, the house two-way containment
+      predicate — NOT ``isin`` against a compacted ``moc_and``, which drops
+      exactly the dense subtrees). Conservative-correct, and the result is
+      bounded by the exact side, so a degraded leaf costs nothing extra.
+    - cover ∧ cover — ``moc_and`` of the two covers, still a cover.
+
+    An expansion to cells happens NOWHERE here; shape (a) does it once, at
+    the end, and only for a region that stayed a cover on both sides.
+    """
+    if part_a.kind == _EXACT and part_b.kind == _EXACT:
+        return _Part(_EXACT, np.intersect1d(part_a.words, part_b.words), out_order)
+    if part_a.kind == _EXACT or part_b.kind == _EXACT:
+        exact, cover = (part_a, part_b) if part_a.kind == _EXACT else (part_b, part_a)
+        if exact.words.size == 0 or cover.words.size == 0:
+            return _Part(_EXACT, np.empty(0, dtype=np.uint64), out_order)
+        return _Part(_EXACT, exact.words[aoi_mask(exact.words, cover.words)], out_order)
+    if part_a.words.size == 0 or part_b.words.size == 0:
+        return _Part(_COVER, np.empty(0, dtype=np.uint64), out_order)
+    from mortie import moc_and
+
+    members = np.asarray(moc_and(part_a.words, part_b.words), dtype=np.uint64)
+    return _Part(_COVER, _clip_cover(members, out_order), out_order)
 
 
 def _iter_shared(
@@ -279,15 +358,14 @@ def _iter_shared(
     store_b: Any,
     concurrency,
     store_kwargs: dict[str, Any],
-    *,
-    expand_full: bool,
-) -> Iterator[tuple[int, np.ndarray | None]]:
+) -> Iterator[tuple[int, _Part]]:
     """The shared core both API shapes consume.
 
-    Yields ``(region word, cells)`` per shared region with a nonempty
-    intersection. A region full on BOTH sides yields its whole subtree —
-    expanded to cells when ``expand_full`` (shape a), or ``None`` so shape
-    (b) can keep the region word compact.
+    Yields ``(region word, part)`` per shared region with a nonempty
+    intersection — an ``"exact"`` part whenever EITHER side knew its cells
+    exactly, otherwise the compact ``"cover"`` both sides agreed on (a
+    region full on both, or degraded on both). Shape (a) expands that cover;
+    shape (b) carries it straight into the flat MOC.
     """
     a = _open_side(root_a, store_a, window_a, aoi, concurrency, store_kwargs)
     b = _open_side(root_b, store_b, window_b, aoi, concurrency, store_kwargs)
@@ -316,22 +394,15 @@ def _iter_shared(
     warned: list = []
     occupancy: dict[tuple[int, int], _Occupancy] = {}
     for i, region in enumerate(int(r) for r in regions):
-        cells = []
+        parts = []
         for side in (a, b):
             leaf = int(leaf_words[id(side)][i])
             key = (id(side), leaf)
             if key not in occupancy:
                 occupancy[key] = _leaf_occupancy(side, leaf, warned, out_order)
-            cells.append(_region_cells(side, occupancy[key], region, region_order, out_order))
-        if cells[0] is None and cells[1] is None:
-            full = np.asarray([region], dtype=np.uint64)
-            yield region, _expand_to(full, out_order) if expand_full else None
-            continue
-        if cells[0] is None or cells[1] is None:
-            hit = cells[1] if cells[0] is None else cells[0]
-        else:
-            hit = np.intersect1d(cells[0], cells[1])
-        if hit.size:
+            parts.append(_region_part(side, occupancy[key], region, region_order, out_order))
+        hit = _and_parts(parts[0], parts[1], out_order)
+        if hit.words.size:
             yield region, hit
 
 
@@ -374,8 +445,17 @@ def iter_occupancy_and(
     result a superset under those leaves only. Raises ``ValueError`` when a
     root has no manifest, or when the orders do not compose (one store's
     cell order above the other's shard order).
+
+    Cost: yielding CELLS is what shape (a) is for, and a region whose result
+    is a cover on BOTH sides — full-on-both (exact, and bounded by the
+    region's own subtree), or degraded on both — materializes
+    ``4^(out_order - region_order)`` words for that one yield. Everywhere
+    else the intersection is bounded by the exact side and nothing is
+    expanded, degraded leaves included. :func:`occupancy_and` never expands
+    at all; reach for it when the harmonized order is far below the shard
+    order.
     """
-    yield from _iter_shared(
+    for region, part in _iter_shared(
         root_a,
         root_b,
         aoi,
@@ -385,8 +465,10 @@ def iter_occupancy_and(
         store_b,
         concurrency,
         store_kwargs,
-        expand_full=True,
-    )
+    ):
+        cells = part.words if part.kind == _EXACT else _expand_to(part.words, part.order)
+        if cells.size:
+            yield region, cells
 
 
 def occupancy_and(
@@ -411,10 +493,16 @@ def occupancy_and(
     coarser cell order yields exactly the union of the iterator's cells
     (pinned by the shared golden test). Parameters, degradation, and errors
     are identical to :func:`iter_occupancy_and`.
+
+    Cost: this shape stays in MOC currency end to end — a region that is
+    full or degraded on both sides contributes its ancestor WORD, not its
+    ``4^(out_order - region_order)`` cells, so nothing here scales with
+    depth (the expansion :func:`iter_occupancy_and` documents is the price
+    of yielding cells, not of the intersection).
     """
     parts = [
-        np.asarray([region], dtype=np.uint64) if cells is None else cells
-        for region, cells in _iter_shared(
+        part.words
+        for _region, part in _iter_shared(
             root_a,
             root_b,
             aoi,
@@ -424,7 +512,6 @@ def occupancy_and(
             store_b,
             concurrency,
             store_kwargs,
-            expand_full=False,
         )
     ]
     if not parts:
