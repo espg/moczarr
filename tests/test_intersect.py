@@ -58,7 +58,16 @@ def _write_json(path, payload):
     path.write_text(json.dumps(payload))
 
 
-def build_store(root, leaves, *, cell_order=8, shard_order=6, root_moc=True, window=None):
+def build_store(
+    root,
+    leaves,
+    *,
+    cell_order=8,
+    shard_order=6,
+    root_moc=True,
+    window=None,
+    envelope_cell_order=None,
+):
     """A synthetic hive store from ``{shard: spec}`` leaf specs.
 
     Specs: ``("bitmap", [tails])`` exact sidecar; ``"full"`` whole-subtree
@@ -68,6 +77,11 @@ def build_store(root, leaves, *, cell_order=8, shard_order=6, root_moc=True, win
     ``"debris"`` an unstamped leaf; ``"absent"`` root-MOC-listed with no
     object at all. ``window`` makes it a ``morton-hive/2`` store with every
     leaf at that window.
+
+    ``envelope_cell_order`` skews the leaf ENVELOPES (and their bitmap
+    depth) away from the manifest's ``cell_order`` — the wire shape a store
+    rewritten at a new order leaves behind, and the one a reader must take
+    from the envelope rather than the manifest.
     """
     spec = convention.HIVE_SPEC if window is None else convention.HIVE_SPEC_V2
     manifest = {
@@ -95,7 +109,8 @@ def build_store(root, leaves, *, cell_order=8, shard_order=6, root_moc=True, win
                 "ranges": [[s, s] for s in ranked],
             },
         )
-    depth = cell_order - shard_order
+    env_order = cell_order if envelope_cell_order is None else envelope_cell_order
+    depth = env_order - shard_order
     for shard, leaf_spec in leaves.items():
         leaf = root / convention.leaf_path(shard, window=window)
         if leaf_spec == "absent":
@@ -109,7 +124,7 @@ def build_store(root, leaves, *, cell_order=8, shard_order=6, root_moc=True, win
         coverage = {
             "spec": "morton-moc/1",
             "box": [shard, None, None, None],
-            "cell_order": cell_order,
+            "cell_order": env_order,
             "source": "worker",
         }
         sidecar = None
@@ -278,6 +293,37 @@ class TestDifferentShardOrders:
         # Region S1+"3": A has nothing under it -> skipped.
         assert list(got) == [morton_word(S1 + "1")]
         np.testing.assert_array_equal(got[morton_word(S1 + "1")], _words(S1 + "12"))
+
+
+class TestEnvelopeOrderAuthority:
+    """The decoded cells' order is the leaf ENVELOPE's, never the manifest's."""
+
+    def test_finer_envelope_than_manifest_still_coarsens(self, tmp_path):
+        # K's manifest says cell_order 7 but its leaf envelope (and sidecar)
+        # is o8 — the harmonized order is still 7, so K's o8 cell S1+"11"
+        # must coarsen 4:1 to S1+"1" and meet L's genuine o7 cell there.
+        # Gating the coarsening on the manifest leaves the cells at o8,
+        # where no word can ever be bit-equal to an o7 word: a silent {}.
+        root_k = build_store(
+            tmp_path / "k", {S1: ("bitmap", ["11"])}, cell_order=7, envelope_cell_order=8
+        )
+        root_l = build_store(tmp_path / "l", {S1: ("bitmap", ["1"])}, cell_order=7)
+        got, _moc = _both_shapes(root_k, root_l, out_order=7)
+        assert list(got) == [morton_word(S1)]
+        np.testing.assert_array_equal(got[morton_word(S1)], _words(S1 + "1"))
+
+    def test_coarser_envelope_than_manifest_degrades(self, tmp_path):
+        # The reverse skew: M's envelope is o7 while the harmonized order is
+        # o8, so its cells name whole subtrees there — refining them would
+        # invent occupancy. They ride the conservative cover path instead:
+        # S1+"1" caps N's exact cells to S1+"11" (S1+"23" is outside).
+        root_m = build_store(
+            tmp_path / "m", {S1: ("bitmap", ["1"])}, cell_order=8, envelope_cell_order=7
+        )
+        root_n = build_store(tmp_path / "n", {S1: ("bitmap", ["11", "23"])}, cell_order=8)
+        with pytest.warns(UserWarning, match="cell_order 7 is below"):
+            got, _moc = _both_shapes(root_m, root_n, out_order=8)
+        np.testing.assert_array_equal(got[morton_word(S1)], _words(S1 + "11"))
 
 
 class TestDegradation:
