@@ -156,14 +156,15 @@ def morton_word(label: str | int) -> int:
     parses as the area word and the §1 point suffix is restored moczarr-side
     (:func:`area29_to_point`) — mortie 0.9.0 predates the ``p`` grammar
     (espg/mortie#120/#121). An UNMARKED order-29 string parses as the AREA
-    word, the normative §4 tie-break. Rides mortie's private-but-documented
-    ``_decimal_to_word`` (numpy-only; the public array classes require
-    pandas — upstream ask for a public export stands, same note as zagg's
-    boundary helper).
+    word, the normative §4 tie-break. Rides mortie's public scalar
+    ``decimal_to_word`` (espg/mortie#114; issue #38 — the deprecated private
+    ``_decimal_to_word`` carried no compatibility promise). This seam parses
+    ONE label by contract; a caller with a batch reaches for
+    ``mortie.decimals_to_words`` instead of looping here.
     """
     if isinstance(label, (int, np.integer)):
         return int(label)
-    from mortie.morton_index import _decimal_to_word
+    from mortie import decimal_to_word
 
     text = str(label)
     if text.endswith("p"):
@@ -173,8 +174,8 @@ def morton_word(label: str | int) -> int:
                 f"{label!r}: the 'p' kind-suffix is legal only on a full order-29 "
                 f"POINT id (points exist only at order 29; spec §2)"
             )
-        return int(area29_to_point(int(_decimal_to_word(stem))))
-    return int(_decimal_to_word(text))
+        return int(area29_to_point(int(decimal_to_word(stem))))
+    return int(decimal_to_word(text))
 
 
 def morton_decimal(word: str | int) -> str:
