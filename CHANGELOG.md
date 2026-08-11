@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Two-store occupancy intersection
+  ([#39](https://github.com/espg/moczarr/issues/39); consumer
+  englacial/zagg#426, cross-sensor GEDI/ATL03 composition): the exact cell
+  occupancy two hive stores share — root-`coverage.moc` prefilter → shared
+  leaves → per-leaf exact bitmap AND, with the `encoding: "full"`
+  short-circuit (no sidecar GET) and 4:1 OR-coarsening to the coarser cell
+  order when the stores' orders differ (e.g. ATL03 o19 vs GEDI o18). Both
+  API shapes of zagg#422 open question 7 ship behind one shared golden
+  test until the measured comparison picks the public surface:
+  `iter_occupancy_and` (an iterator of `(leaf_id, intersected cell words)`
+  per shared leaf) and `occupancy_and` (one flat compacted MOC). Leaves
+  without exact occupancy (box-only envelopes, missing sidecars, stamps
+  without envelopes) contribute their conservative cover — the result is a
+  documented SUPERSET under such leaves, with a once-per-call
+  `UserWarning`; debris and absent leaves contribute nothing.
+
 - Span-restricted (subtree) reads for the ragged/HHDC layer
   ([#29](https://github.com/espg/moczarr/issues/29); the counterpart of
   englacial/zagg#351, normative property zagg spec §1.5 "Subtree spans"):
