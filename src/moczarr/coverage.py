@@ -95,10 +95,15 @@ def decode_bitmap(payload: bytes, shard: str | int, cell_order: int) -> np.ndarr
             f"(a partial cell set would be a false negative)"
         )
     bits = np.unpackbits(raw, count=4**depth)
-    words = np.empty(int(bits.sum()), dtype=np.uint64)
-    for i, rank in enumerate(np.flatnonzero(bits)):
-        words[i] = morton_word(dec + rank_tail(int(rank), depth))
-    return np.sort(words)
+    ranks = np.flatnonzero(bits)
+    if ranks.size == 0:
+        return np.empty(0, dtype=np.uint64)
+    from mortie import decimals_to_words
+
+    # One Python->Rust crossing for the whole set bit field, not one per
+    # occupied cell: a dense order-19 leaf is millions of labels.
+    labels = [dec + rank_tail(int(rank), depth) for rank in ranks]
+    return np.sort(np.asarray(decimals_to_words(labels), dtype=np.uint64))
 
 
 def parse_root_coverage(payload: object) -> dict | None:
@@ -118,12 +123,16 @@ def ranges_words(envelope: dict) -> np.ndarray:
     """Shard words from a root envelope's ranges — exact expansion, or raise.
 
     Malformed ranges (base-crossing, wrong order, reversed endpoints) raise:
-    a corrupt cache must never yield a plausible partial answer. Expansion
-    is O(covered shards); containment checks on the hot path should use
-    :func:`ranges_contain` instead (rank space, no materialization).
+    a corrupt cache must never yield a plausible partial answer — every
+    range is validated BEFORE any of them is parsed. Expansion is O(covered
+    shards) through ONE batched ``mortie.decimals_to_words`` call rather than
+    a per-shard crossing (this runs on every root-MOC-backed open, and a
+    CONUS/Antarctic root MOC is thousands of shards); containment checks on
+    the hot path should use :func:`ranges_contain` instead (rank space, no
+    materialization).
     """
     order = int(envelope["order"])
-    words: list[int] = []
+    labels: list[str] = []
     for lo, hi in envelope["ranges"]:
         base = decimal_base(lo)
         lo_rank, hi_rank = decimal_rank(lo), decimal_rank(hi)
@@ -131,8 +140,12 @@ def ranges_words(envelope: dict) -> np.ndarray:
         ok = ok and decimal_order(lo) == order and decimal_order(hi) == order
         if not ok:
             raise ValueError(f"malformed coverage range [{lo}, {hi}] at order {order}")
-        words.extend(morton_word(base + rank_tail(r, order)) for r in range(lo_rank, hi_rank + 1))
-    return np.unique(np.asarray(words, dtype=np.uint64))
+        labels.extend(base + rank_tail(r, order) for r in range(lo_rank, hi_rank + 1))
+    if not labels:
+        return np.empty(0, dtype=np.uint64)
+    from mortie import decimals_to_words
+
+    return np.unique(np.asarray(decimals_to_words(labels), dtype=np.uint64))
 
 
 def root_coverage_and(envelope: dict, aoi) -> np.ndarray:

@@ -37,10 +37,12 @@ class TestIds:
     def test_public_mortie_parsers_match_the_goldens(self):
         # issue #38: morton_word rides the public decimal_to_word
         # (espg/mortie#114) instead of the deprecated private
-        # _decimal_to_word. Pin BOTH public forms — the scalar the seam
-        # calls and the batched decimals_to_words a batch caller reaches
-        # for — against the frozen golden word, so a behavior change in
-        # either fails here before it can drift morton_word.
+        # _decimal_to_word. Pin BOTH public forms against the frozen golden
+        # word — the scalar this seam calls, and the batched
+        # decimals_to_words that coverage.ranges_words and
+        # coverage.decode_bitmap run their expansions through — so a
+        # behavior change in either fails here before it can drift a
+        # decoded MOC.
         import mortie
 
         assert int(mortie.decimal_to_word(SHARD)) == SHARD_WORD
