@@ -154,13 +154,17 @@ def morton_word(label: str | int) -> int:
 
     Accepts the §2 ``p`` kind-suffix on full order-29 POINT ids: the stem
     parses as the area word and the §1 point suffix is restored moczarr-side
-    (:func:`area29_to_point`) — mortie 0.9.0 predates the ``p`` grammar
-    (espg/mortie#120/#121). An UNMARKED order-29 string parses as the AREA
-    word, the normative §4 tie-break. Rides mortie's public scalar
-    ``decimal_to_word`` (espg/mortie#114; issue #38 — the deprecated private
-    ``_decimal_to_word`` carried no compatibility promise). This seam parses
-    ONE label by contract; a caller with a batch reaches for
-    ``mortie.decimals_to_words`` instead of looping here.
+    (:func:`area29_to_point`). Not a capability gap — the supported mortie
+    floor parses ``p`` natively and to the same word — but the branch is
+    moczarr's own read of the §2 grammar, so a misplaced marker gets an error
+    naming the spec rather than the parser's, and the §4 tie-break below
+    stays visibly ours. Both forms are pinned bit-for-bit against golden
+    literals in ``tests/test_convention.py``. An UNMARKED order-29 string
+    parses as the AREA word, the normative §4 tie-break. Rides mortie's
+    public scalar ``decimal_to_word`` (espg/mortie#114; issue #38 — the
+    deprecated private ``_decimal_to_word`` carried no compatibility
+    promise). This seam parses ONE label by contract; a caller with a batch
+    reaches for ``mortie.decimals_to_words`` instead of looping here.
     """
     if isinstance(label, (int, np.integer)):
         return int(label)
