@@ -10,6 +10,7 @@ order must equal the union of the per-leaf iterator's cells, cell-for-cell.
 
 import itertools
 import json
+import warnings
 
 import numpy as np
 import pytest
@@ -350,6 +351,35 @@ class TestDegradation:
             got, _moc = _both_shapes(root_h, self._coarse(tmp_path), out_order=7)
         # The envelope's box is the whole shard -> the exact side passes through.
         np.testing.assert_array_equal(got[morton_word(S8)], _words(S8 + "1", S8 + "2"))
+
+    def test_skip_drops_degraded_leaves_entirely(self, tmp_path):
+        # degrade="skip": the box-only S8 leaf contributes NOTHING, so its
+        # region disappears rather than answering a superset, and nothing
+        # warns — everything yielded is exact (the discriminator a per-cell
+        # consumer needs, which one call-scoped warning cannot give).
+        root_e = build_store(
+            tmp_path / "e", {S1: ("bitmap", ["11"]), S8: ("box", [S8 + "1"])}, cell_order=8
+        )
+        root_f = build_store(
+            tmp_path / "f", {S1: ("bitmap", ["1"]), S8: ("bitmap", ["1", "2"])}, cell_order=7
+        )
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            got, _moc = _both_shapes(root_e, root_f, out_order=7, degrade="skip")
+        assert list(got) == [morton_word(S1)]
+        np.testing.assert_array_equal(got[morton_word(S1)], _words(S1 + "1"))
+
+    def test_raise_names_the_first_degraded_leaf(self, tmp_path):
+        root_e = build_store(tmp_path / "e", {S8: ("box", [S8 + "1"])}, cell_order=8)
+        coarse = self._coarse(tmp_path)
+        with pytest.raises(ValueError, match=f"{S8}.zarr of "):
+            occupancy_and(root_e, coarse, degrade="raise")
+        with pytest.raises(ValueError, match="degrade='raise'"):
+            list(iter_occupancy_and(root_e, coarse, degrade="raise"))
+
+    def test_unknown_degrade_policy_raises_at_call_time(self, tmp_path, golden_pair):
+        with pytest.raises(ValueError, match="degrade='nope'"):
+            iter_occupancy_and(*golden_pair, degrade="nope")
 
     def test_degraded_against_exact_never_expands(self, tmp_path, monkeypatch):
         # A conservative cover stays a cover: the AND against an exact side
