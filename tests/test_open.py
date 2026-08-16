@@ -15,7 +15,7 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from moczarr import convention, coverage, open_hive, store
+from moczarr import candidate_leaves, convention, coverage, open_hive, store
 
 FIXTURE = Path(__file__).parent / "data" / "serc_hive"
 #: SERC-area order-6 shard containing the site itself (see the generator).
@@ -462,6 +462,62 @@ class TestOpenHiveWalkFallback:
         # And with the window given, the arithmetic path opens it.
         ds = open_hive(str(copy), window="2019", aoi=[SERC_SHARD])
         assert ds.sizes["cells"] == 16
+
+
+class TestCandidateLeaves:
+    """The public leaf-discovery seam (issue #39), exercised directly.
+
+    ``open_hive`` and ``moczarr.iter_occupancy_and`` both enumerate leaves
+    through this one function, so its contract — root-MOC arithmetic with
+    the walk as a semantically equivalent fallback, window selection, and
+    the shard-level ``aoi`` restriction — is pinned here rather than only
+    through what an opened dataset happens to contain.
+    """
+
+    def _stamped(self, root, rels):
+        return [rel for rel in rels if store.read_commit(root, rel) is not None]
+
+    def test_names_the_root_moc_shards_in_word_order(self, serc):
+        rels = candidate_leaves(serc, store.read_manifest(serc))
+        shards = [convention.split_leaf_name(rel.rsplit("/", 1)[-1])[0] for rel in rels]
+        assert shards == _stamped_shards(serc)
+        words = [convention.morton_word(s) for s in shards]
+        assert words == sorted(words)
+
+    def test_walk_fallback_is_equivalent(self, serc, tmp_path):
+        # D9: with the root MOC gone the walk answers instead — and after the
+        # stamp GET every consumer makes, leaf-for-leaf identically. The raw
+        # candidate sets differ only by the fixture's one debris leaf, which
+        # the walk sees and the root MOC does not list (D4 settles it).
+        copy = tmp_path / "serc"
+        shutil.copytree(FIXTURE, copy)
+        (copy / convention.ROOT_COVERAGE_NAME).unlink()
+        arithmetic = candidate_leaves(serc, store.read_manifest(serc))
+        walked = candidate_leaves(str(copy), store.read_manifest(str(copy)))
+        assert set(walked) > set(arithmetic)  # the extra is the debris leaf
+        assert self._stamped(str(copy), walked) == self._stamped(serc, arithmetic)
+        # Same equivalence under an AOI, whose two routes are different
+        # arithmetic (root_coverage_and + clip vs a per-leaf moc_and).
+        aoi_moc = candidate_leaves(serc, store.read_manifest(serc), [SERC_SHARD])
+        aoi_walk = candidate_leaves(str(copy), store.read_manifest(str(copy)), [SERC_SHARD])
+        assert aoi_moc == aoi_walk == [convention.leaf_path(SERC_SHARD)]
+
+    def test_aoi_takes_words_or_decimals_and_cuts_shards_only(self, serc):
+        # The seam takes the same AOI cover the rest of the public API does,
+        # and a SUB-SHARD member still keeps the whole leaf: `aoi` cuts
+        # shards, never cells (the overhang posture the docstring pins).
+        manifest = store.read_manifest(serc)
+        word = np.asarray([convention.morton_word(SERC_SHARD)], dtype=np.uint64)
+        assert candidate_leaves(serc, manifest, [SERC_SHARD]) == candidate_leaves(
+            serc, manifest, word
+        )
+        assert candidate_leaves(serc, manifest, [SERC_SHARD + "1"]) == [
+            convention.leaf_path(SERC_SHARD)
+        ]
+
+    def test_window_is_validated_and_refused_on_an_unwindowed_store(self, serc):
+        with pytest.raises(ValueError, match="unwindowed stores"):
+            candidate_leaves(serc, store.read_manifest(serc), None, "2019")
 
 
 class TestOpenHiveMocIndex:

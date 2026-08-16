@@ -80,8 +80,9 @@ is bounded by the exact side wherever one exists. Cells are materialized
 only where shape (a) has to yield them, and only for a region that is a
 cover on BOTH sides — full-on-both (exact by construction; its whole
 subtree IS the answer) or degraded on both — at
-``4^(out_order - region_order)`` words. Shape (b) never expands. That
-asymmetry is itself an input to the zagg#422 shape decision.
+``4^(out_order - region_order)`` words. Shape (b) never expands — which is
+why it is not implemented as the literal composition over (a), only
+documented as equivalent to it (see :func:`occupancy_and`).
 
 Spec + fixtures only, per the moczarr contract: everything here decodes
 from zagg ``docs/specification.md`` via this package's own convention /
@@ -178,17 +179,14 @@ class _Plan(NamedTuple):
 
 def _open_side(root: str, store: Any, window: str | None, aoi, concurrency, store_kwargs) -> _Side:
     """Open one store and enumerate its candidate leaves (root MOC or walk)."""
-    from moczarr.open import _aoi_words, _candidate_leaves
+    from moczarr.open import candidate_leaves
 
     handle = store if store is not None else open_object_store(root, **store_kwargs)
     manifest = read_manifest(root, store=handle)
     if manifest is None:
         raise ValueError(f"{root!r} has no morton_hive.json — not a hive store root")
-    words = None if aoi is None else _aoi_words(aoi)
     leaves: dict[int, str] = {}
-    for rel in _candidate_leaves(
-        root, manifest, words, window, store=handle, concurrency=concurrency
-    ):
+    for rel in candidate_leaves(root, manifest, aoi, window, store=handle, concurrency=concurrency):
         shard, _label = split_leaf_name(rel.rsplit("/", 1)[-1])
         leaves[morton_word(shard)] = rel
     return _Side(
