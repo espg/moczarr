@@ -17,9 +17,11 @@ import numpy as np
 import pytest
 from numcodecs import Zstd
 
+import moczarr
 from moczarr import convention, intersect
 from moczarr.convention import morton_word
 from moczarr.coverage import aoi_mask
+from moczarr.exceptions import ConservativeCoverageWarning
 from moczarr.intersect import iter_occupancy_and, occupancy_and
 
 # Order-6 shards (southern base -5), all inside one order-4 branch.
@@ -434,7 +436,7 @@ class TestEnvelopeOrderAuthority:
             tmp_path / "m", {S1: ("bitmap", ["1"])}, cell_order=8, envelope_cell_order=7
         )
         root_n = build_store(tmp_path / "n", {S1: ("bitmap", ["11", "23"])}, cell_order=8)
-        with pytest.warns(UserWarning, match="cell_order 7 is below"):
+        with pytest.warns(ConservativeCoverageWarning, match="cell_order 7 is below"):
             got, _moc = _both_shapes(root_m, root_n, out_order=8)
         np.testing.assert_array_equal(got[morton_word(S1)], _words(S1 + "11"))
 
@@ -443,23 +445,42 @@ class TestDegradation:
     def _coarse(self, tmp_path):
         return build_store(tmp_path / "f", {S8: ("bitmap", ["1", "2"])}, cell_order=7)
 
+    def test_the_warning_is_its_own_filterable_category(self, tmp_path):
+        # A dedicated category, exported from the package root, so a
+        # consumer can promote degradation to an error (the strictness a
+        # bare UserWarning cannot give) or accept it — without touching
+        # every other UserWarning moczarr raises.
+        assert issubclass(ConservativeCoverageWarning, UserWarning)
+        assert moczarr.ConservativeCoverageWarning is ConservativeCoverageWarning
+        root_e = build_store(tmp_path / "e", {S8: ("box", [S8 + "1"])}, cell_order=8)
+        coarse = self._coarse(tmp_path)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error", ConservativeCoverageWarning)
+            with pytest.raises(ConservativeCoverageWarning, match="conservative cover"):
+                occupancy_and(root_e, coarse)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # every OTHER warning is still fatal
+            warnings.simplefilter("ignore", ConservativeCoverageWarning)
+            moc = occupancy_and(root_e, coarse)
+        np.testing.assert_array_equal(moc, _words(S8 + "1"))
+
     def test_box_only_leaf_is_conservative_and_warns(self, tmp_path):
         root_e = build_store(tmp_path / "e", {S8: ("box", [S8 + "1"])}, cell_order=8)
-        with pytest.warns(UserWarning, match="conservative"):
+        with pytest.warns(ConservativeCoverageWarning, match="conservative"):
             got, _moc = _both_shapes(root_e, self._coarse(tmp_path), out_order=7)
         # Box member S8+"1" caps the superset: only B's cell under it survives.
         np.testing.assert_array_equal(got[morton_word(S8)], _words(S8 + "1"))
 
     def test_stamp_without_envelope_is_conservative_full(self, tmp_path):
         root_g = build_store(tmp_path / "g", {S8: "stamp-only"}, cell_order=8)
-        with pytest.warns(UserWarning, match="conservative"):
+        with pytest.warns(ConservativeCoverageWarning, match="conservative"):
             got, _moc = _both_shapes(root_g, self._coarse(tmp_path), out_order=7)
         # Whole-shard stand-in: the exact side's cells pass through.
         np.testing.assert_array_equal(got[morton_word(S8)], _words(S8 + "1", S8 + "2"))
 
     def test_missing_sidecar_degrades_to_the_box(self, tmp_path):
         root_h = build_store(tmp_path / "h", {S8: ("bitmap-nosidecar", ["11"])}, cell_order=8)
-        with pytest.warns(UserWarning, match="conservative"):
+        with pytest.warns(ConservativeCoverageWarning, match="conservative"):
             got, _moc = _both_shapes(root_h, self._coarse(tmp_path), out_order=7)
         # The envelope's box is the whole shard -> the exact side passes through.
         np.testing.assert_array_equal(got[morton_word(S8)], _words(S8 + "1", S8 + "2"))
@@ -505,7 +526,7 @@ class TestDegradation:
             intersect, "_expand_to", lambda words, order: calls.append(order) or real(words, order)
         )
         root_e = build_store(tmp_path / "e", {S8: ("box", [S8 + "1"])}, cell_order=8)
-        with pytest.warns(UserWarning, match="conservative"):
+        with pytest.warns(ConservativeCoverageWarning, match="conservative"):
             got, _moc = _both_shapes(root_e, self._coarse(tmp_path), out_order=7)
         np.testing.assert_array_equal(got[morton_word(S8)], _words(S8 + "1"))
         assert calls == []

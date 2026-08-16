@@ -39,7 +39,7 @@ from moczarr.coverage import (
     ranges_words,
     root_coverage_and,
 )
-from moczarr.exceptions import NoCoverageError
+from moczarr.exceptions import ConservativeCoverageWarning, NoCoverageError
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.hhdc import has_exact_occupancy, read_tensors
 from moczarr.intersect import iter_occupancy_and, occupancy_and
@@ -106,6 +106,7 @@ __all__ = [
     "COMPOSITION_SPEC",
     "COVERAGE_SIDECAR",
     "COVERAGE_SPEC",
+    "ConservativeCoverageWarning",
     "FLOAT64_EXACT_MAX_ORDER",
     "HIVE_SPEC",
     "HIVE_SPEC_V2",

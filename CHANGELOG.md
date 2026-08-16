@@ -22,7 +22,10 @@
   without envelopes, or an envelope whose own `cell_order` sits below the
   harmonized order) contribute their conservative cover — the result is a
   documented SUPERSET under such leaves, with a once-per-call
-  `UserWarning`; debris and absent leaves contribute nothing. `degrade=`
+  `ConservativeCoverageWarning` (new, exported, a `UserWarning` subclass —
+  so degradation can be promoted to an error or silenced by category
+  without touching every other warning); debris and absent leaves
+  contribute nothing. `degrade=`
   chooses that default (`"conservative"`) or `"skip"` (drop such leaves, so
   everything returned is exact) or `"raise"`. Conservative covers stay
   compact MOCs through the whole intersection: `occupancy_and` never
