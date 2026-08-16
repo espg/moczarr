@@ -2,10 +2,11 @@
 
 The fixture stores are hand-built object-by-object (conftest's posture — no
 zagg import, the wire format spelled out) with a KNOWN overlap, so every
-expected cell set below is hand-computable from the leaf specs. The two API
-shapes of zagg#422 open question 7 run behind one shared assertion
-(``_both_shapes``): the flat compacted MOC expanded to the harmonized cell
-order must equal the union of the per-leaf iterator's cells, cell-for-cell.
+expected cell set below is hand-computable from the leaf specs. The public
+shape (a) iterator and the derived shape (b) MOC run behind one shared
+assertion (``_both_shapes``): the flat compacted MOC expanded to the
+harmonized cell order must equal the union of the per-leaf iterator's
+cells, cell-for-cell. ``TestDerivedShape`` pins the derivation itself.
 """
 
 import itertools
@@ -267,6 +268,42 @@ class TestGoldenPair:
         root_b = build_store(tmp_path / "b", LEAVES_B, cell_order=7, root_moc=False)
         got, _moc = _both_shapes(root_a, root_b, out_order=7)
         assert set(got) == {morton_word(s) for s in EXPECTED}
+
+
+class TestDerivedShape:
+    """Shape (b) is a DERIVED convenience over shape (a) — and only semantically.
+
+    ``occupancy_and`` is documented as ``compress_moc`` over
+    ``iter_occupancy_and``'s stream; it is not implemented as that literal
+    composition, because the composition would expand a region that is a
+    cover on both sides just to compact it straight back. Both halves of
+    that claim are pinned here: the results agree member-for-member, and
+    only the iterator ever expands.
+    """
+
+    def test_flat_moc_is_the_compressed_stream(self, golden_pair):
+        from mortie import compress_moc
+
+        streamed = [cells for _leaf, cells in iter_occupancy_and(*golden_pair)]
+        derived = np.sort(np.asarray(compress_moc(np.concatenate(streamed)), dtype=np.uint64))
+        np.testing.assert_array_equal(occupancy_and(*golden_pair), derived)
+
+    def test_only_the_iterator_expands_full_on_both(self, golden_pair, monkeypatch):
+        # S4 is "full" in BOTH stores: shape (a) must materialize its whole
+        # depth-1 subtree to honor its own contract, shape (b) carries the
+        # shard word. The literal one-liner derivation would pay (a)'s
+        # expansion for (b)'s answer — 4^(out_order - region_order) words
+        # per such region at zagg#426 depths.
+        calls = []
+        real = intersect._expand_to
+        monkeypatch.setattr(
+            intersect, "_expand_to", lambda words, order: calls.append(order) or real(words, order)
+        )
+        occupancy_and(*golden_pair)
+        assert calls == []
+        got = dict(iter_occupancy_and(*golden_pair))
+        assert calls == [7]
+        np.testing.assert_array_equal(got[morton_word(S4)], _words(*EXPECTED[S4]))
 
 
 class TestEqualOrders:

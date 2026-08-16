@@ -8,11 +8,16 @@
   occupancy two hive stores share — root-`coverage.moc` prefilter → shared
   leaves → per-leaf exact bitmap AND, with the `encoding: "full"`
   short-circuit (no sidecar GET) and 4:1 OR-coarsening to the coarser cell
-  order when the stores' orders differ (e.g. ATL03 o19 vs GEDI o18). Both
-  API shapes of zagg#422 open question 7 ship behind one shared golden
-  test until the measured comparison picks the public surface:
-  `iter_occupancy_and` (an iterator of `(leaf_id, intersected cell words)`
-  per shared leaf) and `occupancy_and` (one flat compacted MOC). Leaves
+  order when the stores' orders differ (e.g. ATL03 o19 vs GEDI o18). The
+  public surface is `iter_occupancy_and` (an iterator of `(leaf_id,
+  intersected cell words)` per shared leaf — zagg#422 open question 7
+  ruled on the measured comparison, since the zagg#426 consumer reads per
+  leaf); `occupancy_and` (one flat compacted MOC) stays exported as a
+  documented convenience DERIVED from it — semantically `compress_moc`
+  over that stream, kept in MOC currency so it never expands a subtree —
+  and is the currency for MOC algebra (`open_hive(aoi=...)`, `moc_and`,
+  `aoi_mask`). The derivation runs one way only: compaction discards the
+  leaf attribution per-leaf reads need. Leaves
   without exact occupancy (box-only envelopes, missing sidecars, stamps
   without envelopes, or an envelope whose own `cell_order` sits below the
   harmonized order) contribute their conservative cover — the result is a
