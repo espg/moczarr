@@ -37,6 +37,19 @@
   convention), and `coverage.aoi_mask` is the documented exact cell-level
   cut.
 
+- New public `candidate_leaves(store_root, manifest, aoi=None, window=None)`
+  ([#39](https://github.com/espg/moczarr/issues/39)): the leaf-discovery
+  seam `open_hive` and `iter_occupancy_and` already shared, promoted from
+  `open._candidate_leaves` so a reader can get a store's leaf roster —
+  store-relative paths, ascending in packed-word order — without opening
+  anything. Its docstring is the contract: root-`coverage.moc` arithmetic
+  with the discovery walk as a semantically equivalent fallback (the two
+  candidate sets differ only where a commit stamp settles it — D9/D4),
+  `morton-hive/2` window selection through the one `validate_window` seam,
+  and the shard-level `aoi` restriction with the overhang posture above.
+  `aoi` now takes the same cover form as the rest of the public API
+  (packed words or decimal strings, mixed orders).
+
 - `convention.morton_word` now parses via mortie's **public**
   `decimal_to_word` ([#38](https://github.com/espg/moczarr/issues/38);
   espg/mortie#114/#156) instead of the deprecated private

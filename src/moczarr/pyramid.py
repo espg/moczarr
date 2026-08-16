@@ -345,7 +345,7 @@ def open_overview_order(
     grouping = manifest_path_grouping(manifest)
     windowed = manifest["spec"] == HIVE_SPEC_V2
     if window is not None:
-        # ABOVE the windowed branch, exactly where `open._candidate_leaves`
+        # ABOVE the windowed branch, exactly where `open.candidate_leaves`
         # runs it: an unwindowed store's overview basename is `all.zarr`
         # whatever `window=` says, so validating inside `if windowed:` left
         # a `/1` product silently ignoring the argument — the reserved token
@@ -366,7 +366,7 @@ def open_overview_order(
         basename = f"{window}.zarr"
     else:
         if window is not None:
-            # Same message (and same substance) `open._candidate_leaves`
+            # Same message (and same substance) `open.candidate_leaves`
             # gives for the source axis: one store, one answer about what a
             # window means there.
             raise ValueError(
@@ -416,7 +416,7 @@ def open_overview_order(
     # fewer than shards, so the unscoped stamp GETs stay cheap.
     # Word-ordered, for the reason `overview_nodes` documents: the §4.4 moc
     # coordinate accumulated in `domain` below is word-ascending, and it is
-    # the truth for row identity. Same invariant `_candidate_leaves` keeps by
+    # the truth for row identity. Same invariant `candidate_leaves` keeps by
     # sorting words before naming leaves (open.py).
     ancestors = overview_nodes(manifest, ranges_words(envelope), k)
     rels = [f"{_node_rel(dec)}/{basename}" for dec in ancestors]

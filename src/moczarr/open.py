@@ -60,9 +60,17 @@ from moczarr.store import (
 
 
 def _aoi_words(aoi) -> np.ndarray:
-    """Normalize an AOI cover to packed ``uint64`` words (strings accepted)."""
-    values = list(np.asarray(aoi).ravel()) if np.asarray(aoi).ndim else [aoi]
-    return np.asarray([morton_word(v) for v in values], dtype=np.uint64)
+    """Normalize an AOI cover to packed ``uint64`` words (strings accepted).
+
+    Idempotent, and cheaply so: an already-packed ``uint64`` array passes
+    straight through, which is what lets :func:`candidate_leaves` normalize
+    its own argument without charging a caller that already did.
+    """
+    values = np.asarray(aoi)
+    if values.dtype == np.uint64:
+        return values.ravel()
+    members = list(values.ravel()) if values.ndim else [aoi]
+    return np.asarray([morton_word(v) for v in members], dtype=np.uint64)
 
 
 def _shard_leaf_name(rel: str) -> tuple[str, str | None] | None:
@@ -82,22 +90,61 @@ def _shard_leaf_name(rel: str) -> tuple[str, str | None] | None:
     return shard, label
 
 
-def _candidate_leaves(
+def candidate_leaves(
     store_root: str,
     manifest: dict,
-    aoi,
-    window: str | None,
+    aoi=None,
+    window: str | None = None,
     *,
     store: Any = None,
     concurrency: int | None = None,
 ) -> list[str]:
     """Store-relative leaf paths to try, ascending in packed-word order.
 
-    Arithmetic (root MOC) when possible; the walk otherwise. A windowed
-    (``morton-hive/2``) store needs an explicit ``window`` for the
-    arithmetic path — with ``window=None`` the walk enumerates what exists
-    and the error message lists the labels.
+    The store's leaf-discovery seam, shared by :func:`open_hive` and
+    :func:`moczarr.iter_occupancy_and` so the two agree on what a store
+    contains by construction rather than by duplicated arithmetic. Public
+    (issue #39) for readers that need the leaf roster without opening
+    anything — the paths are what :func:`moczarr.open_leaf`,
+    ``moczarr.store.read_commits`` and the ragged/HHDC readers take.
+
+    Contract, in three parts:
+
+    - **Discovery.** The root ``coverage.moc`` names the committed shards,
+      and leaf paths come from it by string arithmetic (D10) — no LIST. The
+      discovery walk (``moczarr.store.walk_leaves``) runs only when that
+      envelope is absent or unusable, and is SEMANTICALLY EQUIVALENT: it is
+      a fallback, never a different answer, so a caller never keys on which
+      route ran (D9 — caches degrade to the walk, never to wrong answers).
+      Both return CANDIDATES in ascending packed-word order, and the two
+      candidate sets differ only where a stamp settles it anyway (D4:
+      absence of a stamp IS the answer): the walk additionally names debris
+      (unstamped leaves the root MOC does not list), and the arithmetic
+      path additionally names MOC-listed shards whose object is gone. After
+      the caller's commit-stamp GET — which every consumer here does — the
+      two agree leaf-for-leaf. Objects that reuse the window-naming dialect
+      at ancestor nodes (overview zarrs, spec §4.2) are not leaves and
+      neither route returns them.
+    - **Window selection.** ``window`` picks the time window of a
+      ``morton-hive/2`` store, validated through the one
+      ``convention.validate_window`` seam (which also refuses the reserved
+      all-time token). A windowed store with ``window=None`` cannot take
+      the arithmetic path — the walk enumerates what exists and the
+      ``ValueError`` lists the labels present. ``window`` on an unwindowed
+      store is a ``ValueError``.
+    - **``aoi`` restriction (SHARD cover only).** A morton cover — packed
+      words or decimal strings, mixed orders allowed — restricts the
+      returned leaves to those whose subtree meets it. It cuts SHARDS and
+      nothing finer: a returned leaf is kept whole, and the cells inside it
+      are NOT clipped to the cover, so any cell-level use of this roster is
+      a superset with respect to the AOI (false positives possible, false
+      negatives impossible — zagg's AOI-overhang convention). The exact
+      cell-level cut is :func:`moczarr.coverage.aoi_mask`, which
+      :func:`open_hive` applies to the ``morton`` coordinate itself (tier 2
+      — the coordinate is the truth; the MOC tiers are only indexes).
     """
+    if aoi is not None:
+        aoi = _aoi_words(aoi)
     windowed = manifest["spec"] == HIVE_SPEC_V2
     grouping = manifest_path_grouping(manifest)
     if window is not None:
@@ -383,7 +430,7 @@ def open_hive(
     aoi_words = _aoi_words(aoi) if aoi is not None else None
     group = str(manifest["cell_order"])
     opened = []
-    candidates = _candidate_leaves(
+    candidates = candidate_leaves(
         store_root, manifest, aoi_words, window, store=obstore_store, concurrency=concurrency
     )
     # One zarr.json GET per candidate serves BOTH the commit stamp and — for
