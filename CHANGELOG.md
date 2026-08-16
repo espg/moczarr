@@ -27,7 +27,12 @@
   everything returned is exact) or `"raise"`. Conservative covers stay
   compact MOCs through the whole intersection: `occupancy_and` never
   materializes a subtree, and `iter_occupancy_and` only where it has to
-  yield the cells of a region that stayed a cover on BOTH sides.
+  yield the cells of a region that stayed a cover on BOTH sides. `aoi=` is
+  contractually SHARD-level on both shapes — the cells of a kept leaf are
+  not clipped, so results are a superset with respect to the AOI (false
+  positives possible, false negatives impossible: zagg's AOI-overhang
+  convention), and `coverage.aoi_mask` is the documented exact cell-level
+  cut.
 
 - `convention.morton_word` now parses via mortie's **public**
   `decimal_to_word` ([#38](https://github.com/espg/moczarr/issues/38);
