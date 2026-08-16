@@ -62,6 +62,15 @@ The derivation runs ONE way: (b) is one ``compress_moc`` over (a), while
 that per-leaf reads need. Reach for (a) to read cells under a leaf, (b) to
 do MOC algebra with the answer.
 
+``aoi=`` is SHARD-level on both, by contract: it restricts the shard cover
+through the same candidate-leaves arithmetic the opener uses, and the cells
+of a kept leaf are never clipped to it. Both shapes are therefore supersets
+with respect to the AOI — false positives possible, false negatives
+impossible, zagg's AOI-overhang convention — and
+:func:`moczarr.coverage.aoi_mask` is the documented exact cell-level cut.
+Keeping the clip out of here is what lets a fully-shared subtree stay one
+compact word under a partial AOI instead of expanding to be trimmed.
+
 The AND itself runs in MOC currency and never materializes a subtree:
 exact cells against a conservative cover are filtered by containment
 (``coverage.aoi_mask``), cover against cover is a ``moc_and``, so the work
@@ -512,10 +521,21 @@ def iter_occupancy_and(
     no occupancy.
 
     ``aoi`` (a morton cover: packed words or decimal strings, mixed orders
-    allowed) prefilters SHARDS — leaves whose subtree misses the cover never
-    load — but cells of a kept leaf are not themselves clipped; apply
-    :func:`moczarr.coverage.aoi_mask` to the yielded cells for an exact
-    cell-level cut. ``window_a`` / ``window_b`` name the time window per
+    allowed) is a SHARD-LEVEL prefilter, and that is the contract, not an
+    implementation detail: it runs through the same candidate-leaves
+    arithmetic :func:`moczarr.open_hive` uses, so a leaf whose subtree
+    misses the cover never loads — but the cells of a KEPT leaf are NOT
+    clipped to the cover. Results are therefore a SUPERSET with respect to
+    the AOI: cells outside it can be yielded (false positives possible),
+    cells inside it are never dropped (false negatives impossible). That is
+    zagg's AOI-overhang convention, the same one-directional posture the
+    box tier keeps everywhere else here, and it is what lets a region full
+    on both sides stay compact under a partial AOI instead of expanding to
+    be clipped. The documented EXACT cell-level cut is
+    :func:`moczarr.coverage.aoi_mask` over the yielded cells:
+    ``cells[aoi_mask(cells, aoi_words)]``.
+
+    ``window_a`` / ``window_b`` name the time window per
     store (``morton-hive/2``); ``store_a`` / ``store_b`` pass pre-built
     obstore handles (required when the two stores need different
     credentials — ``store_kwargs`` apply to BOTH roots otherwise).
@@ -592,6 +612,15 @@ def occupancy_and(
     empty intersection is an empty array. Parameters (``degrade``
     included), degradation, and errors are identical to
     :func:`iter_occupancy_and`.
+
+    ``aoi`` keeps the same contract it has there — a SHARD-LEVEL prefilter,
+    with the cells of a kept leaf left unclipped, so the returned MOC is a
+    superset with respect to the AOI (false positives possible, false
+    negatives impossible: zagg's AOI-overhang convention). Worth restating
+    on this shape, because a MOC is what gets composed onward: feed the
+    result to ``moc_and(result, aoi_words)`` (or
+    :func:`moczarr.coverage.aoi_mask` on cells) when the consumer needs the
+    exact cut rather than the overhang.
 
     The derivation is one-way, and that asymmetry is what picks between
     the two:

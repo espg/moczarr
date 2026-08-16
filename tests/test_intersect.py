@@ -19,6 +19,7 @@ from numcodecs import Zstd
 
 from moczarr import convention, intersect
 from moczarr.convention import morton_word
+from moczarr.coverage import aoi_mask
 from moczarr.intersect import iter_occupancy_and, occupancy_and
 
 # Order-6 shards (southern base -5), all inside one order-4 branch.
@@ -262,6 +263,26 @@ class TestGoldenPair:
         got, _moc = _both_shapes(*golden_pair, out_order=7, aoi=[S1])
         assert list(got) == [morton_word(S1)]
         np.testing.assert_array_equal(got[morton_word(S1)], _words(*EXPECTED[S1]))
+
+    def test_aoi_overhangs_at_cell_level(self, golden_pair):
+        # The contract: `aoi` cuts SHARDS, never the cells of a kept leaf.
+        # A sub-shard AOI naming only S1+"1" still keeps S1's whole leaf, so
+        # S1+"4" comes back too — a false positive w.r.t. the AOI, which is
+        # allowed (zagg's overhang convention); nothing INSIDE the AOI is
+        # ever dropped. `coverage.aoi_mask` is the documented exact cut.
+        got, moc = _both_shapes(*golden_pair, out_order=7, aoi=[S1 + "1"])
+        assert list(got) == [morton_word(S1)]
+        cells = got[morton_word(S1)]
+        np.testing.assert_array_equal(cells, _words(*EXPECTED[S1]))
+        assert morton_word(S1 + "4") in set(int(c) for c in cells)
+        aoi_words = _words(S1 + "1")
+        np.testing.assert_array_equal(cells[aoi_mask(cells, aoi_words)], _words(S1 + "1"))
+        # Same posture on the derived MOC: exact cut is one moc_and away.
+        from mortie import moc_and
+
+        np.testing.assert_array_equal(
+            np.sort(np.asarray(moc_and(moc, aoi_words), dtype=np.uint64)), _words(S1 + "1")
+        )
 
     def test_walk_fallback_without_root_moc(self, tmp_path):
         root_a = build_store(tmp_path / "a", LEAVES_A, cell_order=8, root_moc=False)
