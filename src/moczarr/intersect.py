@@ -34,7 +34,9 @@ instead (the tier-0 box, the decoded cells read as a cover, or the whole
 shard subtree when even the box is unusable). The intersection is then a
 conservative SUPERSET for cells under that leaf: false positives possible,
 false negatives impossible — the same posture as the box tier everywhere
-else — and the first such leaf per call raises a ``UserWarning``. That is
+else — and the first such leaf per call raises a
+:class:`moczarr.exceptions.ConservativeCoverageWarning` (a ``UserWarning``
+subclass, so it stays filterable by class without catching everything). That is
 the ``degrade="conservative"`` default; ``degrade="skip"`` drops such leaves
 instead (nothing is yielded under them, so everything returned IS exact —
 exact-or-under rather than superset) and ``degrade="raise"`` refuses the
@@ -96,6 +98,7 @@ import numpy as np
 
 from moczarr.convention import morton_word, split_leaf_name
 from moczarr.coverage import aoi_mask, box_words, parse_leaf_coverage
+from moczarr.exceptions import ConservativeCoverageWarning
 from moczarr.store import (
     open_object_store,
     read_commits,
@@ -276,16 +279,18 @@ def _degrade(
     """Apply the call's ``degrade=`` policy to one leaf without exact occupancy.
 
     ``"conservative"`` (the default) takes ``fallback`` — the leaf's
-    conservative cover — and raises ONE ``UserWarning`` per call, for the
-    first such leaf. ``"skip"`` drops the leaf: it contributes nothing, so
+    conservative cover — and raises ONE
+    :class:`moczarr.exceptions.ConservativeCoverageWarning` per call, for
+    the first such leaf. ``"skip"`` drops the leaf: it contributes nothing, so
     the call's result is exact-or-under rather than a superset, which is the
     discriminator a consumer keying on per-cell truth needs. ``"raise"``
     stops and names the first such leaf.
 
     No ``stacklevel`` on the warning: the leaf is classified inside a
     generator driven by the consumer, so no stack level reaches the call
-    site — the message names the store and leaf instead, and module-scoped
-    ``-W`` filters key on ``moczarr.intersect``.
+    site — the message names the store and leaf instead, and the dedicated
+    category is what a filter should key on (module-scoped ``-W`` filters
+    on ``moczarr.intersect`` work too).
     """
     if policy == _RAISE:
         raise ValueError(
@@ -301,7 +306,8 @@ def _degrade(
             f"leaf {rel} of {side.root} contributes a conservative cover ({why}): the "
             f"intersection is a SUPERSET for cells under such leaves — false positives "
             f"possible, false negatives impossible. Further degraded leaves in this call "
-            f"do not re-warn; degrade='skip' drops them and degrade='raise' refuses them."
+            f"do not re-warn; degrade='skip' drops them and degrade='raise' refuses them.",
+            ConservativeCoverageWarning,
         )
     return fallback
 
@@ -545,7 +551,10 @@ def iter_occupancy_and(
     order does — the module docstring lists which leaves those are:
     ``"conservative"`` (default) contributes its cover, so the result is a
     SUPERSET under that leaf (false positives possible, false negatives
-    impossible) and the first such leaf per call raises one ``UserWarning``;
+    impossible) and the first such leaf per call raises one
+    :class:`moczarr.exceptions.ConservativeCoverageWarning` — its own
+    ``UserWarning`` subclass, so a consumer can promote it to an error or
+    silence it by category;
     ``"skip"`` drops it, so the leaf contributes nothing and EVERYTHING
     yielded is exact — exact-or-under instead of superset, the discriminator
     a per-cell consumer needs — at the price of silently missing real shared
