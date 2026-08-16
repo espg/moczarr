@@ -42,15 +42,25 @@ call, naming the first one. Debris and absent leaves contribute nothing
 under every policy (absence is definitive; a clean GET miss is trustworthy
 on its own).
 
-Both API shapes of the zagg#422 open question 7 are implemented behind one
-shared test until the comparison picks the public surface:
+Two API shapes, ruled on the measured comparison of zagg#422 open
+question 7 — one is the surface, the other is derived from it:
 
-- :func:`iter_occupancy_and` — shape (a): an iterator of ``(leaf_id,
-  intersected cell words)`` per shared leaf, streaming, matching the
-  readers' per-leaf access pattern.
-- :func:`occupancy_and` — shape (b): one flat compacted MOC of the whole
-  intersection (a fully-shared subtree compacts to its ancestor word, so
-  dense overlap stays small).
+- :func:`iter_occupancy_and` — shape (a), THE public surface: an iterator
+  of ``(leaf_id, intersected cell words)`` per shared leaf, streaming, and
+  the shape the zagg#426 consumer reads through (leaf identity is what
+  fetches the payloads for the aligned per-leaf tensors).
+- :func:`occupancy_and` — shape (b), a documented thin convenience DERIVED
+  from (a): one flat compacted MOC of the whole intersection, semantically
+  ``compress_moc`` over (a)'s stream (a fully-shared subtree compacts to
+  its ancestor word, so dense overlap stays small). It is the currency for
+  MOC algebra — it feeds ``open_hive(aoi=...)``, ``moc_and`` and
+  :func:`moczarr.coverage.aoi_mask` directly, and is the compact thing to
+  persist or ship.
+
+The derivation runs ONE way: (b) is one ``compress_moc`` over (a), while
+(a) is NOT recoverable from (b) — compaction discards the leaf attribution
+that per-leaf reads need. Reach for (a) to read cells under a leaf, (b) to
+do MOC algebra with the answer.
 
 The AND itself runs in MOC currency and never materializes a subtree:
 exact cells against a conservative cover are filtered by containment
@@ -483,7 +493,15 @@ def iter_occupancy_and(
 ) -> Iterator[tuple[int, np.ndarray]]:
     """Exact shared occupancy of two hive stores, streamed per shared leaf.
 
-    Shape (a) of the zagg#422 open question 7: yields ``(leaf_id, cells)``
+    Shape (a), and the module's public surface (zagg#422 open question 7,
+    ruled on this PR's measured comparison): the shape per-leaf readers
+    want, because ``leaf_id`` is what fetches a leaf's payloads — the
+    zagg#426 flow builds its aligned side-by-side tensors that way
+    (``moczarr.hhdc.read_tensors`` / :func:`moczarr.open_leaf` per yielded
+    leaf). :func:`occupancy_and` is one ``compress_moc`` over this stream;
+    the reverse does not exist, since compaction discards leaf attribution.
+
+    Yields ``(leaf_id, cells)``
     in ascending packed-word order — ``leaf_id`` the shared region's packed
     shard word (the finer store's leaf when shard orders differ; both
     stores' when equal) and ``cells`` the sorted occupied cell words BOTH
@@ -564,22 +582,41 @@ def occupancy_and(
     degrade: str = _CONSERVATIVE,
     **store_kwargs: Any,
 ) -> np.ndarray:
-    """Exact shared occupancy of two hive stores as one flat compacted MOC.
+    """The :func:`iter_occupancy_and` intersection, compacted to one flat MOC.
 
-    Shape (b) of the zagg#422 open question 7: the same intersection
-    :func:`iter_occupancy_and` streams, returned whole as a canonical
-    compact morton cover (``uint64``, ascending) — a fully-shared subtree
+    Shape (b): a thin convenience DERIVED from the public surface —
+    semantically ``compress_moc`` over everything
+    :func:`iter_occupancy_and` yields, returned whole as a canonical
+    compact morton cover (``uint64``, ascending). A fully-shared subtree
     compacts to its ancestor word, so dense overlap stays small, and the
-    empty intersection is an empty array. Expanding every member to the
-    coarser cell order yields exactly the union of the iterator's cells
-    (pinned by the shared golden test). Parameters (``degrade`` included),
-    degradation, and errors are identical to :func:`iter_occupancy_and`.
+    empty intersection is an empty array. Parameters (``degrade``
+    included), degradation, and errors are identical to
+    :func:`iter_occupancy_and`.
 
-    Cost: this shape stays in MOC currency end to end — a region that is
-    full or degraded on both sides contributes its ancestor WORD, not its
-    ``4^(out_order - region_order)`` cells, so nothing here scales with
-    depth (the expansion :func:`iter_occupancy_and` documents is the price
-    of yielding cells, not of the intersection).
+    The derivation is one-way, and that asymmetry is what picks between
+    the two:
+
+    - **(b) from (a)** is one line —
+      ``compress_moc(concatenate([cells for _leaf, cells in
+      iter_occupancy_and(...)]))`` — and equals this function's result
+      member-for-member (pinned by ``test_flat_moc_is_the_compressed_stream``).
+    - **(a) from (b)** does not exist: compaction discards leaf
+      attribution, and a member may sit above, at, or below a leaf. Use
+      shape (a) for per-leaf reads — the zagg#426 tensor path, which needs
+      the leaf id to fetch payloads — and this shape as MOC-algebra
+      currency: it is what ``open_hive(aoi=...)``, ``moc_and`` and
+      :func:`moczarr.coverage.aoi_mask` consume, and the compact thing to
+      persist or ship.
+
+    Cost — the reason this is NOT implemented as the literal one-liner:
+    the composition above would expand a region that is full (or degraded)
+    on both sides to its ``4^(out_order - region_order)`` cells, purely to
+    compact them back to the ancestor word they came from (~262k words at
+    the zagg#426 o9-shard/o18-cell scale, per region). This stays in MOC
+    currency end to end instead — same result, no subtree ever
+    materialized (pinned by ``test_only_the_iterator_expands_full_on_both``).
+    Expanding every member back to the harmonized cell order yields exactly
+    the union of the iterator's cells (the shared golden test).
     """
     plan = _setup(
         root_a,
