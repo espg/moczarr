@@ -371,6 +371,25 @@ class TestParseCompanionAttrs:
                 domain="temporal",
             )
 
+    def test_shapes_is_the_calling_path_naming_what_it_implements(self):
+        """§8 hangs the refusal on the implementation, so the caller names
+        the shapes ITS path decodes: the default is the ragged sibling
+        path's ``per-centroid``, and a §8.2 per-cell consumer parses the
+        same declaration through the same strict spec/grammar gate."""
+        attrs = {"temporal": {"spec": TOC_SPEC, "shape": "per-cell", "grammar": TOC_GRAMMAR}}
+        decl = parse_companion_attrs(attrs, domain="temporal", shapes=("per-cell",))
+        assert decl == CompanionDeclaration(TOC_SPEC, "per-cell", TOC_GRAMMAR)
+        # The spec/grammar gates stay strict under a widened ``shapes``.
+        with pytest.raises(ValueError, match="never half-parsed"):
+            parse_companion_attrs(
+                {"temporal": {"spec": "zagg-toc/2", "shape": "per-cell", "grammar": TOC_GRAMMAR}},
+                domain="temporal",
+                shapes=("per-cell",),
+            )
+        # And the sibling path's default still refuses what it cannot decode.
+        with pytest.raises(ValueError, match="MUST refuse a"):
+            parse_companion_attrs(attrs, domain="temporal")
+
     def test_unimplemented_grammar_raises(self):
         with pytest.raises(ValueError, match="grammar"):
             parse_companion_attrs(
