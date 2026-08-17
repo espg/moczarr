@@ -58,8 +58,10 @@ from moczarr.pyramid import (
 )
 from moczarr.ragged import (
     RAGGED_SPEC,
+    CompanionDeclaration,
     RaggedElement,
     decode_cell,
+    parse_companion_attrs,
     parse_ragged_attrs,
     read_cell,
     read_ragged,
@@ -106,6 +108,7 @@ __all__ = [
     "COMPOSITION_SPEC",
     "COVERAGE_SIDECAR",
     "COVERAGE_SPEC",
+    "CompanionDeclaration",
     "ConservativeCoverageWarning",
     "FLOAT64_EXACT_MAX_ORDER",
     "HIVE_SPEC",
@@ -159,6 +162,7 @@ __all__ = [
     "overview_sidecar_key",
     "overview_sidecar_path",
     "parent_cells",
+    "parse_companion_attrs",
     "parse_composition_attrs",
     "parse_leaf_coverage",
     "parse_manifest",
