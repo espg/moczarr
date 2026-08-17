@@ -38,7 +38,14 @@ section for this advance:
   question; digest payload bytes still decode identically under either
   declaration, so nothing here mis-decodes, but a consumer summing weights
   must consult #43's resolution before presenting the sum as an
-  observation count. §2.1 **rescopes** its exact-count MUST to ``counts``
+  observation count. Un-gated leaves §2.0's other two arms unenforced as
+  well: an **unknown** ``weights`` value — which §2.0 says a reader MUST
+  refuse, "never read as either defined value" — decodes here silently,
+  and #43's gate covers that refusal too; §2.0's same-declaration merge
+  rule is meanwhile vacuous here, since moczarr has no payload-merge entry
+  point at all (:mod:`moczarr.composition` declines a read-side merge by
+  design), which is why the gap is a documentation matter and not a
+  live mis-merge risk. §2.1 **rescopes** its exact-count MUST to ``counts``
   and adds a ``flux`` bullet (``sum(weights)`` is a float32 photoelectron
   estimate: the exact-count recovery is undefined there and no integrality
   holds). §2.2 is **substantially rewritten**, and two of its new clauses
