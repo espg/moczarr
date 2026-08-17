@@ -86,16 +86,28 @@ OBJECTS_ATTR = "zagg_objects"
 def overview_declaration(manifest: dict) -> dict | None:
     """The manifest's overview declaration, or ``None`` when declared off.
 
-    The §4.5 binding rule: branch on ``pyramid.overview.orders`` **first** —
-    an empty ``orders``, a missing ``overview`` mapping, or no ``pyramid``
-    block at all (pre-pyramid manifests, and the legacy ``{"orders": []}``
-    placeholder shape older fixtures carry) all mean *no overview family
-    exists* and no other key of the block may be assumed. When ``orders`` is
-    non-empty the block's ``spec`` is strict-checked (fail loudly on an
-    unknown revision — the conformance rule) and ``spacing`` / ``all_time`` /
-    ``fields`` MUST all be present; additional keys (``summarize``, the
-    sweep's ``materialized`` actuals, per-field ``nan_policy``…) are
-    tolerated per the spec.
+    This binds the ``/1`` schedule key only: branch on
+    ``pyramid.overview.orders`` **first** — an empty ``orders``, a missing
+    ``overview`` mapping, or no ``pyramid`` block at all (pre-pyramid
+    manifests, and the legacy ``{"orders": []}`` placeholder shape older
+    fixtures carry) all mean *no overview family exists* and no other key of
+    the block may be assumed. When ``orders`` is non-empty the block's
+    ``spec`` is strict-checked (fail loudly on an unknown revision — the
+    conformance rule) and ``spacing`` / ``all_time`` / ``fields`` MUST all be
+    present; additional keys (``summarize``, the sweep's ``materialized``
+    actuals, per-field ``nan_policy``…) are tolerated per the spec.
+
+    A ``zagg-pyramid/2`` block (§4.5, the englacial/zagg#384 default flip:
+    the schedule moved to the block-level ``overviews``, and the ``overview``
+    family dict carries no legacy ``orders``) therefore reads as ``None``
+    here, and the ``/1`` strict-check above is unreachable for it by
+    construction. That is a declared-off **view**, never a mis-parse of a
+    ``/1`` block: a ``/2`` schedule has no key this function would bind
+    wrongly, and §4 makes overviews derived artifacts a reader MUST NOT
+    require, so a ``/2`` store's SOURCE data still opens. Binding the ``/2``
+    view (and strict-checking it) is espg/moczarr#36/#37, not this reader;
+    the degrade is pinned by
+    ``tests/test_pyramid.py::TestDeclarationBinding::test_vendored_v2_block_reads_as_no_family``.
     """
     block = manifest.get("pyramid")
     if not isinstance(block, dict):

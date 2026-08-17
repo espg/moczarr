@@ -146,6 +146,26 @@ class TestDeclarationBinding:
             assert overview_declaration(manifest) is None
             assert overview_cell_orders(manifest) == {}
 
+    @pytest.mark.parametrize("fixture", ["minimal", "temporal", "kitchen_sink"])
+    def test_vendored_v2_block_reads_as_no_family(self, fixture):
+        # The vendored §7 fixtures (zagg main d52e3063) all declare
+        # `zagg-pyramid/2`: §4.5's default flip (englacial/zagg#384) moved the
+        # schedule to the block-level `overviews`, so the `overview` family
+        # dict carries no legacy `orders`. This /1 order-node reader binds
+        # `orders` only, so a /2 block reads as NO overview family — a
+        # declared-off VIEW, not a mis-parse (a /2 block holds no /1 key to
+        # bind wrongly), and §4 makes overviews derived artifacts a reader
+        # MUST NOT require, so a /2 store's SOURCE data still opens. Pinning
+        # the degrade deliberately: binding /2 is espg/moczarr#36/#37.
+        path = Path(__file__).parent / "data" / "spec" / fixture / "morton_hive.json"
+        manifest = json.loads(path.read_text())
+        block = manifest["pyramid"]
+        assert block["spec"] == "zagg-pyramid/2"
+        assert block["overviews"]  # /2's schedule key, and never empty
+        assert "orders" not in block["overview"]
+        assert overview_declaration(manifest) is None
+        assert overview_cell_orders(manifest) == {}
+
     def test_fixture_declaration_binds(self, manifest):
         decl = overview_declaration(manifest)
         assert decl is not None
