@@ -263,6 +263,34 @@ class CountingStore(LocalStore):
 # --------------------------------------------------------------------- tests
 
 
+class TestPackageSurface:
+    """The package re-exports a deliberate SUBSET of this module's ``__all__``
+    (``open_ragged`` and the chunk-span helpers stay submodule-level), so the
+    drift that matters is a name exported under a different object, or one
+    declaration gate travelling without its peer."""
+
+    def test_reexported_names_are_the_module_objects(self):
+        import moczarr
+
+        shared = set(moczarr.__all__) & set(moczarr.ragged.__all__)
+        assert shared  # the subset is a subset, not empty
+        for name in sorted(shared):
+            assert getattr(moczarr, name) is getattr(moczarr.ragged, name)
+
+    def test_both_declaration_gates_are_public_with_their_dataclasses(self):
+        """The §1.2 gate and the §8/§9 gate are exact peers — neither is
+        reachable only by reaching past the package."""
+        import moczarr
+
+        gates = {
+            "RaggedElement",
+            "parse_ragged_attrs",
+            "CompanionDeclaration",
+            "parse_companion_attrs",
+        }
+        assert gates <= set(moczarr.__all__) and gates <= set(moczarr.ragged.__all__)
+
+
 class TestParseRaggedAttrs:
     """The strict §1.2 gate: raise on missing/foreign/newer, never guess."""
 
