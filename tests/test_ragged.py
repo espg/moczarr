@@ -830,6 +830,22 @@ class TestSubtreeReadRagged:
         assert len(got) == 2  # cells 0 and 3; each entry (word, values, locations)
         assert all(len(entry) == 3 for entry in got)
 
+    def test_times_ride_the_restricted_sweep(self, tmp_path):
+        """The §8.3 channel's mirror of the located test: the subtree span
+        and its widened-chunk clip are computed on the PAYLOAD array, and
+        the siblings are sliced with them — so both companions must arrive
+        row-aligned with the same cells the unrestricted sweep yields."""
+        grid, _ = build_store(tmp_path, sharded=True, located=True, timed=True)
+        store = LocalStore(grid)
+        sweep = list(read_ragged(store, "g/field", times=True))
+        got = list(read_ragged(store, "g/field", times=True, subtree=SHARD + "1"))
+        self._assert_same(got, self._filtered(sweep, SHARD + "1"))
+        assert len(got) == 2 and all(len(entry) == 3 for entry in got)
+        both_sweep = list(read_ragged(store, "g/field", locations=True, times=True))
+        both = list(read_ragged(store, "g/field", locations=True, times=True, subtree=SHARD + "1"))
+        self._assert_same(both, self._filtered(both_sweep, SHARD + "1"))
+        assert all(len(entry) == 4 for entry in both)
+
     def test_flat_get_accounting_skips_disjoint_objects(self, tmp_path):
         """The §1.5 read plan on the flat layout: only the covering chunk
         objects are fetched — the stored-but-disjoint chunk 3 never is."""
