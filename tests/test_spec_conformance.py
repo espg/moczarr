@@ -245,9 +245,10 @@ class TestTemporalCompanion:
 
     def test_observed_per_cell_words_match_expected(self):
         """The dense §8.2 companion: per-cell words byte-exact, the reserved
-        ``0`` on unpopulated cells, the declaration verbatim — and the
-        ragged sibling path REFUSING the ``per-cell`` shape it does not
-        implement (§8's guessing-never rule)."""
+        ``0`` on unpopulated cells, the declaration verbatim — parsed
+        POSITIVELY by a caller that names ``per-cell`` as the shape its path
+        implements, and still refused under the ragged sibling path's
+        default (§8's guessing-never rule)."""
         store, expected = self._expected()
         arr = zarr.open_array(store, path="6/observed", mode="r")
         attrs = dict(arr.attrs)
@@ -256,6 +257,10 @@ class TestTemporalCompanion:
         populated = {c["index"]: int(c["observed"]) for c in expected["cells"]}
         for index in range(int(arr.shape[0])):
             assert int(words[index]) == populated.get(index, 0)
+        decl = parse_companion_attrs(
+            attrs, domain="temporal", field="6/observed", shapes=("per-cell",)
+        )
+        assert decl is not None and decl.shape == "per-cell"
         with pytest.raises(ValueError, match="per-cell"):
             parse_companion_attrs(attrs, domain="temporal", field="6/observed")
 

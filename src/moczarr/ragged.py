@@ -163,7 +163,8 @@ _COMPANION_DOMAINS = {
 #: The one §8 ``shape`` vocabulary value the ragged sibling path implements:
 #: one word per centroid row, aligned with the payload it accompanies. The
 #: other shapes ("coordinate", "per-cell") describe dense arrays outside this
-#: module's scope.
+#: module's scope — hence the DEFAULT of :func:`parse_companion_attrs`'s
+#: ``shapes``, which a caller decoding one of those names for itself.
 _COMPANION_SHAPE = "per-centroid"
 
 
@@ -257,7 +258,11 @@ class CompanionDeclaration:
 
 
 def parse_companion_attrs(
-    attrs: Mapping | None, *, domain: str, field: str = "<array>"
+    attrs: Mapping | None,
+    *,
+    domain: str,
+    field: str = "<array>",
+    shapes: tuple[str, ...] = (_COMPANION_SHAPE,),
 ) -> CompanionDeclaration | None:
     """The §8/§9 declaration gate on a companion array's own attrs.
 
@@ -267,11 +272,20 @@ def parse_companion_attrs(
     verbatim, an absent ``temporal`` key the legacy encoding (§8), and both
     pre-declaration store populations are conformant as they stand. When the
     block IS present it is strict-checked per §8's conformance rules: an
-    unknown or future ``spec`` raises, a ``shape`` this layer does not
-    implement raises (guessing never being an option — the ragged sibling
-    path implements ``"per-centroid"`` only), and an unimplemented
-    ``grammar`` raises. Keys beyond ``{spec, shape, grammar}`` are ignored
-    rather than refused (§9: "informative extra keys ignored").
+    unknown or future ``spec`` raises, a ``shape`` outside ``shapes`` raises
+    (guessing never being an option), and an unimplemented ``grammar``
+    raises. Keys beyond ``{spec, shape, grammar}`` are ignored rather than
+    refused (§9: "informative extra keys ignored").
+
+    ``shapes`` is the caller naming the §8 shape vocabulary values ITS path
+    implements — §8 hangs the refusal on the implementation ("a reader MUST
+    refuse a ``shape`` it does not implement"), which this parser cannot
+    know for a caller it does not decode for. The default is the ragged
+    sibling path's ``("per-centroid",)``, so :func:`read_ragged`'s two call
+    sites take it unchanged; a caller decoding the §8.2 dense per-cell
+    channel passes ``shapes=("per-cell",)`` and gets the same strict
+    ``spec``/``grammar`` gate over a declaration this module would otherwise
+    refuse on its sibling path's behalf.
     """
     key, want_spec, want_grammar = _COMPANION_DOMAINS[domain]
     block = attrs.get(key) if isinstance(attrs, Mapping) else None
@@ -289,10 +303,10 @@ def parse_companion_attrs(
             f"{want_spec!r} only — an unknown or future revision must be adopted "
             f"deliberately, never half-parsed (spec §8)"
         )
-    if shape != _COMPANION_SHAPE:
+    if shape not in shapes:
         raise ValueError(
-            f"{field!r} declares {key} shape {shape!r}; the ragged sibling path "
-            f"implements {_COMPANION_SHAPE!r} only, and a reader MUST refuse a "
+            f"{field!r} declares {key} shape {shape!r}; this path implements "
+            f"{', '.join(repr(s) for s in shapes)} only, and a reader MUST refuse a "
             f"shape it does not implement rather than mis-decode it (spec §8)"
         )
     if grammar != want_grammar:
