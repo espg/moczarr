@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Vendored spec fixtures refreshed to englacial/zagg `main` at `d52e3063`
+  ([#43](https://github.com/espg/moczarr/issues/43) sweep, post zagg #420/#463):
+  `minimal/` and `kitchen_sink/` are now **whole-tree byte-identical** to the
+  zagg vectors — re-pinned `semantic_hash` and canonical granule ids
+  (zagg #420), the `zagg-pyramid/2` manifest declaration, and the §4.6 leaf
+  column surface (`all.pyramid.zarr` + `all.pyramid.stats.json`,
+  `granules.json`) vendored beside each leaf. Every array byte the conformance
+  suite decodes is unchanged; no reader behavior changes in this entry.
+
 - Vendored spec fixtures re-pinned under the **authalic** latitude convention
   ([#41](https://github.com/espg/moczarr/issues/41), tracking
   englacial/zagg#441 and mortie >=0.9.8): `kitchen_sink`'s two `*_locations`
