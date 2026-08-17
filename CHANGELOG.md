@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Vendored spec fixtures re-pinned under the **authalic** latitude convention
+  ([#41](https://github.com/espg/moczarr/issues/41), tracking
+  englacial/zagg#441 and mortie >=0.9.8): `kitchen_sink`'s two `*_locations`
+  arrays hold different order-29 morton words, so their chunk bytes, their two
+  O11 array hashes and the fixture's `combined` hash all move. Test data only —
+  no reader behavior changes, and every other vendored array (the digest
+  payloads, `count`, `morton`, `composition`, and all of `minimal`) is
+  byte-identical across the convention change. A downstream re-checking against
+  its own copy of the zagg vectors must refresh from zagg `main` at `b9347561`
+  or later.
+
 - Span-restricted (subtree) reads for the ragged/HHDC layer
   ([#29](https://github.com/espg/moczarr/issues/29); the counterpart of
   englacial/zagg#351, normative property zagg spec §1.5 "Subtree spans"):
