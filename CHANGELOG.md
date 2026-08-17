@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Temporal companion channel (`zagg-toc/1`, spec §8.3; englacial/zagg#410 /
+  PR #463): `moczarr.ragged` now binds and decodes a digest field's
+  per-centroid `{field}_times` sibling — `read_ragged(..., times=True)`,
+  bound from the payload's spec-owned top-level `times` attrs key, row
+  alignment enforced, words yielded as raw `uint64` (mortie-toc/1 word
+  semantics are deliberately not decoded at this layer). Companion arrays'
+  §8 `temporal` / §9 `located` declaration blocks are gated by the new
+  `parse_companion_attrs` — strict-checked when present (unknown spec /
+  shape / grammar refuse loudly), absent never a refusal (absent `located`
+  is §2.2 verbatim; both pre-declaration fixture populations stay green).
+  The `tests/data/spec/temporal/` fixture is vendored whole-tree
+  byte-identical from zagg `d52e3063`, and the conformance suite pins the
+  leaf ingest words, the §4.6 column's folded per-centroid companions at
+  resolutions 4 and 5 (espg's 2026-08-17 ruling: symmetric with located at
+  every level), the O11 hash gate against `all.pyramid.stats.json`, and the
+  manifest's `h_tdigest` composability reclassification (`none` →
+  `approximate`).
+
 - Vendored spec fixtures refreshed to englacial/zagg `main` at `d52e3063`
   ([#43](https://github.com/espg/moczarr/issues/43) sweep, post zagg #420/#463):
   `minimal/` and `kitchen_sink/` are now **whole-tree byte-identical** to the

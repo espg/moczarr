@@ -10,7 +10,16 @@ omitted from disk entirely. The element interpretation is self-describing in
 the payload array's attrs under the versioned ``ragged`` block (§1.2), and a
 **located** field declares its row-aligned ``uint64`` sibling there too —
 readers bind the sibling by metadata, never by reconstructing the
-``{field}_locations`` naming convention.
+``{field}_locations`` naming convention. A **temporal** field (spec §8.3,
+zagg#410) declares a second row-aligned ``uint64`` sibling — per-centroid
+toc words — under the spec-owned top-level ``times`` attrs key, a sibling
+of the ``ragged`` block rather than a member of it (the block grammar is
+unchanged by that revision). Companion siblings self-describe their word
+grammar in their own attrs — the §8 ``temporal`` / §9 ``located``
+declaration blocks (:func:`parse_companion_attrs`): strict-checked when
+present; an absent ``located`` block is §2.2 verbatim and never a refusal.
+This layer decodes companion words as bytes (row-aligned ``uint64``); the
+word semantics (mortie's morton / toc grammars) live above it.
 
 Zero product knowledge lives here: this module decodes any conforming
 element declaration (a t-digest's ``float32 (n, 2)``, a locations sibling's
@@ -78,14 +87,23 @@ from moczarr.convention import (
 )
 
 __all__ = [
+    "LOCATED_ATTR",
+    "LOCATED_SPEC",
+    "MORTON_GRAMMAR",
     "RAGGED2_DATA_TYPE",
     "RAGGED2_SPEC",
     "RAGGED_ATTR",
     "RAGGED_SPEC",
+    "TEMPORAL_ATTR",
+    "TIMES_ATTR",
+    "TOC_GRAMMAR",
+    "TOC_SPEC",
+    "CompanionDeclaration",
     "RaggedElement",
     "decode_cell",
     "iter_populated_chunks",
     "open_ragged",
+    "parse_companion_attrs",
     "parse_ragged_attrs",
     "read_cell",
     "read_ragged",
@@ -104,6 +122,36 @@ RAGGED_SPEC = "zagg-ragged/1"
 RAGGED2_SPEC = "zagg-ragged/2"
 #: The registered zarr v3 extension data type that IS the ``/2`` signal.
 RAGGED2_DATA_TYPE = "vlen-ndarray"
+#: Spec-owned TOP-LEVEL attrs key binding a payload array's temporal sibling
+#: (§8.3). Deliberately a sibling of the ``ragged`` block, never a member of
+#: it: the block is retired wholesale under ``/2`` (§1.6/§6.3), so a key
+#: outside it survives that metadata-only migration untouched.
+TIMES_ATTR = "times"
+#: Attrs key of the §8 temporal word-typed coordinate declaration, carried by
+#: the array that HOLDS the words (a companion declares itself, never a
+#: neighbour).
+TEMPORAL_ATTR = "temporal"
+#: Attrs key of the §9 spatial (located) declaration, same pattern.
+LOCATED_ATTR = "located"
+#: The one temporal declaration revision this layer accepts (§8).
+TOC_SPEC = "zagg-toc/1"
+#: The one located declaration revision this layer accepts (§9).
+LOCATED_SPEC = "zagg-located/1"
+#: The toc word grammar named by §8's fixed token (mortie's spec, not restated).
+TOC_GRAMMAR = "mortie-toc/1"
+#: The morton word grammar named by §9's fixed token.
+MORTON_GRAMMAR = "mortie-morton/1"
+#: Per-domain ``(attrs key, spec revision, word grammar)`` of the §8/§9
+#: declaration blocks this layer understands.
+_COMPANION_DOMAINS = {
+    "temporal": (TEMPORAL_ATTR, TOC_SPEC, TOC_GRAMMAR),
+    "located": (LOCATED_ATTR, LOCATED_SPEC, MORTON_GRAMMAR),
+}
+#: The one §8 ``shape`` vocabulary value the ragged sibling path implements:
+#: one word per centroid row, aligned with the payload it accompanies. The
+#: other shapes ("coordinate", "per-cell") describe dense arrays outside this
+#: module's scope.
+_COMPANION_SHAPE = "per-centroid"
 
 
 @dataclass(frozen=True)
@@ -120,11 +168,18 @@ class RaggedElement:
     locations : str or None
         Sibling array name carrying the per-row ``uint64`` location words
         (located fields only, spec §1.1/§2.2); ``None`` when unlocated.
+    times : str or None
+        Sibling array name carrying the per-row ``uint64`` toc words
+        (temporal fields only, spec §8.3), bound from the spec-owned
+        TOP-LEVEL ``times`` attrs key — a sibling of the ``ragged`` block,
+        not a member of it. ``None`` when the field has no temporal
+        companion.
     """
 
     dtype: np.dtype
     inner_shape: tuple[int, ...]
     locations: str | None = None
+    times: str | None = None
 
 
 def parse_ragged_attrs(attrs: Mapping | None, *, field: str = "<array>") -> RaggedElement:
@@ -170,11 +225,70 @@ def parse_ragged_attrs(attrs: Mapping | None, *, field: str = "<array>") -> Ragg
             f"form is [-1, *inner_shape] (the -1 marks the per-cell varying count)"
         )
     locations = block.get("locations")
+    times = attrs.get(TIMES_ATTR)  # §8.3: beside the block, never inside it
     return RaggedElement(
         dtype=dtype,
         inner_shape=tuple(shape[1:]),
         locations=str(locations) if locations else None,
+        times=str(times) if times else None,
     )
+
+
+@dataclass(frozen=True)
+class CompanionDeclaration:
+    """One companion array's parsed §8/§9 word-typed coordinate declaration."""
+
+    spec: str
+    shape: str
+    grammar: str
+
+
+def parse_companion_attrs(
+    attrs: Mapping | None, *, domain: str, field: str = "<array>"
+) -> CompanionDeclaration | None:
+    """The §8/§9 declaration gate on a companion array's own attrs.
+
+    ``domain`` is ``"temporal"`` (attrs key ``temporal``, spec §8) or
+    ``"located"`` (attrs key ``located``, spec §9). Returns ``None`` when the
+    block is absent — never a refusal: an absent ``located`` key is §2.2
+    verbatim, an absent ``temporal`` key the legacy encoding (§8), and both
+    pre-declaration store populations are conformant as they stand. When the
+    block IS present it is strict-checked per §8's conformance rules: an
+    unknown or future ``spec`` raises, a ``shape`` this layer does not
+    implement raises (guessing never being an option — the ragged sibling
+    path implements ``"per-centroid"`` only), and an unimplemented
+    ``grammar`` raises. Keys beyond ``{spec, shape, grammar}`` are ignored
+    rather than refused (§9: "informative extra keys ignored").
+    """
+    key, want_spec, want_grammar = _COMPANION_DOMAINS[domain]
+    block = attrs.get(key) if isinstance(attrs, Mapping) else None
+    if block is None:
+        return None
+    if not isinstance(block, Mapping):
+        raise ValueError(
+            f'{field!r} carries a malformed {key!r} declaration (attrs["{key}"] '
+            f"must be a mapping holding spec/shape/grammar — spec §8/§9)"
+        )
+    spec, shape, grammar = block.get("spec"), block.get("shape"), block.get("grammar")
+    if spec != want_spec:
+        raise ValueError(
+            f"{field!r} declares {key} spec {spec!r}; this reader understands "
+            f"{want_spec!r} only — an unknown or future revision must be adopted "
+            f"deliberately, never half-parsed (spec §8)"
+        )
+    if shape != _COMPANION_SHAPE:
+        raise ValueError(
+            f"{field!r} declares {key} shape {shape!r}; the ragged sibling path "
+            f"implements {_COMPANION_SHAPE!r} only, and a reader MUST refuse a "
+            f"shape it does not implement rather than mis-decode it (spec §8)"
+        )
+    if grammar != want_grammar:
+        raise ValueError(
+            f"{field!r} declares {key} grammar {grammar!r}; this reader decodes "
+            f"{want_grammar!r} words only, and a reader MUST refuse a grammar it "
+            f"does not implement (spec §8)"
+        )
+    return CompanionDeclaration(spec=str(spec), shape=str(shape), grammar=str(grammar))
 
 
 def decode_cell(raw: object, element: RaggedElement) -> np.ndarray:
@@ -529,6 +643,7 @@ def read_ragged(
     field: str,
     *,
     locations: bool = False,
+    times: bool = False,
     subtree: int | str | None = None,
     zarr_format: Literal[2, 3] = 3,
 ) -> Iterator[tuple]:
@@ -539,12 +654,14 @@ def read_ragged(
     geometries through the same path — no per-inner-chunk re-fetch), with
     the sibling ``morton`` coordinate served from one cached window per
     stored coordinate object (:class:`_MortonWords`) rather than re-sliced
-    per span. Yields
-    ``(morton_word, values)`` per populated cell — or ``(morton_word,
-    values, location_words)`` with ``locations=True`` — where ``morton_word``
-    is the cell's own packed ``uint64`` coordinate from the sibling
-    ``morton`` array and ``values`` is the cell's decoded ``(n,
-    *inner_shape)`` payload.
+    per span. Yields ``(morton_word, values)`` per populated cell, extended
+    by the requested companion channels in a fixed order — ``(morton_word,
+    values, location_words)`` with ``locations=True``, ``(morton_word,
+    values, time_words)`` with ``times=True``, and ``(morton_word, values,
+    location_words, time_words)`` with both — where ``morton_word`` is the
+    cell's own packed ``uint64`` coordinate from the sibling ``morton``
+    array and ``values`` is the cell's decoded ``(n, *inner_shape)``
+    payload.
 
     Parameters
     ----------
@@ -556,7 +673,19 @@ def read_ragged(
     locations : bool, optional
         Also decode the located sibling (spec §1.1/§2.2), bound by the
         payload array's ``locations`` attrs declaration — never by naming
-        convention. Raises ``ValueError`` on an unlocated field.
+        convention. Raises ``ValueError`` on an unlocated field. A ``located``
+        declaration block on the sibling (spec §9) is strict-checked when
+        present; its absence is §2.2 verbatim, never a refusal.
+    times : bool, optional
+        Also decode the temporal sibling (spec §8.3) — one ``uint64`` toc
+        word per payload row — bound by the payload array's spec-owned
+        top-level ``times`` attrs key, never by naming convention. Raises
+        ``ValueError`` on a field with no temporal companion, and on a bound
+        sibling that does not carry the §8.3 ``temporal`` declaration at
+        ``shape: "per-centroid"`` (the binding key exists only under §8.3,
+        so an undeclared bound sibling is non-conformant — unlike the dense
+        legacy-encoding arrays §8's absent-key clause covers). The words are
+        yielded raw; decoding them (mortie-toc/1) is the caller's layer.
     subtree : int or str, optional
         Restrict the sweep to the cells below this morton ancestor — a
         packed area word (``int``) or its decimal string (``str``), the
@@ -587,9 +716,12 @@ def read_ragged(
     ValueError
         On the strict attrs gate (:func:`parse_ragged_attrs`), a missing
         ``morton`` sibling, a populated cell with no written morton word, a
-        located sibling whose row count disagrees with the payload (the
-        §1.1 row-alignment MUST), ``locations=True`` on an unlocated
-        field, or a malformed / too-deep / finer-than-chunk ``subtree``.
+        companion sibling whose row count disagrees with the payload (the
+        §1.1/§8.3 row-alignment MUST), ``locations=True`` on an unlocated
+        field, ``times=True`` on a field with no temporal companion or one
+        whose sibling fails the §8/§9 declaration gate
+        (:func:`parse_companion_attrs`), or a malformed / too-deep /
+        finer-than-chunk ``subtree``.
     """
     arr, element = open_ragged(store, field, zarr_format=zarr_format)
     morton = _morton_words(store, field, zarr_format)
@@ -603,9 +735,34 @@ def read_ragged(
                 f'(attrs["{RAGGED_ATTR}"]["locations"]); it was not written as a '
                 f"located ragged field"
             )
-        loc_arr, loc_element = open_ragged(
-            store, _sibling_path(field, element.locations), zarr_format=zarr_format
-        )
+        loc_path = _sibling_path(field, element.locations)
+        loc_arr, loc_element = open_ragged(store, loc_path, zarr_format=zarr_format)
+        # §9: strict-check the declaration when present; absence is §2.2
+        # verbatim (kitchen_sink, committed before §9, stays conformant).
+        parse_companion_attrs(dict(loc_arr.attrs), domain="located", field=loc_path)
+    times_arr = times_element = None
+    if times:
+        if element.times is None:
+            raise ValueError(
+                f"{field!r} declares no temporal sibling "
+                f'(attrs["{TIMES_ATTR}"]); it was not written as a temporal '
+                f"ragged field (spec §8.3)"
+            )
+        times_path = _sibling_path(field, element.times)
+        times_arr, times_element = open_ragged(store, times_path, zarr_format=zarr_format)
+        # §8.3: the binding carries no declaration of its own — that MUST be
+        # read off the sibling, and a bound sibling without it is
+        # non-conformant (the binding key exists only under §8.3).
+        if (
+            parse_companion_attrs(dict(times_arr.attrs), domain="temporal", field=times_path)
+            is None
+        ):
+            raise ValueError(
+                f"{times_path!r} is bound as {field!r}'s temporal sibling but "
+                f'carries no attrs["{TEMPORAL_ATTR}"] declaration — §8.3 requires '
+                f"the bound sibling to declare {TOC_SPEC!r} at shape "
+                f'"{_COMPANION_SHAPE}"'
+            )
     cells_per_chunk = int(arr.chunks[0])
     for span_start, span_stop in stored_chunk_spans(arr) if spans is None else spans:
         if span is not None:
@@ -621,6 +778,9 @@ def read_ragged(
         data = cast(np.ndarray, arr[span_start:span_stop])
         words = morton[span_start:span_stop]
         loc_span = cast(np.ndarray, loc_arr[span_start:span_stop]) if loc_arr is not None else None
+        times_span = (
+            cast(np.ndarray, times_arr[span_start:span_stop]) if times_arr is not None else None
+        )
         for pos in range(span_stop - span_start):
             raw = data[pos]
             if _is_empty(raw):
@@ -642,18 +802,28 @@ def read_ragged(
                     f"write did not cover it"
                 )
             values = decode_cell(raw, element)
-            if loc_span is None:
-                yield word, values
-                continue
-            assert loc_element is not None
-            cell_locations = decode_cell(loc_span[pos], loc_element)
-            if len(cell_locations) != len(values):
-                raise ValueError(
-                    f"cell {span_start + pos} of {field!r} has {len(values)} payload "
-                    f"rows but {len(cell_locations)} location words — the located "
-                    f"sibling is not row-aligned (spec §1.1)"
-                )
-            yield word, values, cell_locations
+            out: tuple = (word, values)
+            if loc_span is not None:
+                assert loc_element is not None
+                cell_locations = decode_cell(loc_span[pos], loc_element)
+                if len(cell_locations) != len(values):
+                    raise ValueError(
+                        f"cell {span_start + pos} of {field!r} has {len(values)} payload "
+                        f"rows but {len(cell_locations)} location words — the located "
+                        f"sibling is not row-aligned (spec §1.1)"
+                    )
+                out += (cell_locations,)
+            if times_span is not None:
+                assert times_element is not None
+                cell_times = decode_cell(times_span[pos], times_element)
+                if len(cell_times) != len(values):
+                    raise ValueError(
+                        f"cell {span_start + pos} of {field!r} has {len(values)} payload "
+                        f"rows but {len(cell_times)} time words — the temporal "
+                        f"sibling is not row-aligned (spec §8.3)"
+                    )
+                out += (cell_times,)
+            yield out
 
 
 def read_cell(
