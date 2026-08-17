@@ -13,7 +13,10 @@
   the "an absent `located` block is this section verbatim, never a refusal"
   sentence the module cites as spec text). The §2.0 `weights` declaration
   remains un-gated and is documented at the pin as the known gap issue #43
-  tracks; the gate design question there is still standing.
+  tracks: what stands open there is the gate's implementation — a scope #43
+  already prescribes, down to mirroring zagg's `check_weights_match` posture
+  — not its design, and this advance records only the delta review #43's pin
+  bullet calls for.
 
 - Temporal companion channel (`zagg-toc/1`, spec §8.3; englacial/zagg#410 /
   PR #463): `moczarr.ragged` now binds and decodes a digest field's
