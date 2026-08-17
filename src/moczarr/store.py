@@ -39,6 +39,7 @@ import numpy as np
 from moczarr.convention import (
     COMMIT_ATTR,
     MANIFEST_NAME,
+    PYRAMID_COLUMN_SUFFIX,
     ROOT_COVERAGE_NAME,
     is_base_component,
     morton_word,
@@ -398,13 +399,22 @@ def _classify_children(listing, prefix: str, path_grouping: int = 1) -> Iterator
     (``1..4``) component of 1..``path_grouping`` digits (spec §6.1: only the
     terminal component may be short, but terminal-ness is not knowable from
     one LIST, so the walker accepts any conforming width and recurses); a
-    ``*.zarr`` child is a leaf at that node. Non-conforming names below the
-    root are ignored (the node invariant says they are not ours to
-    interpret).
+    ``*.zarr`` child is a leaf at that node — except a ``*.pyramid.zarr``
+    one. That suffix is spec §4.6's one **normative** name seam for
+    name-grammar consumers (this walker is the named example): a basename
+    ending in ``.pyramid.zarr`` is a leaf **column** and MUST NOT be read as
+    a leaf or an overview. The seam is unambiguous because the D23 window
+    charset admits no ``.``, so no legitimate leaf or overview basename can
+    end that way — and a column is commit-stamped like a leaf, so nothing
+    downstream (:func:`read_commit`, the tiered completeness check) would
+    catch it. Non-conforming names below the root are ignored (the node
+    invariant says they are not ours to interpret).
     """
     for child in listing["common_prefixes"]:
         rel = child.rstrip("/")
         name = rel.split("/")[-1]
+        if name.endswith(PYRAMID_COLUMN_SUFFIX):
+            continue  # §4.6 column: never a leaf, never an overview
         if name.endswith(".zarr"):
             yield rel, True
             continue
@@ -447,6 +457,9 @@ def walk_leaves(
     strongly consistent and object stores have no empty prefixes, so absence
     is definitive). Yields stamped and debris leaves alike — completeness is
     the caller's check (:func:`read_commit`), matching the tiered postures.
+    A §4.6 leaf **column** (``*.pyramid.zarr``) is never yielded: the name
+    seam excludes it, and it has to, because a column carries a commit stamp
+    of its own and would pass that completeness check.
 
     ``path_grouping`` is the manifest's digit-chunking (spec §6.1) — child
     classification depends on it, so callers walking a grouped store must

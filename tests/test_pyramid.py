@@ -32,6 +32,7 @@ from moczarr import (
     open_store,
     overview_orders,
     source_orders,
+    store,
 )
 from moczarr.convention import morton_word
 from moczarr.pyramid import (
@@ -45,6 +46,9 @@ from moczarr.pyramid import (
 FIXTURE = Path(__file__).parent / "data" / "overview_hive"
 GOLDEN = json.loads((Path(__file__).parent / "data" / "overview_hive.golden.json").read_text())
 MULTI = Path(__file__).parent / "data" / "multiproduct_hive"
+#: The vendored spec §7 "minimal" vector — one leaf plus its §4.6 column.
+SPEC_MINIMAL_PATH = Path(__file__).parent / "data" / "spec" / "minimal"
+SPEC_MINIMAL = str(SPEC_MINIMAL_PATH)
 
 
 @pytest.fixture()
@@ -590,6 +594,22 @@ class TestDegradation:
         want = open_hive(str(FIXTURE), product="atl06")
         assert int(ds["count"].sum()) == int(want["count"].sum())
         assert ds.sizes["cells"] == want.sizes["cells"]
+
+    def test_walk_open_hive_skip_the_leaf_column(self):
+        # §4.6's name seam is NORMATIVE for name-grammar consumers: a
+        # basename ending ".pyramid.zarr" MUST NOT be read as a leaf or an
+        # overview. The vendored §7 fixture is the first in-tree store that
+        # carries a column, and the seam has to do the work alone — the
+        # column is commit-stamped ("complete": true, 3 cells), so the
+        # walk's documented completeness check (read_commit) would wave it
+        # through as a bona fide extra leaf.
+        root = SPEC_MINIMAL
+        column = "1/1/2/1/3/all.pyramid.zarr"
+        assert (SPEC_MINIMAL_PATH / column / "zarr.json").exists()
+        assert store.read_commit(root, column)["complete"] is True
+        assert list(store.walk_leaves(root)) == ["1/1/2/1/3/11213.zarr"]
+        # And the walk-driven open: one leaf's cells, not the column's.
+        assert open_hive(root).sizes["cells"] == 16
 
     # An UNINTERPRETABLE cache object is debris, not a fatal error: §4.1 makes
     # overviews "regenerable caches, never load-bearing… a reader MUST NOT
