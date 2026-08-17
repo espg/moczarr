@@ -12,9 +12,12 @@
 
 - Temporal companion channel (`zagg-toc/1`, spec §8.3; englacial/zagg#410 /
   PR #463): `moczarr.ragged` now binds and decodes a digest field's
-  per-centroid `{field}_times` sibling — `read_ragged(..., times=True)`,
-  bound from the payload's spec-owned top-level `times` attrs key, row
-  alignment enforced, words yielded as raw `uint64` (mortie-toc/1 word
+  per-centroid temporal sibling — `read_ragged(..., times=True)` — named by
+  the payload's spec-owned top-level `times` attrs key, **never** by
+  reconstructing a naming convention from the field name (§8.3; the
+  spec-text-only fixture's sibling is deliberately named `t_words`, nothing
+  like `{field}_times`). Row alignment and the sibling's `uint64` element
+  declaration are enforced, and words are yielded raw (mortie-toc/1 word
   semantics are deliberately not decoded at this layer). Companion arrays'
   §8 `temporal` / §9 `located` declaration blocks are gated by the new
   `parse_companion_attrs` — strict-checked when present (unknown spec /
