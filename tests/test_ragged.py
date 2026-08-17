@@ -429,6 +429,32 @@ class TestParseCompanionAttrs:
         with pytest.raises(ValueError, match="malformed"):
             parse_companion_attrs({"located": "yes"}, domain="located")
 
+    def test_unknown_domain_raises_a_spec_citing_error(self):
+        """``domain`` is a public keyword: a typo names the two the spec
+        instantiates, never a bare ``KeyError``."""
+        with pytest.raises(ValueError, match="unknown companion domain 'temporal '"):
+            parse_companion_attrs({}, domain="temporal ")
+
+    def test_refusals_cite_the_domain_that_defines_them(self):
+        """§9 for ``located``, §8 for ``temporal`` — the reader meeting a
+        ``zagg-located/2`` refusal wants pointing at §9."""
+        with pytest.raises(ValueError, match=r"\(spec §9\)"):
+            parse_companion_attrs(
+                {
+                    "located": {
+                        "spec": "zagg-located/2",
+                        "shape": "per-centroid",
+                        "grammar": MORTON_GRAMMAR,
+                    }
+                },
+                domain="located",
+            )
+        with pytest.raises(ValueError, match=r"\(spec §8\)"):
+            parse_companion_attrs(
+                {"temporal": {"spec": TOC_SPEC, "shape": "per-cell", "grammar": TOC_GRAMMAR}},
+                domain="temporal",
+            )
+
 
 class TestDecodeCell:
     def test_decodes_declared_element(self):

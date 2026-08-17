@@ -154,11 +154,14 @@ LOCATED_SPEC = "zagg-located/1"
 TOC_GRAMMAR = "mortie-toc/1"
 #: The morton word grammar named by §9's fixed token.
 MORTON_GRAMMAR = "mortie-morton/1"
-#: Per-domain ``(attrs key, spec revision, word grammar)`` of the §8/§9
-#: declaration blocks this layer understands.
+#: Per-domain ``(attrs key, spec revision, word grammar, spec section)`` of
+#: the §8/§9 declaration blocks this layer understands. The section travels
+#: with the domain so a refusal cites the section that DEFINES the domain —
+#: §9 says §8's rules apply "unchanged and is not restated", but a reader
+#: meeting a ``zagg-located/2`` refusal wants pointing at §9.
 _COMPANION_DOMAINS = {
-    "temporal": (TEMPORAL_ATTR, TOC_SPEC, TOC_GRAMMAR),
-    "located": (LOCATED_ATTR, LOCATED_SPEC, MORTON_GRAMMAR),
+    "temporal": (TEMPORAL_ATTR, TOC_SPEC, TOC_GRAMMAR, "§8"),
+    "located": (LOCATED_ATTR, LOCATED_SPEC, MORTON_GRAMMAR, "§9"),
 }
 #: The one §8 ``shape`` vocabulary value the ragged sibling path implements:
 #: one word per centroid row, aligned with the payload it accompanies. The
@@ -267,7 +270,9 @@ def parse_companion_attrs(
     """The §8/§9 declaration gate on a companion array's own attrs.
 
     ``domain`` is ``"temporal"`` (attrs key ``temporal``, spec §8) or
-    ``"located"`` (attrs key ``located``, spec §9). Returns ``None`` when the
+    ``"located"`` (attrs key ``located``, spec §9) — any other value raises
+    ``ValueError`` naming both, and every refusal cites the section that
+    DEFINES the domain. Returns ``None`` when the
     block is absent — never a refusal: an absent ``located`` key is §2.2
     verbatim, an absent ``temporal`` key the legacy encoding (§8), and both
     pre-declaration store populations are conformant as they stand. When the
@@ -287,7 +292,13 @@ def parse_companion_attrs(
     ``spec``/``grammar`` gate over a declaration this module would otherwise
     refuse on its sibling path's behalf.
     """
-    key, want_spec, want_grammar = _COMPANION_DOMAINS[domain]
+    try:
+        key, want_spec, want_grammar, section = _COMPANION_DOMAINS[domain]
+    except KeyError as exc:
+        raise ValueError(
+            f"unknown companion domain {domain!r}; this layer implements the two "
+            f"the spec instantiates: 'temporal' (spec §8) and 'located' (spec §9)"
+        ) from exc
     block = attrs.get(key) if isinstance(attrs, Mapping) else None
     if block is None:
         return None
@@ -301,19 +312,19 @@ def parse_companion_attrs(
         raise ValueError(
             f"{field!r} declares {key} spec {spec!r}; this reader understands "
             f"{want_spec!r} only — an unknown or future revision must be adopted "
-            f"deliberately, never half-parsed (spec §8)"
+            f"deliberately, never half-parsed (spec {section})"
         )
     if shape not in shapes:
         raise ValueError(
             f"{field!r} declares {key} shape {shape!r}; this path implements "
             f"{', '.join(repr(s) for s in shapes)} only, and a reader MUST refuse a "
-            f"shape it does not implement rather than mis-decode it (spec §8)"
+            f"shape it does not implement rather than mis-decode it (spec {section})"
         )
     if grammar != want_grammar:
         raise ValueError(
             f"{field!r} declares {key} grammar {grammar!r}; this reader decodes "
             f"{want_grammar!r} words only, and a reader MUST refuse a grammar it "
-            f"does not implement (spec §8)"
+            f"does not implement (spec {section})"
         )
     return CompanionDeclaration(spec=str(spec), shape=str(shape), grammar=str(grammar))
 
@@ -894,8 +905,8 @@ def read_cell(
     negative-index wrap). An absent/empty cell returns the zero-length
     ``(0, *inner_shape)`` array; an out-of-range index raises ``IndexError``
     naming the valid range (zarr basic selection would silently clamp the
-    slice). Works on any conforming array — a located field's sibling
-    included (its elements decode as ``(n,)`` uint64 words).
+    slice). Works on any conforming array — a companion sibling (located,
+    §9, or temporal, §8.3) included: both decode as ``(n,)`` uint64 words.
     """
     arr, element = open_ragged(store, field, zarr_format=zarr_format)
     cell = int(cell)
