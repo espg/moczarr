@@ -34,8 +34,14 @@ section for this advance:
   mis-decodes. §2.0 is **new**: a payload declares its weight column as
   ``counts`` (which an absent key MUST be read as) or ``flux``, a
   reader-relevant MUST this layer does NOT yet gate on — a known gap
-  tracked as espg/moczarr#43, where the gate's design is a standing
-  question; digest payload bytes still decode identically under either
+  tracked as espg/moczarr#43. What stands open there is the gate's
+  *implementation*, not its design: #43 prescribes the scope (read the
+  declaration off payload arrays with the absent-⇒-``counts`` default,
+  surface it on the read API, and mirror zagg's ``check_weights_match``
+  posture across mismatched declarations). This pin advance asserts the
+  narrower thing — the delta review #43's pin bullet calls for, performed
+  and recorded right here — and leaves the gate as #43's scope.
+  Digest payload bytes still decode identically under either
   declaration, so nothing here mis-decodes, but a consumer summing weights
   must consult #43's resolution before presenting the sum as an
   observation count. Un-gated leaves §2.0's other two arms unenforced as
