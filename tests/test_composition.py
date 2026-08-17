@@ -319,7 +319,7 @@ class TestStoreReadBinding:
     instead of archaeology and a regenerated fixture shows up as a mismatch
     rather than a stale copy that keeps passing::
 
-        englacial/zagg b9347561 (main, 2026-08-16)
+        englacial/zagg d52e3063 (main, 2026-08-17)
         tests/data/spec/kitchen_sink/1/1/2/1/3/11213.zarr/6/composition
 
         cmp  <zagg>/.../6/composition/c/0         tests/data/composition/c/0
@@ -327,9 +327,11 @@ class TestStoreReadBinding:
 
     Both are byte-identical at that sha (re-verified by ``cmp``/``diff``; the
     array has not been regenerated since it landed on ``main`` — englacial/zagg
-    #441's authalic re-pin moved the leaf's two ``*_locations`` arrays and left
-    every other array untouched, so the branch-era pins ``166e908``/``555874b``
-    are historical). Re-pin the sha here if the fixture is ever regenerated. The
+    #441's authalic re-pin moved the leaf's two ``*_locations`` arrays, and the
+    #420/#463 refreshes moved only fixture metadata and added the pyramid-era
+    surface beside the leaf, leaving this array untouched, so the branch-era
+    pins ``166e908``/``555874b`` and the interim ``9e11e65``/``b9347561`` are
+    historical). Re-pin the sha here if the fixture is ever regenerated. The
     ``n_signal`` literals below are that fixture's recorded per-cell
     signal-digest weights (``kitchen_sink.expected.json``).
     """
