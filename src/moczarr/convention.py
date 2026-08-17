@@ -82,6 +82,13 @@ _LABEL_RE = re.compile(r"^[0-9A-Za-z-]{1,32}$")
 #: forever, so it is never a legal ``window=`` argument
 #: (:func:`validate_window`).
 ALL_TOKEN = "all"
+#: Spec §4.6 leaf-column basename suffix — the one name seam, and it is
+#: NORMATIVE for name-grammar consumers (the root-MOC walker being the
+#: spec's named example): a basename ending in ``.pyramid.zarr`` is a
+#: per-``(node, window)`` column and MUST NOT be read as a leaf or an
+#: overview. Unambiguous because the frozen label charset above admits no
+#: ``.``, so no legitimate leaf or overview basename can end this way.
+PYRAMID_COLUMN_SUFFIX = ".pyramid.zarr"
 
 #: Spec §1 suffix bands: ``0..=27`` area (order == suffix), ``28..=47``
 #: order-28/29 area preorder, ``48..=63`` order-29 POINT (no area claim).
