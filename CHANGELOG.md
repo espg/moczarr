@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+- Spec-text pins advanced `9e11e65` → `d52e3063` (issue #43's re-check,
+  performed per pinned item): `moczarr.ragged`'s §1 pin (the delta is the
+  §8.3 temporal-sibling surface adopted in this release; §1.3–§1.5
+  unchanged) and `moczarr.composition`'s §3 pin (byte-identical across the
+  delta — pure advance). The §2.0 `weights` declaration remains un-gated
+  and is documented at the pin as the known gap issue #43 tracks; the gate
+  design question there is still standing.
+
 - Temporal companion channel (`zagg-toc/1`, spec §8.3; englacial/zagg#410 /
   PR #463): `moczarr.ragged` now binds and decodes a digest field's
   per-centroid `{field}_times` sibling — `read_ragged(..., times=True)`,
