@@ -154,16 +154,21 @@ def morton_word(label: str | int) -> int:
 
     Accepts the §2 ``p`` kind-suffix on full order-29 POINT ids: the stem
     parses as the area word and the §1 point suffix is restored moczarr-side
-    (:func:`area29_to_point`) — mortie 0.9.0 predates the ``p`` grammar
-    (espg/mortie#120/#121). An UNMARKED order-29 string parses as the AREA
-    word, the normative §4 tie-break. Rides mortie's private-but-documented
-    ``_decimal_to_word`` (numpy-only; the public array classes require
-    pandas — upstream ask for a public export stands, same note as zagg's
-    boundary helper).
+    (:func:`area29_to_point`). Not a capability gap — the supported mortie
+    floor parses ``p`` natively and to the same word — but the branch is
+    moczarr's own read of the §2 grammar, so a misplaced marker gets an error
+    naming the spec rather than the parser's, and the §4 tie-break below
+    stays visibly ours. Both forms are pinned bit-for-bit against golden
+    literals in ``tests/test_convention.py``. An UNMARKED order-29 string
+    parses as the AREA word, the normative §4 tie-break. Rides mortie's
+    public scalar ``decimal_to_word`` (espg/mortie#114; issue #38 — the
+    deprecated private ``_decimal_to_word`` carried no compatibility
+    promise). This seam parses ONE label by contract; a caller with a batch
+    reaches for ``mortie.decimals_to_words`` instead of looping here.
     """
     if isinstance(label, (int, np.integer)):
         return int(label)
-    from mortie.morton_index import _decimal_to_word
+    from mortie import decimal_to_word
 
     text = str(label)
     if text.endswith("p"):
@@ -173,8 +178,8 @@ def morton_word(label: str | int) -> int:
                 f"{label!r}: the 'p' kind-suffix is legal only on a full order-29 "
                 f"POINT id (points exist only at order 29; spec §2)"
             )
-        return int(area29_to_point(int(_decimal_to_word(stem))))
-    return int(_decimal_to_word(text))
+        return int(area29_to_point(int(decimal_to_word(stem))))
+    return int(decimal_to_word(text))
 
 
 def morton_decimal(word: str | int) -> str:

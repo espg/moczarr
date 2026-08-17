@@ -39,11 +39,12 @@ from moczarr.coverage import (
     ranges_words,
     root_coverage_and,
 )
-from moczarr.exceptions import NoCoverageError
+from moczarr.exceptions import ConservativeCoverageWarning, NoCoverageError
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.hhdc import has_exact_occupancy, read_tensors
+from moczarr.intersect import iter_occupancy_and, occupancy_and
 from moczarr.join import join_coarse, parent_cells
-from moczarr.open import open_hive, open_leaf, open_store
+from moczarr.open import candidate_leaves, open_hive, open_leaf, open_store
 from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.pyramid import (
     finest_source_at,
@@ -105,6 +106,7 @@ __all__ = [
     "COMPOSITION_SPEC",
     "COVERAGE_SIDECAR",
     "COVERAGE_SPEC",
+    "ConservativeCoverageWarning",
     "FLOAT64_EXACT_MAX_ORDER",
     "HIVE_SPEC",
     "HIVE_SPEC_V2",
@@ -122,6 +124,7 @@ __all__ = [
     "bitmap_and",
     "box_and",
     "box_words",
+    "candidate_leaves",
     "check_node_invariant",
     "combined_hash",
     "counts_from_composition",
@@ -133,6 +136,7 @@ __all__ = [
     "hash_arrays",
     "is_point_word",
     "is_product_name",
+    "iter_occupancy_and",
     "join_coarse",
     "lane_presence",
     "leaf_path",
@@ -142,6 +146,7 @@ __all__ = [
     "morton_word",
     "named_lanes",
     "node_objects",
+    "occupancy_and",
     "open_hive",
     "open_leaf",
     "open_object_store",

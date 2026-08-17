@@ -13,6 +13,64 @@
   its own copy of the zagg vectors must refresh from zagg `main` at `b9347561`
   or later.
 
+- Two-store occupancy intersection
+  ([#39](https://github.com/espg/moczarr/issues/39); consumer
+  englacial/zagg#426, cross-sensor GEDI/ATL03 composition): the exact cell
+  occupancy two hive stores share — root-`coverage.moc` prefilter → shared
+  leaves → per-leaf exact bitmap AND, with the `encoding: "full"`
+  short-circuit (no sidecar GET) and 4:1 OR-coarsening to the coarser cell
+  order when the stores' orders differ (e.g. ATL03 o19 vs GEDI o18). The
+  public surface is `iter_occupancy_and` (an iterator of `(leaf_id,
+  intersected cell words)` per shared leaf — zagg#422 open question 7
+  ruled on the measured comparison, since the zagg#426 consumer reads per
+  leaf); `occupancy_and` (one flat compacted MOC) stays exported as a
+  documented convenience DERIVED from it — semantically `compress_moc`
+  over that stream, kept in MOC currency so it never expands a subtree —
+  and is the currency for MOC algebra (`open_hive(aoi=...)`, `moc_and`,
+  `aoi_mask`). The derivation runs one way only: compaction discards the
+  leaf attribution per-leaf reads need. Leaves
+  without exact occupancy (box-only envelopes, missing sidecars, stamps
+  without envelopes, or an envelope whose own `cell_order` sits below the
+  harmonized order) contribute their conservative cover — the result is a
+  documented SUPERSET under such leaves, with a once-per-call
+  `ConservativeCoverageWarning` (new, exported, a `UserWarning` subclass —
+  so degradation can be promoted to an error or silenced by category
+  without touching every other warning); debris and absent leaves
+  contribute nothing. `degrade=`
+  chooses that default (`"conservative"`) or `"skip"` (drop such leaves, so
+  everything returned is exact) or `"raise"`. Conservative covers stay
+  compact MOCs through the whole intersection: `occupancy_and` never
+  materializes a subtree, and `iter_occupancy_and` only where it has to
+  yield the cells of a region that stayed a cover on BOTH sides. `aoi=` is
+  contractually SHARD-level on both shapes — the cells of a kept leaf are
+  not clipped, so results are a superset with respect to the AOI (false
+  positives possible, false negatives impossible: zagg's AOI-overhang
+  convention), and `coverage.aoi_mask` is the documented exact cell-level
+  cut.
+
+- New public `candidate_leaves(store_root, manifest, aoi=None, window=None)`
+  ([#39](https://github.com/espg/moczarr/issues/39)): the leaf-discovery
+  seam `open_hive` and `iter_occupancy_and` already shared, promoted from
+  `open._candidate_leaves` so a reader can get a store's leaf roster —
+  store-relative paths, ascending in packed-word order — without opening
+  anything. Its docstring is the contract: root-`coverage.moc` arithmetic
+  with the discovery walk as a semantically equivalent fallback (the two
+  candidate sets differ only where a commit stamp settles it — D9/D4),
+  `morton-hive/2` window selection through the one `validate_window` seam,
+  and the shard-level `aoi` restriction with the overhang posture above.
+  `aoi` now takes the same cover form as the rest of the public API
+  (packed words or decimal strings, mixed orders).
+
+- `convention.morton_word` now parses via mortie's **public**
+  `decimal_to_word` ([#38](https://github.com/espg/moczarr/issues/38);
+  espg/mortie#114/#156) instead of the deprecated private
+  `_decimal_to_word`, which carried no compatibility promise across mortie
+  releases, and the batched `decimals_to_words` replaces the per-label
+  loops in `coverage.ranges_words` and `coverage.decode_bitmap` (one
+  Python→Rust crossing per envelope instead of per shard / per occupied
+  cell). Output is unchanged (pinned by the existing golden vectors plus a
+  new scalar/batched parity pin); no mortie floor change.
+
 - Span-restricted (subtree) reads for the ragged/HHDC layer
   ([#29](https://github.com/espg/moczarr/issues/29); the counterpart of
   englacial/zagg#351, normative property zagg spec §1.5 "Subtree spans"):
