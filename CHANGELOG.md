@@ -3,9 +3,11 @@
 ## Unreleased
 
 - Spec-text pins advanced `9e11e65` → `d52e3063` (issue #43's re-check,
-  performed per pinned item): `moczarr.ragged`'s §1 pin (the delta is the
-  §8.3 temporal-sibling surface adopted in this release; §1.3–§1.5
-  unchanged) and `moczarr.composition`'s §3 pin (byte-identical across the
+  performed per pinned item): `moczarr.ragged`'s §1 pin (the delta is
+  §1.1's §8.3 temporal-sibling surface adopted in this release, plus §1.2
+  extending its spec-owned-key discipline to `weights`, `times` and the
+  companion declaration blocks; §1.3–§1.6 unchanged) and
+  `moczarr.composition`'s §3 pin (byte-identical across the
   delta — pure advance). The §2 delta is itemized at `moczarr.ragged`'s pin
   rather than summarized: §2.0 is new, §2.1 rescopes its exact-count MUST to
   `counts`, and §2.2 is substantially rewritten (gaining the

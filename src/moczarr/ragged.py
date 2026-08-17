@@ -25,11 +25,18 @@ landed with the #346 rebase merge; the interim pin ``9e11e65`` is
 historical). The delta between those two shas was re-read section by
 section for this advance:
 
-- **§1** — exactly the §8.3 temporal surface this module now decodes: the
-  four-sibling inventory, the top-level ``times`` binding, and the rule
-  that a sibling carries only the spec-owned declaration its own section
-  defines. §1.3/§1.4 wire framing and the §1.5 storage-geometry/
-  subtree-span contracts are byte-identical across the delta, as is §1.6.
+- **§1** — §1.1 and §1.2 only. §1.1 carries the §8.3 temporal surface this
+  module now decodes: the sibling inventory goes three to four with
+  ``{group}/{field}_times``, row-aligned and bound by the payload's
+  top-level ``times`` attrs key (a field may carry either sibling, both,
+  or neither). §1.2 extends its spec-owned-key discipline past the
+  ``ragged`` block itself — the §2.0 ``weights`` key and §8.3's ``times``
+  binding are writer-stamped on the payload array, as are the §8/§9
+  ``temporal`` and ``located`` declaration blocks on the companion arrays
+  that carry them — and restates the sibling rule as no **user** attrs,
+  only the spec-owned declaration its own section defines. §1.3/§1.4 wire
+  framing and the §1.5 storage-geometry/subtree-span contracts are
+  byte-identical across the delta, as is §1.6.
 - **§2** — three items ride this pin, none of which this layer
   mis-decodes. §2.0 is **new**: a payload declares its weight column as
   ``counts`` (which an absent key MUST be read as) or ``flux``, a
