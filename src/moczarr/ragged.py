@@ -1,21 +1,7 @@
 """Generic ``zagg-ragged/1`` vlen decode layer — product-agnostic (issue #19).
 
 The read side of zagg's ragged store spec (``docs/specification.md`` §1 in
-englacial/zagg — normative on ``main``, re-checked at ``d52e3063``, the
-englacial/zagg#463 merge; landed with the #346 rebase merge, and the interim
-pin ``9e11e65`` is historical. The §1 delta between those two pins was
-re-read line by line for this advance and is exactly the §8.3 temporal
-surface this module now decodes: the four-sibling inventory, the top-level
-``times`` binding, and the rule that a sibling carries only the spec-owned
-declaration its own section defines. §1.3/§1.4 wire framing and the §1.5
-storage-geometry/subtree-span contracts are byte-identical across the
-delta. One §2 caveat rides this pin deliberately: the §2.0 ``weights``
-declaration (counts vs flux) is a reader-relevant MUST this layer does
-NOT yet gate on — a known gap tracked as espg/moczarr#43, where the gate's
-design is a standing question; digest payload bytes still decode
-identically under either declaration, so nothing here mis-decodes, but a
-consumer summing weights must consult #43's resolution before presenting
-the sum as an observation count): a ``kind: ragged`` field is ONE
+englacial/zagg, normative on ``main``): a ``kind: ragged`` field is ONE
 ``variable_length_bytes`` zarr v3 array on the cells axis. Each populated
 cell holds the raw **little-endian** bytes of its ``(n, *inner_shape)``
 payload; empty cells keep the ``b""`` fill; an all-empty inner chunk is
@@ -33,6 +19,36 @@ declaration blocks (:func:`parse_companion_attrs`): strict-checked when
 present; an absent ``located`` block is §2.2 verbatim and never a refusal.
 This layer decodes companion words as bytes (row-aligned ``uint64``); the
 word semantics (mortie's morton / toc grammars) live above it.
+
+Pin record — re-checked at ``d52e3063``, the englacial/zagg#463 merge (§1
+landed with the #346 rebase merge; the interim pin ``9e11e65`` is
+historical). The delta between those two shas was re-read section by
+section for this advance:
+
+- **§1** — exactly the §8.3 temporal surface this module now decodes: the
+  four-sibling inventory, the top-level ``times`` binding, and the rule
+  that a sibling carries only the spec-owned declaration its own section
+  defines. §1.3/§1.4 wire framing and the §1.5 storage-geometry/
+  subtree-span contracts are byte-identical across the delta, as is §1.6.
+- **§2** — three items ride this pin, none of which this layer
+  mis-decodes. §2.0 is **new**: a payload declares its weight column as
+  ``counts`` (which an absent key MUST be read as) or ``flux``, a
+  reader-relevant MUST this layer does NOT yet gate on — a known gap
+  tracked as espg/moczarr#43, where the gate's design is a standing
+  question; digest payload bytes still decode identically under either
+  declaration, so nothing here mis-decodes, but a consumer summing weights
+  must consult #43's resolution before presenting the sum as an
+  observation count. §2.1 **rescopes** its exact-count MUST to ``counts``
+  and adds a ``flux`` bullet (``sum(weights)`` is a float32 photoelectron
+  estimate: the exact-count recovery is undefined there and no integrality
+  holds). §2.2 is **substantially rewritten**, and two of its new clauses
+  are ones this module leans on: a reader MUST decode each word's order
+  and kind from the word itself and MUST NOT assume a uniform order per
+  array, per cell, or per store — satisfied by construction here, which
+  yields companion words as opaque row-aligned ``uint64`` — and the
+  sentence that an absent ``located`` block is this section verbatim,
+  "never a refusal (§9)", which is spec text at this pin where it was an
+  inference at the old one.
 
 Zero product knowledge lives here: this module decodes any conforming
 element declaration (a t-digest's ``float32 (n, 2)``, a locations sibling's
