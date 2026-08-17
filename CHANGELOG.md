@@ -6,9 +6,14 @@
   performed per pinned item): `moczarr.ragged`'s §1 pin (the delta is the
   §8.3 temporal-sibling surface adopted in this release; §1.3–§1.5
   unchanged) and `moczarr.composition`'s §3 pin (byte-identical across the
-  delta — pure advance). The §2.0 `weights` declaration remains un-gated
-  and is documented at the pin as the known gap issue #43 tracks; the gate
-  design question there is still standing.
+  delta — pure advance). The §2 delta is itemized at `moczarr.ragged`'s pin
+  rather than summarized: §2.0 is new, §2.1 rescopes its exact-count MUST to
+  `counts`, and §2.2 is substantially rewritten (gaining the
+  heterogeneous-orders reader MUST this layer satisfies by construction, and
+  the "an absent `located` block is this section verbatim, never a refusal"
+  sentence the module cites as spec text). The §2.0 `weights` declaration
+  remains un-gated and is documented at the pin as the known gap issue #43
+  tracks; the gate design question there is still standing.
 
 - Temporal companion channel (`zagg-toc/1`, spec §8.3; englacial/zagg#410 /
   PR #463): `moczarr.ragged` now binds and decodes a digest field's
