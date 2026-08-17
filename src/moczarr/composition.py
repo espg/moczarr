@@ -25,9 +25,11 @@ attrs, and a caller who opens an array by other means should check
 
 Normative home: zagg ``docs/specification.md`` §3 — merged to zagg ``main``
 (englacial/zagg#346, rebase merge); the section references here are read
-against ``main`` at ``9e11e65``, and the branch-era shas (``166e908``,
-``555874b``) are historical. Narrative in zagg ``docs/signal_strata.md``; the writer is
-``zagg.stats.composition``.
+against ``main`` at ``d52e3063`` (a pure pin advance: §3 is byte-identical
+between the prior ``9e11e65`` pin and ``d52e3063``, measured by extracting
+the section at both shas and diffing), and the branch-era shas
+(``166e908``, ``555874b``) are historical. Narrative in zagg
+``docs/signal_strata.md``; the writer is ``zagg.stats.composition``.
 
 Quantization (§3.2) uses a **presence floor**: ``k = round(255 * c / N)``
 (round-half-even), except any nonzero count quantizes to at least 1. So

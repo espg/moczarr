@@ -1,8 +1,21 @@
 """Generic ``zagg-ragged/1`` vlen decode layer — product-agnostic (issue #19).
 
 The read side of zagg's ragged store spec (``docs/specification.md`` §1 in
-englacial/zagg — normative on ``main``, re-checked at ``9e11e65``, the
-englacial/zagg#346 rebase merge): a ``kind: ragged`` field is ONE
+englacial/zagg — normative on ``main``, re-checked at ``d52e3063``, the
+englacial/zagg#463 merge; landed with the #346 rebase merge, and the interim
+pin ``9e11e65`` is historical. The §1 delta between those two pins was
+re-read line by line for this advance and is exactly the §8.3 temporal
+surface this module now decodes: the four-sibling inventory, the top-level
+``times`` binding, and the rule that a sibling carries only the spec-owned
+declaration its own section defines. §1.3/§1.4 wire framing and the §1.5
+storage-geometry/subtree-span contracts are byte-identical across the
+delta. One §2 caveat rides this pin deliberately: the §2.0 ``weights``
+declaration (counts vs flux) is a reader-relevant MUST this layer does
+NOT yet gate on — a known gap tracked as espg/moczarr#43, where the gate's
+design is a standing question; digest payload bytes still decode
+identically under either declaration, so nothing here mis-decodes, but a
+consumer summing weights must consult #43's resolution before presenting
+the sum as an observation count): a ``kind: ragged`` field is ONE
 ``variable_length_bytes`` zarr v3 array on the cells axis. Each populated
 cell holds the raw **little-endian** bytes of its ``(n, *inner_shape)``
 payload; empty cells keep the ``b""`` fill; an all-empty inner chunk is
