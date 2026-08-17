@@ -651,6 +651,27 @@ def _sibling_path(field: str, sibling: str) -> str:
     return f"{parent}/{sibling}" if parent else sibling
 
 
+def _require_word_element(element: RaggedElement, path: str, section: str) -> None:
+    """The §1.1 companion MUST: one ``uint64`` word per payload row.
+
+    Both companions are declared identically — §1.1 states it for the
+    located and temporal siblings alike, and §8.3 restates it verbatim for
+    the temporal one ("element dtype ``uint64``, empty ``inner_shape``").
+    Row alignment cannot catch a violation on its own: a ``float32 (n, 2)``
+    element is 8 bytes per row too, so the per-cell counts still agree and
+    the floats come back presented as words. So the declaration governing
+    the decode is checked BEFORE a word is decoded — §8's refuse-rather-
+    than-mis-decode rule applied to the element.
+    """
+    if element.dtype != np.dtype("<u8") or element.inner_shape != ():
+        raise ValueError(
+            f"{path!r} declares element {element.dtype!s}{list(element.inner_shape)}; a "
+            f"companion sibling MUST hold one uint64 word per payload row (element "
+            f"dtype uint64, empty inner_shape — spec §1.1/{section}), and a reader "
+            f"MUST refuse a declaration it does not implement rather than mis-decode it"
+        )
+
+
 def read_ragged(
     store: Store,
     field: str,
@@ -729,7 +750,9 @@ def read_ragged(
     ValueError
         On the strict attrs gate (:func:`parse_ragged_attrs`), a missing
         ``morton`` sibling, a populated cell with no written morton word, a
-        companion sibling whose row count disagrees with the payload (the
+        companion sibling whose element is not one ``uint64`` word per row
+        (the §1.1/§8.3 element MUST, checked before any word is decoded) or
+        whose row count disagrees with the payload (the
         §1.1/§8.3 row-alignment MUST), ``locations=True`` on an unlocated
         field, ``times=True`` on a field with no temporal companion or one
         whose sibling fails the §8/§9 declaration gate
@@ -750,6 +773,7 @@ def read_ragged(
             )
         loc_path = _sibling_path(field, element.locations)
         loc_arr, loc_element = open_ragged(store, loc_path, zarr_format=zarr_format)
+        _require_word_element(loc_element, loc_path, "§9")
         # §9: strict-check the declaration when present; absence is §2.2
         # verbatim (kitchen_sink, committed before §9, stays conformant).
         parse_companion_attrs(dict(loc_arr.attrs), domain="located", field=loc_path)
@@ -763,6 +787,7 @@ def read_ragged(
             )
         times_path = _sibling_path(field, element.times)
         times_arr, times_element = open_ragged(store, times_path, zarr_format=zarr_format)
+        _require_word_element(times_element, times_path, "§8.3")
         # §8.3: the binding carries no declaration of its own — that MUST be
         # read off the sibling, and a bound sibling without it is
         # non-conformant (the binding key exists only under §8.3).

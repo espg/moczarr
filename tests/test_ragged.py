@@ -493,6 +493,24 @@ class TestReadRagged:
         with pytest.raises(ValueError, match="per-cell"):
             list(read_ragged(LocalStore(grid), "g/field", times=True))
 
+    @pytest.mark.parametrize(
+        "channel,sibling,section",
+        [("locations", "geo_words", "§9"), ("times", "t_words", "§8.3")],
+    )
+    def test_companion_element_must_be_uint64_words(
+        self, tmp_path, sharded, channel, sibling, section
+    ):
+        """§1.1/§8.3: the sibling's own element declaration is a MUST, and
+        row alignment cannot catch a violation — ``float32 (n, 2)`` is 8
+        bytes per row too, so the counts agree and the floats would come
+        back presented as words."""
+        grid, _ = build_store(tmp_path, sharded=sharded, located=True, timed=True)
+        meta = json.loads((grid / f"g/{sibling}/zarr.json").read_text())
+        meta["attributes"]["ragged"]["element"] = {"dtype": "float32", "shape": [-1, 2]}
+        _write(grid, f"g/{sibling}/zarr.json", meta)
+        with pytest.raises(ValueError, match=rf"MUST hold one uint64 word.*{section}"):
+            list(read_ragged(LocalStore(grid), "g/field", **{channel: True}))
+
     def test_payload_without_morton_word_raises(self, tmp_path, sharded):
         words = np.array([morton_word(SHARD + t) for t in TAILS], dtype="<u8")
         words[13] = 0  # cell 13 holds a payload but no written coordinate
