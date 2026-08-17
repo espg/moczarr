@@ -22,11 +22,15 @@
   is §2.2 verbatim; both pre-declaration fixture populations stay green).
   The `tests/data/spec/temporal/` fixture is vendored whole-tree
   byte-identical from zagg `d52e3063`, and the conformance suite pins the
-  leaf ingest words, the §4.6 column's folded per-centroid companions at
-  resolutions 4 and 5 (espg's 2026-08-17 ruling: symmetric with located at
-  every level), the O11 hash gate against `all.pyramid.stats.json`, and the
-  manifest's `h_tdigest` composability reclassification (`none` →
-  `approximate`).
+  leaf ingest words **byte-exactly** against `expected.json`'s decimal
+  goldens. The §4.6 column's folded per-centroid companions at resolutions
+  4 and 5 (espg's 2026-08-17 ruling: symmetric with located at every level)
+  have no such golden — the vendored `expected.json` records no per-level
+  entries — so they are pinned *at rest* by the O11 hash gate against
+  `all.pyramid.stats.json` and *through the decode* by dtype, row alignment,
+  the reserved-`0` exclusion and the digest's conserved total weight. The
+  suite also pins the manifest's `h_tdigest` composability reclassification
+  (`none` → `approximate`).
 
 - Vendored spec fixtures refreshed to englacial/zagg `main` at `d52e3063`
   ([#43](https://github.com/espg/moczarr/issues/43) sweep, post zagg #420/#463):

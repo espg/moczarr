@@ -198,11 +198,18 @@ class TestStrataFields:
 
 class TestTemporalCompanion:
     """The §8.3/§9 companion channels of the ``temporal/`` fixture, pinned on
-    committed bytes — leaf ingest words and the §4.6 column's MERGED words
-    (per-centroid at every level, the espg 2026-08-17 ruling amending zagg
-    issue #410's ruling 3). Words are asserted byte-exactly; their
-    mortie-toc/1 semantics are deliberately not decoded here (module
-    docstring)."""
+    committed bytes at two strengths.
+
+    The LEAF's ingest words are asserted **byte-exactly**, against the
+    decimal goldens ``temporal.expected.json`` records per cell. The §4.6
+    column's MERGED words (per-centroid at every level, the espg 2026-08-17
+    ruling amending zagg issue #410's ruling 3) have no such golden — the
+    vendored ``expected.json`` records no per-level entries — so they are
+    pinned **at rest** by the O11 hash gate against
+    ``all.pyramid.stats.json``, and **through the decode** by dtype, row
+    alignment, the reserved-``0`` exclusion and the digest's conserved total
+    weight. Word *semantics* (mortie-toc/1 start/end ns, window predicates)
+    are deliberately not decoded here (module docstring)."""
 
     def _expected(self):
         store, expected = _load("temporal")
@@ -269,16 +276,26 @@ class TestTemporalCompanion:
         """The §4.6 column's resolution groups decode through the SAME
         sibling path as the leaf (the point of the 2026-08-17 ruling): both
         channels bound by metadata, row-aligned with the folded payload,
-        declarations identical to the leaf's."""
+        declarations identical to the leaf's — and value-bearing without a
+        golden: the fold conserves the digest's TOTAL weight (§2.1: total
+        weight is the exact observation count, and the k-way merge preserves
+        it), and no companion word is the reserved ``0`` (§8.2: not a value
+        the grammar's encoders produce)."""
         root, _ = FIXTURES["temporal"]
         _store, expected = self._expected()
+        total = sum(cell["count"] for cell in expected["cells"])  # the leaf's 346 obs
         column = LocalStore(root / PYRAMID_COLUMN)
         out = list(read_ragged(column, f"{level}/h_tdigest", locations=True, times=True))
         assert out  # every declared resolution group is populated
+        weight = 0.0
         for word, values, locations, times in out:
             assert values.dtype == np.float32 and values.shape[1:] == (2,)
             assert locations.dtype == np.uint64 and times.dtype == np.uint64
             assert len(locations) == len(values) == len(times)
+            assert len(values)  # a yielded cell is populated, never a zero-row fold
+            assert int(times.min()) > 0 and int(locations.min()) > 0
+            weight += float(np.sum(values[:, 1], dtype=np.float64))
+        assert weight == float(total)
         for sibling, domain in (
             ("h_tdigest_times", "temporal"),
             ("h_tdigest_locations", "located"),
