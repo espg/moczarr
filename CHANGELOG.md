@@ -27,7 +27,14 @@
   (zagg #420), the `zagg-pyramid/2` manifest declaration, and the §4.6 leaf
   column surface (`all.pyramid.zarr` + `all.pyramid.stats.json`,
   `granules.json`) vendored beside each leaf. Every array byte the conformance
-  suite decodes is unchanged; no reader behavior changes in this entry.
+  suite decodes is unchanged. Vendoring the columns did force one reader
+  change: `store.walk_leaves` now applies zagg spec §4.6's **normative** name
+  seam — a basename ending `.pyramid.zarr` is a leaf column and is never
+  yielded as a leaf (a column is commit-stamped like a leaf, so the walk's
+  `read_commit` completeness check would otherwise wave it through). This
+  supersedes the `b9347561` refresh instruction below: a downstream
+  re-checking against its own copy of the zagg vectors should refresh from
+  `d52e3063`.
 
 - Vendored spec fixtures re-pinned under the **authalic** latitude convention
   ([#41](https://github.com/espg/moczarr/issues/41), tracking
@@ -36,9 +43,9 @@
   O11 array hashes and the fixture's `combined` hash all move. Test data only —
   no reader behavior changes, and every other vendored array (the digest
   payloads, `count`, `morton`, `composition`, and all of `minimal`) is
-  byte-identical across the convention change. A downstream re-checking against
-  its own copy of the zagg vectors must refresh from zagg `main` at `b9347561`
-  or later.
+  byte-identical across the convention change. (This entry's `b9347561` refresh
+  floor is superseded by the whole-tree `d52e3063` re-vendor above — refresh
+  from that sha instead.)
 
 - Two-store occupancy intersection
   ([#39](https://github.com/espg/moczarr/issues/39); consumer
