@@ -18,7 +18,11 @@
   tracks: what stands open there is the gate's implementation — a scope #43
   already prescribes, down to mirroring zagg's `check_weights_match` posture
   — not its design, and this advance records only the delta review #43's pin
-  bullet calls for.
+  bullet calls for. §6 (`zagg-ragged/2`) is not pinned by either module but
+  was read through in the same pass and is itemized at `moczarr.ragged`'s
+  pin: §6.1 extends the `/2` element declaration to the `{field}_times`
+  sibling and §6.3 notes that `times` and `weights` ride the `/2` migration
+  unchanged; §6.2's byte identity is unmoved.
 
 - Temporal companion channel (`zagg-toc/1`, spec §8.3; englacial/zagg#410 /
   PR #463): `moczarr.ragged` now binds and decodes a digest field's

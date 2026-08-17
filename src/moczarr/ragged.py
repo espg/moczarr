@@ -69,6 +69,15 @@ section for this advance:
   sentence that an absent ``located`` block is this section verbatim,
   "never a refusal (§9)", which is spec text at this pin where it was an
   inference at the old one.
+- **§6** — not pinned by this module, but read through in the same pass
+  because the ``/2`` carve-out below cites it: §6.1 extends the ``/2``
+  element declaration to the ``{field}_times`` temporal sibling (the same
+  ``uint64`` / ``()`` pair as a locations sibling, the two differing only
+  in the declaration they carry), and §6.3 notes that §8.3's ``times``
+  binding and §2.0's ``weights`` are top-level keys beside the ``ragged``
+  block and so ride the ``/2`` migration unchanged. §6.2's byte-identity
+  contract is unmoved, and neither hunk changes anything here — a ``/2``
+  array is still refused as a newer revision.
 
 Zero product knowledge lives here: this module decodes any conforming
 element declaration (a t-digest's ``float32 (n, 2)``, a locations sibling's
