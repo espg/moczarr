@@ -21,11 +21,17 @@ from zarr.storage import LocalStore
 import moczarr.ragged
 from moczarr.convention import morton_word
 from moczarr.ragged import (
+    LOCATED_SPEC,
+    MORTON_GRAMMAR,
     RAGGED_SPEC,
+    TOC_GRAMMAR,
+    TOC_SPEC,
+    CompanionDeclaration,
     RaggedElement,
     decode_cell,
     iter_populated_chunks,
     open_ragged,
+    parse_companion_attrs,
     parse_ragged_attrs,
     read_cell,
     read_ragged,
@@ -141,20 +147,40 @@ def _payloads(cells=None):
     return out
 
 
-def build_store(root, *, sharded, located=False, morton_words=None, loc_counts=None, cells=None):
+#: The default §8.3 declaration :func:`build_store` stamps on ``t_words``.
+TEMPORAL_DECLARATION = {"spec": TOC_SPEC, "shape": "per-centroid", "grammar": TOC_GRAMMAR}
+
+
+def build_store(
+    root,
+    *,
+    sharded,
+    located=False,
+    timed=False,
+    morton_words=None,
+    loc_counts=None,
+    times_counts=None,
+    temporal_declaration=TEMPORAL_DECLARATION,
+    cells=None,
+):
     """A spec-text-only store: 16 cells, 4 inner chunks; chunks 1-2 empty.
 
     Chunk 0 holds cells 0 and 3 (cells 1-2 keep the ``b""`` fill), chunk 3
     holds cell 13. On the sharded layout chunks 1-2 are the index absence
     sentinel; on the flat layout their objects are simply missing. ``cells``
     overrides :data:`CELLS` (``{cell: n_rows}``); an inner chunk with no
-    populated cell is absent either way. Returns
+    populated cell is absent either way. ``timed`` writes a §8.3 temporal
+    sibling ``t_words`` bound from the payload's top-level ``times`` key,
+    stamped with ``temporal_declaration`` (``None`` omits the block — the
+    non-conformant bound-but-undeclared case). Returns
     ``(store_root_path, {cell: expected_values})``.
     """
     payloads = _payloads(cells)
     attrs = {"ragged": {"spec": RAGGED_SPEC, "element": dict(ELEMENT)}}
     if located:
         attrs["ragged"]["locations"] = "geo_words"  # deliberately NOT {field}_locations
+    if timed:
+        attrs["times"] = "t_words"  # §8.3: beside the block, deliberately NOT inside it
     grid = root / "store"
 
     def chunk_cells(chunk, source):
@@ -185,6 +211,24 @@ def build_store(root, *, sharded, located=False, morton_words=None, loc_counts=N
             for ordinal, cells in enumerate(loc_chunks):
                 if cells is not None:
                     _write(grid, f"g/geo_words/c/{ordinal}", _inner_chunk(cells))
+
+    if timed:
+        counts = times_counts or {c: len(v) for c, (v, _b) in payloads.items()}
+        t_words = {c: np.arange(1, counts[c] + 1, dtype="<u8") * 11 for c in payloads}
+        t_raw = {c: w.tobytes() for c, w in t_words.items()}
+        t_chunks = [chunk_cells(c, t_raw) for c in range(4)]
+        t_attrs: dict = {
+            "ragged": {"spec": RAGGED_SPEC, "element": {"dtype": "uint64", "shape": [-1]}}
+        }
+        if temporal_declaration is not None:
+            t_attrs["temporal"] = dict(temporal_declaration)
+        _write(grid, "g/t_words/zarr.json", _vlen_meta(16, 4, sharded=sharded, attrs=t_attrs))
+        if sharded:
+            _write(grid, "g/t_words/c/0", _shard_object(t_chunks))
+        else:
+            for ordinal, cells in enumerate(t_chunks):
+                if cells is not None:
+                    _write(grid, f"g/t_words/c/{ordinal}", _inner_chunk(cells))
 
     words = (
         morton_words
@@ -253,6 +297,91 @@ class TestParseRaggedAttrs:
                 {"ragged": {"spec": RAGGED_SPEC, "element": {"dtype": "f4", "shape": [2, 2]}}}
             )
 
+    def test_times_binding_is_beside_the_block(self):
+        """§8.3: the ``times`` key is a spec-owned SIBLING of the ``ragged``
+        block — read from the top level, and a same-named key inside the
+        block is not the binding (the /1 block grammar is unchanged)."""
+        element = parse_ragged_attrs(
+            {"ragged": {"spec": RAGGED_SPEC, "element": ELEMENT}, "times": "t_words"}
+        )
+        assert element.times == "t_words"
+        assert element.locations is None
+        inside_only = parse_ragged_attrs(
+            {"ragged": {"spec": RAGGED_SPEC, "element": ELEMENT, "times": "t_words"}}
+        )
+        assert inside_only.times is None
+
+
+class TestParseCompanionAttrs:
+    """The §8/§9 declaration gate: strict when present, silent when absent."""
+
+    def test_absent_block_is_never_a_refusal(self):
+        """§9's absent-``located`` = §2.2 verbatim; §8's absent-``temporal``
+        = the legacy encoding — both parse as ``None``, no raise."""
+        assert parse_companion_attrs({"ragged": {}}, domain="located") is None
+        assert parse_companion_attrs({}, domain="temporal") is None
+        assert parse_companion_attrs(None, domain="temporal") is None
+
+    def test_parses_both_domains(self):
+        located = parse_companion_attrs(
+            {"located": {"spec": LOCATED_SPEC, "shape": "per-centroid", "grammar": MORTON_GRAMMAR}},
+            domain="located",
+        )
+        assert located == CompanionDeclaration(LOCATED_SPEC, "per-centroid", MORTON_GRAMMAR)
+        temporal = parse_companion_attrs(
+            {"temporal": {"spec": TOC_SPEC, "shape": "per-centroid", "grammar": TOC_GRAMMAR}},
+            domain="temporal",
+        )
+        assert temporal == CompanionDeclaration(TOC_SPEC, "per-centroid", TOC_GRAMMAR)
+
+    def test_informative_extra_keys_are_ignored(self):
+        """§9: "informative extra keys ignored rather than refused"."""
+        decl = parse_companion_attrs(
+            {
+                "temporal": {
+                    "spec": TOC_SPEC,
+                    "shape": "per-centroid",
+                    "grammar": TOC_GRAMMAR,
+                    "docs": "https://example.invalid",
+                }
+            },
+            domain="temporal",
+        )
+        assert decl is not None
+
+    def test_future_spec_revision_raises(self):
+        with pytest.raises(ValueError, match="never half-parsed"):
+            parse_companion_attrs(
+                {
+                    "temporal": {
+                        "spec": "zagg-toc/2",
+                        "shape": "per-centroid",
+                        "grammar": TOC_GRAMMAR,
+                    }
+                },
+                domain="temporal",
+            )
+
+    def test_unimplemented_shape_raises(self):
+        """§8: a reader MUST refuse a shape it does not implement — the
+        ragged sibling path decodes ``per-centroid`` only."""
+        with pytest.raises(ValueError, match="MUST refuse a"):
+            parse_companion_attrs(
+                {"temporal": {"spec": TOC_SPEC, "shape": "per-cell", "grammar": TOC_GRAMMAR}},
+                domain="temporal",
+            )
+
+    def test_unimplemented_grammar_raises(self):
+        with pytest.raises(ValueError, match="grammar"):
+            parse_companion_attrs(
+                {"located": {"spec": LOCATED_SPEC, "shape": "per-centroid", "grammar": "acme/1"}},
+                domain="located",
+            )
+
+    def test_malformed_block_raises(self):
+        with pytest.raises(ValueError, match="malformed"):
+            parse_companion_attrs({"located": "yes"}, domain="located")
+
 
 class TestDecodeCell:
     def test_decodes_declared_element(self):
@@ -312,6 +441,57 @@ class TestReadRagged:
         grid, _ = build_store(tmp_path, sharded=sharded)
         with pytest.raises(ValueError, match="declares no locations sibling"):
             list(read_ragged(LocalStore(grid), "g/field", locations=True))
+
+    def test_times_bound_by_metadata_not_naming(self, tmp_path, sharded):
+        """The temporal sibling is named ``t_words`` — nothing like
+        ``{field}_times`` — so only the top-level ``times`` key can find it
+        (spec §8.3)."""
+        grid, expected = build_store(tmp_path, sharded=sharded, timed=True)
+        out = list(read_ragged(LocalStore(grid), "g/field", times=True))
+        assert len(out) == len(CELLS)
+        for _word, values, times in out:
+            assert times.dtype == np.dtype("<u8")
+            assert times.shape == (len(values),)  # §8.3 row alignment
+            np.testing.assert_array_equal(times, np.arange(1, len(values) + 1, dtype="<u8") * 11)
+
+    def test_both_channels_yield_in_fixed_order(self, tmp_path, sharded):
+        """``locations`` before ``times`` — the documented 4-tuple."""
+        grid, expected = build_store(tmp_path, sharded=sharded, located=True, timed=True)
+        out = list(read_ragged(LocalStore(grid), "g/field", locations=True, times=True))
+        assert len(out) == len(CELLS)
+        for _word, values, locations, times in out:
+            np.testing.assert_array_equal(locations, np.arange(1, len(values) + 1, dtype="<u8") * 7)
+            np.testing.assert_array_equal(times, np.arange(1, len(values) + 1, dtype="<u8") * 11)
+
+    def test_misaligned_times_raise(self, tmp_path, sharded):
+        grid, _ = build_store(
+            tmp_path, sharded=sharded, timed=True, times_counts={0: 1, 3: 1, 13: 4}
+        )
+        with pytest.raises(ValueError, match=r"not row-aligned \(spec §8.3\)"):
+            list(read_ragged(LocalStore(grid), "g/field", times=True))
+
+    def test_times_on_untimed_field_raises(self, tmp_path, sharded):
+        grid, _ = build_store(tmp_path, sharded=sharded)
+        with pytest.raises(ValueError, match="declares no temporal sibling"):
+            list(read_ragged(LocalStore(grid), "g/field", times=True))
+
+    def test_bound_times_sibling_without_declaration_raises(self, tmp_path, sharded):
+        """§8.3: the payload carries the binding, the sibling the
+        declaration — a bound sibling missing it is non-conformant, not the
+        absent-key legacy case."""
+        grid, _ = build_store(tmp_path, sharded=sharded, timed=True, temporal_declaration=None)
+        with pytest.raises(ValueError, match="carries no attrs"):
+            list(read_ragged(LocalStore(grid), "g/field", times=True))
+
+    def test_bound_times_sibling_with_foreign_shape_raises(self, tmp_path, sharded):
+        grid, _ = build_store(
+            tmp_path,
+            sharded=sharded,
+            timed=True,
+            temporal_declaration={"spec": TOC_SPEC, "shape": "per-cell", "grammar": TOC_GRAMMAR},
+        )
+        with pytest.raises(ValueError, match="per-cell"):
+            list(read_ragged(LocalStore(grid), "g/field", times=True))
 
     def test_payload_without_morton_word_raises(self, tmp_path, sharded):
         words = np.array([morton_word(SHARD + t) for t in TAILS], dtype="<u8")
