@@ -7,6 +7,8 @@ moczarr only decodes, so the goldens are compressed here and decoded back —
 any bit-convention drift between writer and reader fails these first.
 """
 
+from pathlib import Path
+
 import numpy as np
 import pytest
 from conftest import FakeMoc, FakeToc
@@ -674,3 +676,37 @@ class TestAsMocWords:
         direct = coverage.aoi_mask(cells, _words(SHARD))
         np.testing.assert_array_equal(coverage.aoi_mask(cells, FakeMoc(_words(SHARD))), direct)
         np.testing.assert_array_equal(coverage.aoi_mask(cells, [SHARD]), direct)
+
+
+class TestPublicSurface:
+    """What this module puts on the package surface, and what it withholds.
+
+    The temporal seam mirrors the spatial one exactly (issue #45, review
+    thread on PR #48): ``TEMPORAL_SPEC``/``temporal_shard_words``/
+    ``temporal_keep`` are the twins of ``COVERAGE_SPEC``/``ranges_words``/
+    ``aoi_mask`` and are public like them, while the two BOUNDARY
+    NORMALIZERS stay internal per espg ruling 3 — importable, but off both
+    ``moczarr.__all__`` and the docs surface. The docs page's filters are
+    keyed to this same split, so a name added to one must move in the other.
+    """
+
+    def test_temporal_trio_mirrors_its_spatial_twins(self):
+        import moczarr
+
+        for temporal, spatial in (
+            ("TEMPORAL_SPEC", "COVERAGE_SPEC"),
+            ("temporal_shard_words", "ranges_words"),
+            ("temporal_keep", "aoi_mask"),
+        ):
+            assert spatial in moczarr.__all__  # the twin's standing status
+            assert temporal in moczarr.__all__
+            assert getattr(moczarr, temporal) is getattr(coverage, temporal)
+
+    def test_boundary_normalizers_stay_internal(self):
+        import moczarr
+
+        filters = (Path(__file__).parents[1] / "docs/api/coverage.md").read_text()
+        for name in ("as_moc_words", "as_toc_words"):
+            assert hasattr(coverage, name)  # importable...
+            assert name not in moczarr.__all__  # ...but not on the surface
+            assert f'"!^{name}$"' in filters  # ...nor in the rendered docs
