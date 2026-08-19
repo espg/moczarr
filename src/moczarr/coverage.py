@@ -25,7 +25,12 @@ negatives, indistinguishable from healthy sparse coverage.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import numpy as np
+
+if TYPE_CHECKING:  # the runtime imports stay lazy, inside the functions
+    import mortie
 
 from moczarr.convention import (
     decimal_base,
@@ -502,3 +507,35 @@ def temporal_keep(shard_words, envelope: dict, when_words) -> np.ndarray:
     position = np.minimum(np.searchsorted(listed, shard_words), listed.size - 1)
     is_listed = listed[position] == shard_words
     return ~is_listed | overlaps[position]
+
+
+def coverage_moc(envelope: dict) -> "mortie.Moc":
+    """The root envelope's spatial coverage as a :class:`mortie.Moc`.
+
+    The cast to the geometry world (issue #45): moczarr parses its own
+    storage grammar — the ``"ranges"`` encoding of :func:`ranges_words` —
+    and mortie types the result. The direction is deliberate and was ruled
+    in design review: a ``Moc.from_envelope`` on mortie's side was
+    rejected, because the envelope grammar is moczarr's to read, not
+    mortie's to know. :func:`moczarr.store.load_root_coverage` is unchanged
+    and still returns the envelope dict; this is a cast a caller asks for,
+    never one the read path takes on its way anywhere.
+
+    NOT the containment hot path. Two costs ride along, and both are
+    exactly what the pruning path exists to avoid: the ranges are
+    EXPANDED to O(covered shards) words (a CONUS/Antarctic root MOC is
+    thousands), and ``Moc`` then normalizes them eagerly through
+    ``compress_moc``, so the words it holds are the COMPACTED equivalent
+    cover — a fully-occupied set of four siblings becomes its parent, and
+    ``coverage_moc(envelope).words`` is therefore not
+    ``ranges_words(envelope)`` element-for-element (same coverage, fewer
+    words, mixed orders). For "does this envelope list this shard", reach
+    for :func:`ranges_contain` instead: rank space, O(ranges), no
+    expansion and no compaction. Use this when a consumer wants coverage
+    it can intersect, refine, or hand to a geometry API — including back
+    into this package, since ``Moc`` satisfies the ``__morton_moc__()``
+    protocol every AOI seam here accepts.
+    """
+    from mortie import Moc
+
+    return Moc(ranges_words(envelope))
