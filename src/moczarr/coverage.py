@@ -563,9 +563,20 @@ def coverage_toc(envelope: dict) -> "mortie.Toc | None":
 
     The temporal twin of :func:`coverage_moc`, same direction: moczarr
     decodes its own section grammar (:func:`temporal_shard_words`) and
-    mortie types the words. ``Toc`` normalizes eagerly, so the result is
-    the canonical gappy cover over every listed shard's envelope word —
-    the union, which is what "when does this store hold data" asks.
+    mortie types the words. ``Toc`` normalizes eagerly (through
+    ``toc_normalize``), so the result is the canonical gappy cover over
+    every listed shard's envelope word — the union, which is what "when
+    does this store hold data" asks.
+
+    The temporal mirror of the compaction warning :func:`coverage_moc`
+    carries: normalization is lossy toward coverage, so a word whose span
+    is SUBSUMED by another word's is ABSORBED at construction, and
+    ``coverage_toc(envelope).words`` is therefore not
+    ``temporal_shard_words(envelope)[1]`` element-for-element (same
+    coverage, fewer words). It is neither row-aligned with the tier-1 map
+    nor the same length, so a caller cannot index shard *i*'s word out of
+    it. For per-shard words, and for anything needing the shard→word row
+    alignment, use :func:`temporal_shard_words`.
 
     **``None`` is the whole point of the signature.** It means the store
     publishes no READABLE temporal coverage — the section is missing, or
