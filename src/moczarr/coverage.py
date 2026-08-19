@@ -403,7 +403,8 @@ def as_toc_words(when) -> np.ndarray:
 
     - an object with ``__toc_words__()`` — mortie's Toc protocol, duck-typed
       (never ``isinstance``; no mortie import for the check) — is asked for
-      its words, then normalized below;
+      its words, then normalized below as WORDS: a protocol return is never
+      re-read as a window, so a Toc that hands back two words gives two;
     - a 2-tuple ``(start, end)``: a closed real window, each endpoint an
       ISO-8601 string, a ``numpy.datetime64``, or an int of internal ns
       (:func:`_instant_ns`), desugared through ``mortie.span2toc`` into one
@@ -419,9 +420,13 @@ def as_toc_words(when) -> np.ndarray:
     ``__all__`` and not on the docs surface.
     """
     protocol = getattr(when, "__toc_words__", None)
-    if callable(protocol):
+    from_protocol = callable(protocol)
+    if from_protocol:
+        # A protocol return is WORDS by contract, never a window — so the
+        # tuple arm stays exclusive to the un-dispatched input, or a Toc
+        # handing back two words would be desugared as a (start, end) span.
         when = protocol()
-    if isinstance(when, tuple) and len(when) == 2:
+    if not from_protocol and isinstance(when, tuple) and len(when) == 2:
         from mortie import span2toc
 
         start, end = (_instant_ns(v) for v in when)
