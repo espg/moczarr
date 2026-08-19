@@ -432,6 +432,20 @@ def as_toc_words(when) -> np.ndarray:
         start, end = (_instant_ns(v) for v in when)
         return np.asarray([span2toc(start, end)], dtype=np.uint64)
     values = np.atleast_1d(np.asarray(when))
+    if values.dtype != np.uint64 and not np.issubdtype(values.dtype, np.integer):
+        # A plain word list STRADDLING 2**63 loses its dtype to float64
+        # (numpy picks int64 below, uint64 above, float64 across), so retry
+        # the exact cast when every element really is an int — the docstring
+        # promises that list casts exactly. Floats keep raising below (the
+        # uint64 cast would silently truncate them), and so do negatives.
+        items = np.atleast_1d(np.asarray(when, dtype=object)).ravel().tolist()
+        if items and all(
+            isinstance(v, (int, np.integer)) and not isinstance(v, bool) for v in items
+        ):
+            try:
+                values = np.asarray(items, dtype=np.uint64)
+            except (OverflowError, TypeError, ValueError):
+                pass
     if values.dtype != np.uint64:
         integral = np.issubdtype(values.dtype, np.integer)
         if not (integral and (not values.size or values.min() >= 0)):

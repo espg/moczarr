@@ -277,6 +277,21 @@ class TestAsTocWords:
         np.testing.assert_array_equal(coverage.as_toc_words(words), words)
         np.testing.assert_array_equal(coverage.as_toc_words([int(words[0])]), words)
 
+    def test_word_list_straddling_2_63_casts_exactly(self):
+        # numpy widens such a list to float64 (int64 below 2**63, uint64
+        # above, float64 across); the exact retry keeps both words.
+        old = int(coverage.as_toc_words(("1990-01-01", "1990-02-01"))[0])
+        new = int(coverage.as_toc_words(("2020-01-01", "2020-02-01"))[0])
+        assert old < 2**63 <= new
+        got = coverage.as_toc_words([old, new])
+        assert got.dtype == np.uint64
+        np.testing.assert_array_equal(got, np.asarray([old, new], dtype=np.uint64))
+
+    @pytest.mark.parametrize("bad", [[-1, 2**64 - 1], [1.5, 2.0**63], [-1]])
+    def test_negative_or_float_word_lists_still_raise(self, bad):
+        with pytest.raises(ValueError, match="temporal query"):
+            coverage.as_toc_words(bad)
+
     def test_protocol_object(self):
         words = coverage.as_toc_words(self.WINDOW_ISO)
         np.testing.assert_array_equal(coverage.as_toc_words(FakeToc(words)), words)
