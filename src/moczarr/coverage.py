@@ -526,7 +526,15 @@ def temporal_keep(shard_words, envelope: dict, when_words) -> np.ndarray:
 
 
 def coverage_moc(envelope: dict) -> "mortie.Moc":
-    """The root envelope's spatial coverage as a :class:`mortie.Moc`.
+    """The root envelope's spatial coverage as a :class:`mortie.Moc` — or raise.
+
+    Raises whatever :func:`ranges_words` raises, deliberately and
+    undegraded: a missing ``ranges`` (or ``order``) key is ``KeyError``, a
+    malformed range — base-crossing, reversed, off-order — is
+    ``ValueError``. There is no absence arm here at all; a caller who
+    wants one asks :func:`parse_root_coverage` first. Corrupt CONTENT must
+    never yield a plausible partial cover, which is the whole reason
+    ``ranges_words`` validates every range before parsing any of them.
 
     The cast to the geometry world (issue #45): moczarr parses its own
     storage grammar — the ``"ranges"`` encoding of :func:`ranges_words` —
@@ -559,7 +567,17 @@ def coverage_moc(envelope: dict) -> "mortie.Moc":
 
 def coverage_toc(envelope: dict) -> "mortie.Toc | None":
     """The envelope's §10 tier-1 temporal coverage as a :class:`mortie.Toc`,
-    or ``None`` when the store publishes none.
+    ``None`` when the store publishes none — or raise.
+
+    The two arms are not the same failure and the split is deliberate: an
+    UNREADABLE section degrades to ``None`` (below), while CORRUPT CONTENT
+    inside a well-formed one raises, exactly as
+    :func:`temporal_shard_words` documents — a shard id off the carrier's
+    order or a word that is not a uint64 decimal string is ``ValueError``,
+    a carrier missing ``order`` is ``KeyError``. So a caller who dutifully
+    handles ``None`` is still not handling everything: degradation stops
+    at the section gate, and past it a corrupt cache must never yield a
+    plausible partial cover.
 
     The temporal twin of :func:`coverage_moc`, same direction: moczarr
     decodes its own section grammar (:func:`temporal_shard_words`) and

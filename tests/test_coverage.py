@@ -756,6 +756,16 @@ class TestCoverageMoc:
         moc = coverage.coverage_moc(_root(ranges=[]))
         assert moc.words.size == 0
 
+    def test_corrupt_ranges_raise_through_the_cast(self):
+        # The cast inherits `ranges_words`' posture undegraded — there is no
+        # absence arm here at all, which is what the summary line now says.
+        with pytest.raises(ValueError, match="malformed coverage range"):
+            coverage.coverage_moc(_root(ranges=[["-5113", "-5111"]]))
+        envelope = _root()
+        del envelope["ranges"]
+        with pytest.raises(KeyError):
+            coverage.coverage_moc(envelope)
+
 
 class TestCoverageToc:
     """The typed temporal cast (issue #45 phase 5, mortie >= 0.9.10).
@@ -825,6 +835,17 @@ class TestCoverageToc:
         # empty Toc here would answer .overlaps(q) False for every query,
         # the very false negative the None arm exists to prevent.
         assert coverage.coverage_toc(self._envelope(shards={})) is None
+
+    def test_corrupt_content_raises_past_the_none_gate(self):
+        # Degradation stops at the section gate: a well-formed section whose
+        # CONTENT is corrupt raises rather than reading as absent, so a
+        # caller handling only the None arm is not handling everything.
+        with pytest.raises(ValueError, match="not a uint64 decimal string"):
+            coverage.coverage_toc(self._envelope(shards={"-5111": "not-a-word"}))
+        envelope = self._envelope()
+        del envelope["order"]
+        with pytest.raises(KeyError):
+            coverage.coverage_toc(envelope)
 
     def test_result_feeds_back_into_the_when_seam(self):
         # The payoff: Toc satisfies __toc_words__(), so the cast round-trips
