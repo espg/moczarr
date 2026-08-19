@@ -407,8 +407,13 @@ class TestTemporalCoverageSection:
         golden = expected["root_coverage"]["shards"]
         from moczarr.convention import morton_word
 
-        assert [int(w) for w in shard_words] == [morton_word(s) for s in sorted(golden)]
-        assert [int(w) for w in toc_words] == [int(golden[s]) for s in sorted(golden)]
+        # Sorted by PACKED WORD, the decoder's contract — string order is a
+        # different relation (a southern base cell sorts before a northern one
+        # as text, after it as a word), and coincides here only because the
+        # fixture carries a single shard.
+        order = sorted(golden, key=morton_word)
+        assert [int(w) for w in shard_words] == [morton_word(s) for s in order]
+        assert [int(w) for w in toc_words] == [int(golden[s]) for s in order]
 
     def test_tier1_word_is_the_join_over_the_committed_companions(self):
         """§10.2: the shard's word is the grammar's join (``toc_reduce``)
