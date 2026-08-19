@@ -304,6 +304,17 @@ class TestAsTocWords:
         got = coverage.as_toc_words(FakeToc(pair))
         np.testing.assert_array_equal(got, np.asarray(pair, dtype=np.uint64))
 
+    def test_degenerate_window_is_an_outward_rounded_range(self):
+        # span2toc(t, t) is a RANGE word ~2.15 s wide, not a timestamp: the
+        # tuple form has no exact-instant spelling (that is time2toc's job).
+        from mortie import toc2time, toc_is_range
+
+        t = self._internal("2019-05-10")
+        word = coverage.as_toc_words((t, t))
+        assert word.shape == (1,) and toc_is_range(int(word[0]))
+        start, end = (int(np.atleast_1d(v)[0]) for v in toc2time(word))
+        assert start <= t <= end
+
     def test_reversed_window_raises_the_kernel_error(self):
         # Degenerate handling is mortie's, not re-invented here.
         with pytest.raises(ValueError, match="after its end"):
@@ -351,6 +362,17 @@ class TestTemporalKeep:
             [time2toc(int(from_datetime64(np.datetime64("2019-05-10"))))], dtype=np.uint64
         )
         keep = coverage.temporal_keep(_words("-5111", "-5113"), self._envelope(), instant)
+        np.testing.assert_array_equal(keep, [True, False])
+
+    def test_degenerate_window_keeps_the_shard_containing_the_instant(self):
+        # The ~2.15 s range word span2toc gives for (t, t) still prunes
+        # correctly: the May shard stays, the 2003-only shard goes.
+        from mortie import from_datetime64
+
+        t = int(from_datetime64(np.datetime64("2019-05-10")))
+        keep = coverage.temporal_keep(
+            _words("-5111", "-5113"), self._envelope(), coverage.as_toc_words((t, t))
+        )
         np.testing.assert_array_equal(keep, [True, False])
 
     def test_no_section_keeps_everything(self):
