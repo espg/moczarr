@@ -215,12 +215,17 @@ class TestTemporalSection:
         assert shard_words.dtype == toc_words.dtype == np.uint64
 
     def test_map_decodes_row_aligned_in_shard_word_order(self):
-        envelope = _root(
-            temporal=self._temporal(shards={"-5113": "456", "-5111": "18446744073709551615"})
-        )
+        # A NORTHERN shard beside southern ones at the same order: "5111"
+        # sorts after "-5111" as a string and before it as a packed word, so
+        # the two relations genuinely disagree here and this pins the
+        # decoder's ordering key rather than merely that SOME sort happened.
+        shards = {"-5113": "456", "-5111": "18446744073709551615", "5111": "789"}
+        envelope = _root(temporal=self._temporal(shards=shards))
         shard_words, toc_words = coverage.temporal_shard_words(envelope)
         assert shard_words.dtype == toc_words.dtype == np.uint64
-        expected = sorted([(int(_words("-5111")[0]), 2**64 - 1), (int(_words("-5113")[0]), 456)])
+        by_word = sorted(shards, key=lambda s: int(_words(s)[0]))
+        assert by_word != sorted(shards)
+        expected = [(int(_words(s)[0]), int(shards[s])) for s in by_word]
         assert list(zip(shard_words.tolist(), toc_words.tolist())) == expected
 
     def test_empty_map_decodes_to_empty(self):
