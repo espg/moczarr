@@ -2,6 +2,26 @@
 
 ## Unreleased
 
+- The MOC/TOC seam ([#45](https://github.com/espg/moczarr/issues/45)):
+  moczarr decodes zagg spec §10's `zagg-coverage-toc/1` root section — the
+  tier-1 per-shard envelope-word map, via the new public `TEMPORAL_SPEC` /
+  `temporal_shard_words` / `temporal_keep`, the exact twins of
+  `COVERAGE_SPEC` / `ranges_words` / `aoi_mask` — so a windowed candidate
+  query resolves from metadata alone: `candidate_leaves(..., when=)`
+  prunes listed shards whose word fails `toc_overlaps` and keeps unlisted
+  ones by construction (§10.2: unlisted is *unknown*, never *empty*). Two
+  typed casts put the result in the geometry/time world without an adapter
+  — `coverage_moc(envelope) -> mortie.Moc` and
+  `coverage_toc(envelope) -> mortie.Toc | None`, whose `None` is §10's
+  absence rule (no readable section, or one listing nothing, is "publishes
+  no temporal coverage", never "has no data in any window"); both raise on
+  corrupt content rather than degrading. mortie floor is now `>=0.9.10`
+  (the `Moc` / `Toc` coverage types of espg/mortie#197 / #199 that the two
+  casts return, plus the toc word kernels the §10 seam runs on — one bump
+  for both, per espg ruling 2 on the issue); the previous `>=0.9.3` floor
+  covered neither. AOI/window boundary normalizers (`as_moc_words`,
+  `as_toc_words`) stay internal by ruling 3.
+
 - Spec-text pins advanced `9e11e65` → `d52e3063` (issue #43's re-check,
   performed per pinned item): `moczarr.ragged`'s §1 pin (the delta is
   §1.1's §8.3 temporal-sibling surface adopted in this release, plus §1.2
