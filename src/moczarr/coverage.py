@@ -409,8 +409,11 @@ def as_toc_words(when) -> np.ndarray:
       ISO-8601 string, a ``numpy.datetime64``, or an int of internal ns
       (:func:`_instant_ns`), desugared through ``mortie.span2toc`` into one
       outward-rounded range word. Degenerate and reversed windows follow
-      the kernel's own rules (an instant encodes exactly; ``end < start``
-      raises);
+      the kernel's own rules: ``start == end`` still encodes as an
+      outward-rounded RANGE word (~2.15 s wide — the start floors to the
+      2^31 ns grid and the end takes a strictly-greater ceiling), not a
+      timestamp, so an exact-instant query is the raw-word / protocol
+      form's job (a ``mortie.time2toc`` word); ``end < start`` raises;
     - raw toc words: ``uint64`` passes through; any other integer dtype
       (a plain list of word ints included) casts exactly.
 
