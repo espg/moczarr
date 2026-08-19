@@ -25,12 +25,16 @@ class FakeMoc:
     Deliberately NOT a mortie type: the seam tests prove the protocol is
     honored by duck typing alone, so mortie's ``Moc`` composes without any
     ``isinstance`` coupling (and without bumping the mortie floor here).
+
+    Stores what it was handed, UNCOERCED: the design refuses to pin what a
+    real ``Moc.__morton_moc__()`` returns, so the fake has to be able to
+    express the shapes the normalizer's remaining arms claim to handle
+    (list of ints, signed array, 0-d word, empty) — coercing to ``uint64``
+    here would test only the fast path.
     """
 
     def __init__(self, words):
-        import numpy as np
-
-        self._words = np.asarray(words, dtype=np.uint64)
+        self._words = words
 
     def __morton_moc__(self):
         return self._words
