@@ -710,3 +710,48 @@ class TestPublicSurface:
             assert hasattr(coverage, name)  # importable...
             assert name not in moczarr.__all__  # ...but not on the surface
             assert f'"!^{name}$"' in filters  # ...nor in the rendered docs
+
+
+class TestCoverageMoc:
+    """The typed spatial cast (issue #45 phase 4, mortie >= 0.9.10).
+
+    Direction as ruled: moczarr parses the ``"ranges"`` grammar, mortie
+    types the words — there is no ``Moc.from_envelope`` on mortie's side.
+    """
+
+    def test_casts_the_expanded_ranges(self):
+        import mortie
+
+        envelope = _root()
+        moc = coverage.coverage_moc(envelope)
+        assert isinstance(moc, mortie.Moc)
+        # Same coverage as the raw expansion, which is the claim that
+        # matters; the words themselves may differ (see the compaction test).
+        expanded = coverage.ranges_words(envelope)
+        assert moc.contains(mortie.Moc(expanded))
+        assert mortie.Moc(expanded).contains(moc)
+
+    def test_words_are_the_compacted_cover_not_the_expansion(self):
+        # `Moc` normalizes eagerly through compress_moc, so a fully
+        # occupied sibling set comes back as its PARENT. Pinned because the
+        # docstring warns callers not to expect element-for-element
+        # equality with ranges_words (the same trap aoi_mask documents).
+        envelope = _root(order=7, ranges=[[SHARD + "1", SHARD + "4"]])
+        expanded = coverage.ranges_words(envelope)
+        moc = coverage.coverage_moc(envelope)
+        assert expanded.size == 4
+        assert moc.words.size == 1
+        assert int(moc.words[0]) == convention.morton_word(SHARD)
+
+    def test_result_feeds_back_into_the_aoi_seams(self):
+        # The payoff of the cast: `Moc` satisfies __morton_moc__(), so it
+        # is accepted wherever this package takes an AOI cover (phase 1).
+        envelope = _root()
+        moc = coverage.coverage_moc(envelope)
+        np.testing.assert_array_equal(coverage.as_moc_words(moc), moc.words)
+        keep = coverage.aoi_mask(coverage.ranges_words(envelope), moc)
+        assert keep.all()
+
+    def test_empty_ranges_cast_to_an_empty_moc(self):
+        moc = coverage.coverage_moc(_root(ranges=[]))
+        assert moc.words.size == 0
