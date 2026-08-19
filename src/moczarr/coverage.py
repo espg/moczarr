@@ -185,7 +185,9 @@ def ranges_words(envelope: dict) -> np.ndarray:
 def root_coverage_and(envelope: dict, aoi) -> np.ndarray:
     """Intersection of the root ranges MOC with an AOI morton cover.
 
-    ``aoi`` is any morton cover (mixed order allowed — mortie's ``moc_and``
+    ``aoi`` is any morton cover — packed ``uint64`` words, decimal strings,
+    or an object exposing ``__morton_moc__()`` (mortie's ``Moc``), mixed
+    order allowed (mortie's ``moc_and``
     resolves containment across orders). Returns the covered shards the AOI
     touches; empty means no covered shard intersects. Expansion is
     O(covered shards) — see :func:`ranges_words`.
@@ -199,7 +201,9 @@ def box_and(coverage: dict, aoi) -> np.ndarray:
     """Intersection of a leaf envelope's tier-0 box with an AOI morton cover.
 
     One in-memory op on <= 4 members — the cheap AOI reject a reader runs on
-    the stamp it already fetched, before paying for the bitmap sidecar. An
+    the stamp it already fetched, before paying for the bitmap sidecar.
+    ``aoi`` is packed ``uint64`` words, decimal strings, or an object
+    exposing ``__morton_moc__()`` (mortie's ``Moc``), mixed orders allowed. An
     empty result rejects the leaf outright (the box is a conservative
     superset: false positives possible, false negatives impossible).
     """
@@ -210,6 +214,9 @@ def box_and(coverage: dict, aoi) -> np.ndarray:
 
 def aoi_mask(cells, aoi) -> np.ndarray:
     """Boolean mask over ``cells``: which intersect the AOI morton cover.
+
+    ``aoi`` is packed ``uint64`` words, decimal strings, or an object
+    exposing ``__morton_moc__()`` (mortie's ``Moc``).
 
     The §5 nesting predicate (prefix = ancestor), applied in BOTH
     directions: a cell is kept when it sits inside an AOI member (member

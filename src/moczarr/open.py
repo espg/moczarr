@@ -7,8 +7,9 @@ absent/unusable (D9: caches degrade to the walk, never to wrong answers).
 Debris (unstamped leaves) is skipped silently — absence of a stamp IS the
 answer (D4).
 
-AOI semantics: ``aoi`` is a morton cover — packed ``uint64`` words or
-decimal strings, mixed orders allowed. Shards are rejected arithmetically
+AOI semantics: ``aoi`` is a morton cover — packed ``uint64`` words, decimal
+strings, or an object exposing ``__morton_moc__()`` (mortie's ``Moc``),
+mixed orders allowed. Shards are rejected arithmetically
 (root MOC ∩ AOI), then per leaf by the tier-0 box off the stamp already
 fetched, and finally rows are subset exactly on the ``morton`` coordinate
 (tier 2 — the coordinate is the truth; the MOC tiers are only indexes).
@@ -120,7 +121,8 @@ def candidate_leaves(
       ``ValueError`` lists the labels present. ``window`` on an unwindowed
       store is a ``ValueError``.
     - **``aoi`` restriction (SHARD cover only).** A morton cover — packed
-      words or decimal strings, mixed orders allowed — restricts the
+      words, decimal strings, or an object exposing ``__morton_moc__()``
+      (mortie's ``Moc``), mixed orders allowed — restricts the
       returned leaves to those whose subtree meets it. It cuts SHARDS and
       nothing finer: a returned leaf is kept whole, and the cells inside it
       are NOT clipped to the cover, so any cell-level use of this roster is
@@ -288,9 +290,10 @@ def open_hive(
         (see :func:`moczarr.products.list_products`). Single-product stores
         are unaffected — the bare form is the valid degenerate case.
     aoi : array-like, optional
-        Morton cover of the area of interest — packed ``uint64`` words or
-        decimal strings, mixed orders allowed. Shards and rows outside the
-        cover are excluded (rows exactly, via the ``morton`` coordinate).
+        Morton cover of the area of interest — packed ``uint64`` words,
+        decimal strings, or an object exposing ``__morton_moc__()``
+        (mortie's ``Moc``), mixed orders allowed. Shards and rows outside
+        the cover are excluded (rows exactly, via the ``morton`` coordinate).
     window : str, optional
         Window label for a time-windowed (``morton-hive/2``) store. Omitted
         on such a store, the error lists the labels that exist.
