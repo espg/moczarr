@@ -136,8 +136,10 @@ def candidate_leaves(
       — the coordinate is the truth; the MOC tiers are only indexes).
     - **``when`` restriction (temporal, spec §10; issue #45).** A temporal
       query — ``(start, end)`` as ISO strings / ``datetime64`` / internal-ns
-      ints, raw ``uint64`` toc words, or an object exposing
-      ``__toc_words__()`` (mortie's ``Toc``) — prunes candidates against the
+      ints (a CLOSED real interval — unlike every other window in this
+      docstring, ``end`` itself is included), raw ``uint64`` toc words, or
+      an object exposing ``__toc_words__()`` (mortie's ``Toc``) — prunes
+      candidates against the
       root envelope's tier-1 per-shard toc word map, before anything is
       opened. The §10 asymmetry is the contract: only a shard the map LISTS
       whose word fails ``mortie.toc_overlaps`` for the window is dropped; a
@@ -146,8 +148,11 @@ def candidate_leaves(
       store publishing no ``temporal`` section prunes nothing, silently
       (§10's absence rule), and ``when=None`` is byte-identical to today.
       Like ``aoi``, the cut is conservative and SHARD-level: kept leaves may
-      hold rows outside the window (``toc_overlaps`` may over-report near
-      window edges by up to one encoding quantum, never under-report).
+      hold rows outside the window. The over-report near window edges runs
+      to a few seconds — up to TWO encoding quanta, one from round-tripping
+      the query window itself through ``span2toc``/``toc2time`` and one from
+      the shard's own outward-rounded word under ``mortie.toc_overlaps`` —
+      and every widening is outward, so it never under-reports.
     """
     if aoi is not None:
         aoi = as_moc_words(aoi)
