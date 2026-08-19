@@ -9,6 +9,7 @@ any bit-convention drift between writer and reader fails these first.
 
 import numpy as np
 import pytest
+from conftest import FakeMoc
 from numcodecs import Zstd
 
 from moczarr import convention, coverage
@@ -342,3 +343,47 @@ class TestAoiMask:
         coarse = _words("41234")  # order-4 cells
         keep = coverage.aoi_mask(coarse, np.asarray([POINT_NORTH_WORD], dtype=np.uint64))
         np.testing.assert_array_equal(keep, [True])
+
+
+class TestAsMocWords:
+    """The one AOI boundary normalizer (issue #45) — internal, every seam runs it."""
+
+    def test_protocol_object(self):
+        # Duck-typed __morton_moc__() — never an isinstance of a mortie type.
+        words = _words(SHARD, NORTH + "11")
+        np.testing.assert_array_equal(coverage.as_moc_words(FakeMoc(words)), words)
+
+    def test_uint64_passthrough_is_idempotent(self):
+        words = _words(SHARD, SHARD + "11")
+        out = coverage.as_moc_words(words)
+        assert out.dtype == np.uint64
+        np.testing.assert_array_equal(out, words)
+        np.testing.assert_array_equal(coverage.as_moc_words(out), out)
+
+    def test_decimal_strings_and_scalars(self):
+        np.testing.assert_array_equal(coverage.as_moc_words([SHARD, NORTH]), _words(SHARD, NORTH))
+        np.testing.assert_array_equal(coverage.as_moc_words(SHARD), _words(SHARD))
+        word = int(_words(SHARD)[0])
+        np.testing.assert_array_equal(coverage.as_moc_words([word]), _words(SHARD))
+
+    def test_empty(self):
+        out = coverage.as_moc_words([])
+        assert out.dtype == np.uint64 and out.size == 0
+
+    def test_root_coverage_and_accepts_protocol(self):
+        envelope = {"order": 6, "ranges": [[SHARD, SHARD]]}
+        direct = coverage.root_coverage_and(envelope, _words(SHARD))
+        via_fake = coverage.root_coverage_and(envelope, FakeMoc(_words(SHARD)))
+        np.testing.assert_array_equal(via_fake, direct)
+
+    def test_box_and_accepts_protocol(self):
+        cov = _leaf_cov()
+        direct = coverage.box_and(cov, _words(SHARD + "1"))
+        via_fake = coverage.box_and(cov, FakeMoc(_words(SHARD + "1")))
+        np.testing.assert_array_equal(via_fake, direct)
+
+    def test_aoi_mask_accepts_protocol_and_strings(self):
+        cells = _words(SHARD + "11", SHARD + "44", NORTH + "11")
+        direct = coverage.aoi_mask(cells, _words(SHARD))
+        np.testing.assert_array_equal(coverage.aoi_mask(cells, FakeMoc(_words(SHARD))), direct)
+        np.testing.assert_array_equal(coverage.aoi_mask(cells, [SHARD]), direct)

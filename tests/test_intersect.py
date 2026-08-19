@@ -15,6 +15,7 @@ import warnings
 
 import numpy as np
 import pytest
+from conftest import FakeMoc
 from numcodecs import Zstd
 
 import moczarr
@@ -265,6 +266,14 @@ class TestGoldenPair:
         got, _moc = _both_shapes(*golden_pair, out_order=7, aoi=[S1])
         assert list(got) == [morton_word(S1)]
         np.testing.assert_array_equal(got[morton_word(S1)], _words(*EXPECTED[S1]))
+
+    def test_aoi_protocol_object(self, golden_pair):
+        # issue #45: both shapes normalize `aoi` through coverage.as_moc_words,
+        # so a duck-typed __morton_moc__() cover answers identically to words.
+        direct, _ = _both_shapes(*golden_pair, out_order=7, aoi=[S1])
+        via_fake, _ = _both_shapes(*golden_pair, out_order=7, aoi=FakeMoc(_words(S1)))
+        assert list(via_fake) == list(direct)
+        np.testing.assert_array_equal(via_fake[morton_word(S1)], direct[morton_word(S1)])
 
     def test_aoi_overhangs_at_cell_level(self, golden_pair):
         # The contract: `aoi` cuts SHARDS, never the cells of a kept leaf.

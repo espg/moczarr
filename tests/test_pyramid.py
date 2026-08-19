@@ -24,6 +24,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import xarray as xr
+from conftest import FakeMoc
 
 from moczarr import (
     finest_source_at,
@@ -438,6 +439,15 @@ class TestScoping:
         source = tree["atl06"]["8"].ds
         assert source.sizes["cells"] > 0
         assert int(source["count"].sum()) == int(tree["atl06"]["6"].ds["count"].sum())
+
+    def test_aoi_protocol_object(self, root):
+        # issue #45: the overview open seam normalizes `aoi` through
+        # coverage.as_moc_words, so a __morton_moc__() cover works here too.
+        direct = open_store(root, products=["atl06"], aoi=["43312"])
+        cover = FakeMoc([morton_word("43312")])
+        via_fake = open_store(root, products=["atl06"], aoi=cover)
+        for order in ("8", "6", "4"):
+            xr.testing.assert_identical(via_fake["atl06"][order].ds, direct["atl06"][order].ds)
 
     def test_aoi_empty_keeps_node_schema_correct(self, root):
         # The issue-#4 posture per ORDER node: an AOI outside the product's

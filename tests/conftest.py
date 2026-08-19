@@ -19,6 +19,23 @@ FULL = "-5112331"  # windowed leaf (2019), encoding "full"
 DEBRIS = "-5112334"  # leaf prefix without a commit stamp
 
 
+class FakeMoc:
+    """Duck-typed ``__morton_moc__()`` carrier (issue #45).
+
+    Deliberately NOT a mortie type: the seam tests prove the protocol is
+    honored by duck typing alone, so mortie's ``Moc`` composes without any
+    ``isinstance`` coupling (and without bumping the mortie floor here).
+    """
+
+    def __init__(self, words):
+        import numpy as np
+
+        self._words = np.asarray(words, dtype=np.uint64)
+
+    def __morton_moc__(self):
+        return self._words
+
+
 def _manifest(cell_order=8, shard_order=6):
     return {
         "spec": convention.HIVE_SPEC,

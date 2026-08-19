@@ -339,7 +339,8 @@ def open_overview_order(
     import xarray as xr
     from zarr.storage import ObjectStore
 
-    from moczarr.open import _aoi_words, _check_composition_fill
+    from moczarr.coverage import as_moc_words
+    from moczarr.open import _check_composition_fill
     from moczarr.store import _resolve_store, _stamp_from_meta
 
     if anonymous:
@@ -420,7 +421,7 @@ def open_overview_order(
             stacklevel=2,
         )
         return None
-    aoi_words = _aoi_words(aoi) if aoi is not None else None
+    aoi_words = as_moc_words(aoi) if aoi is not None else None
     # Candidates are ALL covered ancestors — the AOI scopes rows per object
     # below (and empties to the issue-#4 posture), never the candidate set:
     # tree shape must not depend on the AOI, and the schema for the empty

@@ -4,7 +4,7 @@ import json
 
 import numpy as np
 import pytest
-from conftest import DEBRIS, FULL, STAMPED
+from conftest import DEBRIS, FULL, STAMPED, FakeMoc
 
 from moczarr import convention, store
 
@@ -152,6 +152,14 @@ class TestBitmapAnd:
         np.testing.assert_array_equal(hit, _words(STAMPED + "11"))
         miss = store.bitmap_and(hive_store, leaf, _words(STAMPED + "44"))  # unoccupied corner
         assert miss.size == 0  # definitive: the bitmap is exact
+
+    def test_protocol_aoi(self, hive_store):
+        # The seam runs coverage.as_moc_words (issue #45): a duck-typed
+        # __morton_moc__() cover answers identically to packed words.
+        leaf = convention.leaf_path(STAMPED)
+        direct = store.bitmap_and(hive_store, leaf, _words(STAMPED))
+        via_fake = store.bitmap_and(hive_store, leaf, FakeMoc(_words(STAMPED)))
+        np.testing.assert_array_equal(via_fake, direct)
 
     def test_full_short_circuits(self, hive_store):
         leaf = convention.leaf_path(FULL, window="2019")

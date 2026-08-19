@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import xarray as xr
+from conftest import FakeMoc
 
 from moczarr import candidate_leaves, convention, coverage, open_hive, store
 
@@ -163,6 +164,14 @@ class TestOpenHive:
         by_str = open_hive(serc, aoi=[SERC_SHARD])
         by_word = open_hive(serc, aoi=np.asarray([convention.morton_word(SERC_SHARD)]))
         np.testing.assert_array_equal(by_str["morton"].values, by_word["morton"].values)
+
+    def test_aoi_protocol_object_agrees(self, serc):
+        # issue #45: a duck-typed __morton_moc__() cover (mortie's Moc
+        # protocol) opens the same rows as its packed words.
+        words = np.asarray([convention.morton_word(SERC_SHARD)], dtype=np.uint64)
+        direct = open_hive(serc, aoi=words)
+        via_fake = open_hive(serc, aoi=FakeMoc(words))
+        xr.testing.assert_identical(via_fake, direct)
 
     def test_aoi_outside_coverage_is_empty(self, serc):
         # Issue #4: a miss against a covered store is a data answer — empty
@@ -514,6 +523,14 @@ class TestCandidateLeaves:
         assert candidate_leaves(serc, manifest, [SERC_SHARD + "1"]) == [
             convention.leaf_path(SERC_SHARD)
         ]
+
+    def test_aoi_protocol_object(self, serc):
+        # issue #45: the discovery seam takes the __morton_moc__() protocol.
+        manifest = store.read_manifest(serc)
+        word = np.asarray([convention.morton_word(SERC_SHARD)], dtype=np.uint64)
+        assert candidate_leaves(serc, manifest, FakeMoc(word)) == candidate_leaves(
+            serc, manifest, word
+        )
 
     def test_window_is_validated_and_refused_on_an_unwindowed_store(self, serc):
         with pytest.raises(ValueError, match="unwindowed stores"):

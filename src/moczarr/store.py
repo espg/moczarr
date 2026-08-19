@@ -47,6 +47,7 @@ from moczarr.convention import (
     split_leaf_name,
 )
 from moczarr.coverage import (
+    as_moc_words,
     decode_bitmap,
     parse_leaf_coverage,
     parse_root_coverage,
@@ -378,18 +379,19 @@ def bitmap_and(
     """
     from mortie import moc_and
 
+    aoi = as_moc_words(aoi)
     coverage = read_leaf_coverage(store_root, leaf, store=store, **store_kwargs)
     if not coverage:
         return None
     if coverage.get("encoding") == "full":
         word = morton_word(split_leaf_name(leaf.rstrip("/").rsplit("/", 1)[-1])[0])
-        return moc_and(np.asarray([word], dtype=np.uint64), np.asarray(aoi, dtype=np.uint64))
+        return moc_and(np.asarray([word], dtype=np.uint64), aoi)
     occupied = read_coverage_bitmap(
         store_root, leaf, coverage=coverage, store=store, **store_kwargs
     )
     if occupied is None:
         return None
-    return moc_and(occupied, np.asarray(aoi, dtype=np.uint64))
+    return moc_and(occupied, aoi)
 
 
 def _classify_children(listing, prefix: str, path_grouping: int = 1) -> Iterator[tuple[str, bool]]:

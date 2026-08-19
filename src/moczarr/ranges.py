@@ -246,12 +246,13 @@ class MortonRanges:
         The two-way containment semantics of :func:`moczarr.coverage.aoi_mask`
         in interval space: a coarser-or-equal member covers its whole subtree
         run; a finer member collapses to its containing cell (one rank).
-        Members may be mixed-order; strings are accepted.
+        Members may be mixed-order; strings and ``__morton_moc__()`` protocol
+        objects are accepted (``coverage.as_moc_words``, issue #45).
         """
-        values = np.asarray(aoi).ravel() if np.asarray(aoi).ndim else np.asarray([aoi])
+        from moczarr.coverage import as_moc_words
+
         intervals = []
-        for value in values:
-            word = morton_word(value.item() if hasattr(value, "item") else value)
+        for word in (int(w) for w in as_moc_words(aoi)):
             decimal = morton_decimal(word)
             depth = self.cell_order - decimal_order(decimal)
             if depth >= 0:
