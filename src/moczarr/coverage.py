@@ -152,11 +152,14 @@ def parse_root_coverage(payload: object) -> dict | None:
 
     The ``temporal`` section (zagg spec §10, issue #45) rides the same
     carrier under its own versioned-key discipline, strict-gated on its own
-    ``spec`` marker: a section declaring exactly :data:`TEMPORAL_SPEC` is
-    carried through; an unknown revision — or a malformed, non-mapping
-    value — reads as ABSENT (dropped from the returned envelope), never as
-    an error, because the section is an accelerator whose truth is in the
-    leaves. Whole-section absence means only "this store publishes no
+    ``spec`` marker: a section declaring exactly :data:`TEMPORAL_SPEC` AND
+    carrying the §10.1-required ``shards`` mapping is carried through; an
+    unknown revision, a malformed non-mapping value, or a section whose
+    ``shards`` is missing or is not a mapping reads as ABSENT (dropped from
+    the returned envelope), never as an error, because the section is an
+    accelerator whose truth is in the leaves — a section missing its one
+    required tier-1 key is structurally malformed, so the same posture
+    extends to it. Whole-section absence means only "this store publishes no
     temporal coverage": none of these cases refuses the store, the sidecar,
     or a windowed query (§10's absence rule).
     """
@@ -167,7 +170,11 @@ def parse_root_coverage(payload: object) -> dict | None:
         return None
     envelope = dict(payload)
     temporal = envelope.get("temporal")
-    if not (isinstance(temporal, dict) and temporal.get("spec") == TEMPORAL_SPEC):
+    if not (
+        isinstance(temporal, dict)
+        and temporal.get("spec") == TEMPORAL_SPEC
+        and isinstance(temporal.get("shards"), dict)
+    ):
         envelope.pop("temporal", None)
     return envelope
 
@@ -317,13 +324,19 @@ def temporal_shard_words(envelope: dict) -> tuple[np.ndarray, np.ndarray]:
     because a ``uint64`` exceeds 2^53 and a float-based JSON parser would
     silently mangle a raw number (§10.2) — into two ``uint64`` arrays,
     ascending in shard packed-word order. Both come back EMPTY when the
-    envelope carries no ``temporal`` section: §10's absence rule — no
-    listing is not a claim of no data, so a caller prunes nothing.
+    envelope carries no ``temporal`` section, or one whose ``shards`` is
+    missing or is not a mapping: §10.1 makes the key required, so a section
+    without a usable map is STRUCTURALLY malformed and takes the section's
+    reads-as-absent posture (the gate :func:`parse_root_coverage` applies,
+    re-checked here so a hand-assembled envelope cannot crash the decoder).
+    §10's absence rule — no listing is not a claim of no data, so a caller
+    prunes nothing.
 
-    A PRESENT map with malformed content raises (the :func:`ranges_words`
-    posture: a corrupt cache must never yield a plausible partial answer):
-    a key not at the carrier's order, or a word value that is not a uint64
-    decimal string. Every entry is validated BEFORE any word is returned.
+    CONTENT-level corruption inside a well-formed map raises instead (the
+    :func:`ranges_words` posture: a corrupt cache must never yield a
+    plausible partial answer): a key not at the carrier's order, or a word
+    value that is not a uint64 decimal string. Every entry is validated
+    BEFORE any word is returned.
     The words are the grammar's join over every §8.3 companion the shard's
     leaves hold — feed them to ``mortie.toc_overlaps``/``toc_contains``
     (§10.2: a reader uses the grammar's predicates on the words, never its
@@ -334,8 +347,10 @@ def temporal_shard_words(envelope: dict) -> tuple[np.ndarray, np.ndarray]:
     temporal = envelope.get("temporal")
     if not isinstance(temporal, dict):
         return empty, empty
+    shards = temporal.get("shards")
+    if not isinstance(shards, dict):
+        return empty, empty
     order = int(envelope["order"])
-    shards = temporal["shards"]
     labels, values = list(shards), []
     for label in labels:
         if decimal_order(label) != order:
