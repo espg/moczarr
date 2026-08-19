@@ -29,6 +29,7 @@ from moczarr.convention import (
 )
 from moczarr.coverage import (
     COVERAGE_SPEC,
+    TEMPORAL_SPEC,
     aoi_mask,
     box_and,
     box_words,
@@ -38,6 +39,8 @@ from moczarr.coverage import (
     ranges_contain,
     ranges_words,
     root_coverage_and,
+    temporal_keep,
+    temporal_shard_words,
 )
 from moczarr.exceptions import ConservativeCoverageWarning, NoCoverageError
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
@@ -122,6 +125,7 @@ __all__ = [
     "RAGGED_SPEC",
     "ROOT_COVERAGE_NAME",
     "RaggedElement",
+    "TEMPORAL_SPEC",
     "__version__",
     "aoi_mask",
     "bitmap_and",
@@ -186,6 +190,8 @@ __all__ = [
     "split_leaf_name",
     "stats_sidecar_key",
     "stats_sidecar_path",
+    "temporal_keep",
+    "temporal_shard_words",
     "unpack_composition",
     "validate_product_name",
     "verify_arrays",
