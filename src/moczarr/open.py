@@ -105,7 +105,7 @@ def candidate_leaves(
       and leaf paths come from it by string arithmetic (D10) — no LIST. The
       discovery walk (``moczarr.store.walk_leaves``) runs only when that
       envelope is absent or unusable, and is SEMANTICALLY EQUIVALENT: it is
-      a fallback, never a different answer, so a caller never keys on which
+      a fallback, never a wrong answer, so a caller never keys on which
       route ran (D9 — caches degrade to the walk, never to wrong answers).
       Both return CANDIDATES in ascending packed-word order, and the two
       candidate sets differ only where a stamp settles it anyway (D4:
@@ -113,7 +113,12 @@ def candidate_leaves(
       (unstamped leaves the root MOC does not list), and the arithmetic
       path additionally names MOC-listed shards whose object is gone. After
       the caller's commit-stamp GET — which every consumer here does — the
-      two agree leaf-for-leaf. Objects that reuse the window-naming dialect
+      two agree leaf-for-leaf with ``when=None``; under ``when=`` the walk
+      returns a SUPERSET, because the temporal map it would prune against
+      rides the same absent carrier (see the ``when`` bullet — degradation
+      in the safe direction, D9, and no commit stamp settles it: a stamp
+      says the leaf exists, not when its rows are). Objects that reuse the
+      window-naming dialect
       at ancestor nodes (overview zarrs, spec §4.2) are not leaves and
       neither route returns them.
     - **Window selection.** ``window`` picks the time window of a
@@ -147,6 +152,10 @@ def candidate_leaves(
       *empty* — the section is a regenerable accelerator, not truth). A
       store publishing no ``temporal`` section prunes nothing, silently
       (§10's absence rule), and ``when=None`` is byte-identical to today.
+      Pruning rides the root envelope's tier-1 map ALONE, so the discovery
+      walk — which runs exactly when that envelope is absent or unusable —
+      has nothing to prune against and returns the unpruned candidate set,
+      a conservative superset (D9: degrade, never wrong).
       Like ``aoi``, the cut is conservative and SHARD-level: kept leaves may
       hold rows outside the window. The over-report near window edges runs
       to a few seconds — up to TWO encoding quanta, one from round-tripping
@@ -209,11 +218,9 @@ def candidate_leaves(
             for rel, w in found.items()
             if moc_and(np.asarray([w], dtype=np.uint64), aoi).size
         }
-    if when_words is not None and found and envelope is not None:
-        mask = temporal_keep(
-            np.asarray(list(found.values()), dtype=np.uint64), envelope, when_words
-        )
-        found = {rel: w for (rel, w), kept in zip(found.items(), mask) if kept}
+    # No temporal pruning here by construction: reaching the walk means the
+    # root envelope is absent or unusable, so there is no tier-1 map to
+    # prune against and the candidate set stays an unpruned superset.
     return sorted(found, key=lambda rel: found[rel])
 
 
