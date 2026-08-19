@@ -9,12 +9,13 @@ goldens in the other test modules must move with it).
 
 import json
 import shutil
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pytest
 import xarray as xr
-from conftest import FakeMoc
+from conftest import FakeMoc, FakeToc, build_many_leaf_store
 
 from moczarr import candidate_leaves, convention, coverage, open_hive, store
 
@@ -535,6 +536,103 @@ class TestCandidateLeaves:
     def test_window_is_validated_and_refused_on_an_unwindowed_store(self, serc):
         with pytest.raises(ValueError, match="unwindowed stores"):
             candidate_leaves(serc, store.read_manifest(serc), None, "2019")
+
+
+class TestCandidateLeavesWhen:
+    """Spatiotemporal pruning through the §10 tier-1 map (issue #45).
+
+    The correctness rule under test is the ruled asymmetry: only a shard the
+    map LISTS whose word fails ``toc_overlaps`` for the window is dropped;
+    an UNLISTED shard is always kept (§10: not proof of no data). Three
+    shards: one listed-overlapping, one listed-disjoint, one unlisted.
+    """
+
+    IN, OUT, UNLISTED = "4311111", "4311112", "4311113"
+    WINDOW = ("2019-05-10", "2019-05-20")
+
+    @pytest.fixture()
+    def temporal_store(self, tmp_path):
+        root = build_many_leaf_store(tmp_path / "twhen", [self.IN, self.OUT, self.UNLISTED])
+        cov_path = Path(root) / convention.ROOT_COVERAGE_NAME
+        envelope = json.loads(cov_path.read_text())
+        envelope["temporal"] = {
+            "spec": coverage.TEMPORAL_SPEC,
+            "source": "sweep",
+            "generated_at": "2026-07-17T00:00:00+00:00",
+            "fields": ["h_tdigest"],
+            "shards": {
+                self.IN: str(int(coverage.as_toc_words(("2019-05-01", "2019-06-01"))[0])),
+                self.OUT: str(int(coverage.as_toc_words(("2003-01-01", "2003-02-01"))[0])),
+            },
+        }
+        cov_path.write_text(json.dumps(envelope))
+        return root
+
+    def _shards(self, rels):
+        return [convention.split_leaf_name(rel.rsplit("/", 1)[-1])[0] for rel in rels]
+
+    def test_prunes_listed_disjoint_keeps_unlisted(self, temporal_store):
+        manifest = store.read_manifest(temporal_store)
+        rels = candidate_leaves(temporal_store, manifest, when=self.WINDOW)
+        assert self._shards(rels) == [self.IN, self.UNLISTED]
+
+    def test_when_none_is_byte_identical(self, temporal_store):
+        manifest = store.read_manifest(temporal_store)
+        assert candidate_leaves(temporal_store, manifest) == candidate_leaves(
+            temporal_store, manifest, when=None
+        )
+        assert self._shards(candidate_leaves(temporal_store, manifest)) == [
+            self.IN,
+            self.OUT,
+            self.UNLISTED,
+        ]
+
+    def test_all_query_forms_agree(self, temporal_store):
+        manifest = store.read_manifest(temporal_store)
+        by_iso = candidate_leaves(temporal_store, manifest, when=self.WINDOW)
+        words = coverage.as_toc_words(self.WINDOW)
+        forms = [
+            tuple(np.datetime64(v) for v in self.WINDOW),
+            tuple(int(coverage._instant_ns(np.datetime64(v))) for v in self.WINDOW),
+            words,
+            FakeToc(words),
+            FakeToc([int(words[0])]),
+        ]
+        for form in forms:
+            assert candidate_leaves(temporal_store, manifest, when=form) == by_iso
+
+    def test_when_composes_with_aoi(self, temporal_store):
+        manifest = store.read_manifest(temporal_store)
+        rels = candidate_leaves(
+            temporal_store, manifest, [self.OUT, self.UNLISTED], when=self.WINDOW
+        )
+        assert self._shards(rels) == [self.UNLISTED]
+
+    def test_no_temporal_section_prunes_nothing_silently(self, serc):
+        # §10 absence rule: the SERC fixture publishes no temporal section,
+        # so when= keeps every candidate and neither warns nor fails.
+        manifest = store.read_manifest(serc)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            rels = candidate_leaves(serc, manifest, when=self.WINDOW)
+        assert rels == candidate_leaves(serc, manifest)
+
+    def test_walk_fallback_ignores_when(self, temporal_store, tmp_path):
+        # No root envelope -> no tier-1 map -> nothing prunable: the walk
+        # answers the same candidates with and without a window (D9: the
+        # fallback degrades to a superset, never to a wrong answer).
+        copy = tmp_path / "walk"
+        shutil.copytree(temporal_store, copy)
+        (copy / convention.ROOT_COVERAGE_NAME).unlink()
+        manifest = store.read_manifest(str(copy))
+        assert candidate_leaves(str(copy), manifest, when=self.WINDOW) == candidate_leaves(
+            str(copy), manifest
+        )
+
+    def test_reversed_window_raises(self, temporal_store):
+        manifest = store.read_manifest(temporal_store)
+        with pytest.raises(ValueError, match="after its end"):
+            candidate_leaves(temporal_store, manifest, when=("2019-05-20", "2019-05-10"))
 
 
 class TestOpenHiveMocIndex:

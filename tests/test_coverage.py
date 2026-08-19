@@ -9,7 +9,7 @@ any bit-convention drift between writer and reader fails these first.
 
 import numpy as np
 import pytest
-from conftest import FakeMoc
+from conftest import FakeMoc, FakeToc
 from numcodecs import Zstd
 
 from moczarr import convention, coverage
@@ -252,6 +252,90 @@ class TestTemporalSection:
         envelope = _root(temporal=self._temporal(shards=shards))
         with pytest.raises(ValueError, match="temporal"):
             coverage.temporal_shard_words(envelope)
+
+
+class TestAsTocWords:
+    """The temporal query normalizer (issue #45, ruling 4's permanent grammar)."""
+
+    WINDOW_ISO = ("2019-05-01", "2019-06-01")
+
+    def _internal(self, iso):
+        from mortie import from_datetime64
+
+        return int(from_datetime64(np.datetime64(iso)))
+
+    def test_all_window_spellings_encode_the_same_word(self):
+        iso = coverage.as_toc_words(self.WINDOW_ISO)
+        dt64 = coverage.as_toc_words(tuple(np.datetime64(v) for v in self.WINDOW_ISO))
+        ns = coverage.as_toc_words(tuple(self._internal(v) for v in self.WINDOW_ISO))
+        assert iso.dtype == np.uint64 and iso.shape == (1,)
+        np.testing.assert_array_equal(iso, dt64)
+        np.testing.assert_array_equal(iso, ns)
+
+    def test_raw_words_pass_through_and_ints_cast(self):
+        words = coverage.as_toc_words(self.WINDOW_ISO)
+        np.testing.assert_array_equal(coverage.as_toc_words(words), words)
+        np.testing.assert_array_equal(coverage.as_toc_words([int(words[0])]), words)
+
+    def test_protocol_object(self):
+        words = coverage.as_toc_words(self.WINDOW_ISO)
+        np.testing.assert_array_equal(coverage.as_toc_words(FakeToc(words)), words)
+        np.testing.assert_array_equal(coverage.as_toc_words(FakeToc([int(words[0])])), words)
+
+    def test_reversed_window_raises_the_kernel_error(self):
+        # Degenerate handling is mortie's, not re-invented here.
+        with pytest.raises(ValueError, match="after its end"):
+            coverage.as_toc_words(("2019-06-01", "2019-05-01"))
+
+    @pytest.mark.parametrize("bad", [[], np.empty(0, dtype=np.uint64), [1.5], "2019-05-01"])
+    def test_empty_or_unreadable_queries_raise(self, bad):
+        with pytest.raises(ValueError, match="temporal query"):
+            coverage.as_toc_words(bad)
+
+
+class TestTemporalKeep:
+    """The §10 pruning asymmetry as a pure mask (issue #45)."""
+
+    def _envelope(self):
+
+        may = coverage.as_toc_words(("2019-05-01", "2019-06-01"))
+        # -5111 overlaps May 2019, -5113 is 2003-only, -5121 stays unlisted.
+        return _root(
+            temporal={
+                "spec": coverage.TEMPORAL_SPEC,
+                "source": "sweep",
+                "generated_at": "2026-07-17T00:00:00+00:00",
+                "fields": ["h_tdigest"],
+                "shards": {
+                    "-5111": str(int(may[0])),
+                    "-5113": str(int(coverage.as_toc_words(("2003-01-01", "2003-02-01"))[0])),
+                },
+            }
+        )
+
+    def test_listed_pruned_unlisted_kept(self):
+        shards = _words("-5111", "-5113", "-5121")
+        keep = coverage.temporal_keep(
+            shards, self._envelope(), coverage.as_toc_words(("2019-05-10", "2019-05-20"))
+        )
+        np.testing.assert_array_equal(keep, [True, False, True])
+
+    def test_timestamp_query_word_is_its_exact_instant(self):
+        # A timestamp word decodes to (t, t); the mask must query [t, t+1),
+        # never the grammar's match-nothing empty window.
+        from mortie import from_datetime64, time2toc
+
+        instant = np.asarray(
+            [time2toc(int(from_datetime64(np.datetime64("2019-05-10"))))], dtype=np.uint64
+        )
+        keep = coverage.temporal_keep(_words("-5111", "-5113"), self._envelope(), instant)
+        np.testing.assert_array_equal(keep, [True, False])
+
+    def test_no_section_keeps_everything(self):
+        keep = coverage.temporal_keep(
+            _words("-5111", "-5113"), _root(), coverage.as_toc_words(("2019-05-10", "2019-05-20"))
+        )
+        np.testing.assert_array_equal(keep, [True, True])
 
 
 class TestRanges:

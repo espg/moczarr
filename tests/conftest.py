@@ -40,6 +40,21 @@ class FakeMoc:
         return self._words
 
 
+class FakeToc:
+    """Duck-typed ``__toc_words__()`` carrier (issue #45) — FakeMoc's twin.
+
+    Same posture: not a mortie type (duck typing is the contract, so the
+    coming ``mortie.Toc`` composes with zero change), and it stores what it
+    was handed uncoerced so the normalizer's non-uint64 arms are testable.
+    """
+
+    def __init__(self, words):
+        self._words = words
+
+    def __toc_words__(self):
+        return self._words
+
+
 def _manifest(cell_order=8, shard_order=6):
     return {
         "spec": convention.HIVE_SPEC,
