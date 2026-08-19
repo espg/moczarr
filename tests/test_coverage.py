@@ -282,6 +282,13 @@ class TestAsTocWords:
         np.testing.assert_array_equal(coverage.as_toc_words(FakeToc(words)), words)
         np.testing.assert_array_equal(coverage.as_toc_words(FakeToc([int(words[0])])), words)
 
+    def test_protocol_two_word_tuple_reads_as_words_not_a_window(self):
+        # A protocol return is WORDS by contract: a 2-tuple must not fall
+        # into the (start, end) arm and come back as one span2toc word.
+        pair = (np.uint64(1), np.uint64(5))
+        got = coverage.as_toc_words(FakeToc(pair))
+        np.testing.assert_array_equal(got, np.asarray(pair, dtype=np.uint64))
+
     def test_reversed_window_raises_the_kernel_error(self):
         # Degenerate handling is mortie's, not re-invented here.
         with pytest.raises(ValueError, match="after its end"):
