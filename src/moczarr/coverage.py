@@ -477,6 +477,13 @@ def temporal_keep(shard_words, envelope: dict, when_words) -> np.ndarray:
     becomes the predicate's half-open window; a timestamp word queries its
     exact instant as ``[t, t+1)`` — the grammar's empty window matches
     nothing, which would silently invert a timestamp's meaning.
+
+    That decode WIDENS the query (a range word's envelope is already
+    outward-rounded), on top of the quantum ``toc_overlaps`` adds for the
+    shard's own word — so the mask over-reports by up to two quanta near
+    window edges and never under-reports. It is also the only route
+    available: mortie exposes no word-vs-word overlap predicate, and §10.2's
+    MUST is about not decoding the SHARD words, which this never does.
     """
     shard_words = np.atleast_1d(np.asarray(shard_words, dtype=np.uint64))
     keep = np.ones(shard_words.size, dtype=bool)
