@@ -353,6 +353,24 @@ class TestAsMocWords:
         words = _words(SHARD, NORTH + "11")
         np.testing.assert_array_equal(coverage.as_moc_words(FakeMoc(words)), words)
 
+    @pytest.mark.parametrize("shape", ["uint64", "int_list", "int64", "scalar", "empty"])
+    def test_protocol_return_shapes_normalize_identically(self, shape):
+        # The protocol result "runs through the arms below" (docstring): the
+        # return shape is deliberately unpinned — no mortie import, no
+        # isinstance — so every arm has to survive one.
+        words = _words(NORTH, NORTH + "11")  # < 2**63, so the signed arm fits
+        returns = {
+            "uint64": words,
+            "int_list": [int(w) for w in words],
+            "int64": np.asarray([int(w) for w in words], dtype=np.int64),
+            "scalar": np.array(int(words[0]), dtype=np.int64),
+            "empty": [],
+        }
+        expected = {"scalar": words[:1], "empty": np.empty(0, dtype=np.uint64)}.get(shape, words)
+        out = coverage.as_moc_words(FakeMoc(returns[shape]))
+        assert out.dtype == np.uint64
+        np.testing.assert_array_equal(out, expected)
+
     def test_uint64_passthrough_is_idempotent(self):
         words = _words(SHARD, SHARD + "11")
         out = coverage.as_moc_words(words)
