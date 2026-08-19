@@ -356,7 +356,11 @@ def temporal_shard_words(envelope: dict) -> tuple[np.ndarray, np.ndarray]:
         if decimal_order(label) != order:
             raise ValueError(f"temporal shard id {label!r} is not at the carrier's order {order}")
         raw = shards[label]
-        value = int(raw) if isinstance(raw, str) and raw.isdigit() else -1
+        # isascii() BEFORE isdigit(): the latter is a Unicode predicate, and
+        # §10.2's grammar is ASCII decimal — "٢" is a digit to Python and
+        # would decode silently to 2. Non-ASCII falls to the sentinel and out
+        # through the ValueError below, whose message names the contract.
+        value = int(raw) if isinstance(raw, str) and raw.isascii() and raw.isdigit() else -1
         if not 0 <= value < 2**64:
             raise ValueError(
                 f"temporal word {raw!r} for shard {label} is not a uint64 decimal string"

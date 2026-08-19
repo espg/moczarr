@@ -222,6 +222,8 @@ class TestTemporalSection:
             {"-5111": "-1"},  # not a uint64 decimal
             {"-5111": "18446744073709551616"},  # 2^64: out of range
             {"-5111": "junk"},
+            {"-5111": "٢"},  # ARABIC-INDIC TWO: isdigit() is Unicode-wide
+            {"-5111": "²"},  # SUPERSCRIPT TWO: isdigit(), and int() chokes
         ],
     )
     def test_malformed_map_raises(self, shards):
