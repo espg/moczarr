@@ -39,6 +39,9 @@ from moczarr.convention import (
 COVERAGE_SPEC = "morton-moc/1"
 #: Fixed slot count of the tier-0 morton box (1-4 members, null-padded).
 COVERAGE_BOX_SLOTS = 4
+#: Convention version of the root envelope's temporal section (zagg spec §10,
+#: issue #45): the tier-1 per-shard toc word map + optional tier-2 time-digest.
+TEMPORAL_SPEC = "zagg-coverage-toc/1"
 
 
 def as_moc_words(aoi) -> np.ndarray:
@@ -146,11 +149,27 @@ def parse_root_coverage(payload: object) -> dict | None:
     The root MOC is a regenerable cache: a non-mapping payload, an unknown
     spec, or a non-``"ranges"`` encoding reads as absent and the caller
     falls back to the discovery walk (D9 — degrade, never wrong answers).
+
+    The ``temporal`` section (zagg spec §10, issue #45) rides the same
+    carrier under its own versioned-key discipline, strict-gated on its own
+    ``spec`` marker: a section declaring exactly :data:`TEMPORAL_SPEC` is
+    carried through; an unknown revision — or a malformed, non-mapping
+    value — reads as ABSENT (dropped from the returned envelope), never as
+    an error, because the section is an accelerator whose truth is in the
+    leaves. Whole-section absence means only "this store publishes no
+    temporal coverage": none of these cases refuses the store, the sidecar,
+    or a windowed query (§10's absence rule).
     """
     if not isinstance(payload, dict):
         return None
     usable = payload.get("spec") == COVERAGE_SPEC and payload.get("encoding") == "ranges"
-    return dict(payload) if usable else None
+    if not usable:
+        return None
+    envelope = dict(payload)
+    temporal = envelope.get("temporal")
+    if not (isinstance(temporal, dict) and temporal.get("spec") == TEMPORAL_SPEC):
+        envelope.pop("temporal", None)
+    return envelope
 
 
 def ranges_words(envelope: dict) -> np.ndarray:
@@ -288,3 +307,51 @@ def ranges_contain(envelope: dict, shard: str | int) -> bool:
         for lo, hi in envelope["ranges"]
         if decimal_base(hi) == decimal_base(lo)
     )
+
+
+def temporal_shard_words(envelope: dict) -> tuple[np.ndarray, np.ndarray]:
+    """The §10 tier-1 map as row-aligned ``(shard_words, toc_words)`` — or raise.
+
+    Decodes ``temporal.shards`` — D1 decimal shard ids at the carrier's
+    ``order`` mapped to one toc word each, spelled as decimal strings
+    because a ``uint64`` exceeds 2^53 and a float-based JSON parser would
+    silently mangle a raw number (§10.2) — into two ``uint64`` arrays,
+    ascending in shard packed-word order. Both come back EMPTY when the
+    envelope carries no ``temporal`` section: §10's absence rule — no
+    listing is not a claim of no data, so a caller prunes nothing.
+
+    A PRESENT map with malformed content raises (the :func:`ranges_words`
+    posture: a corrupt cache must never yield a plausible partial answer):
+    a key not at the carrier's order, or a word value that is not a uint64
+    decimal string. Every entry is validated BEFORE any word is returned.
+    The words are the grammar's join over every §8.3 companion the shard's
+    leaves hold — feed them to ``mortie.toc_overlaps``/``toc_contains``
+    (§10.2: a reader uses the grammar's predicates on the words, never its
+    own decoded-bound compare). A shard absent from the map is *unknown*,
+    never *empty*: its temporal contribution has not been rolled up yet.
+    """
+    empty = np.empty(0, dtype=np.uint64)
+    temporal = envelope.get("temporal")
+    if not isinstance(temporal, dict):
+        return empty, empty
+    order = int(envelope["order"])
+    shards = temporal["shards"]
+    labels, values = list(shards), []
+    for label in labels:
+        if decimal_order(label) != order:
+            raise ValueError(f"temporal shard id {label!r} is not at the carrier's order {order}")
+        raw = shards[label]
+        value = int(raw) if isinstance(raw, str) and raw.isdigit() else -1
+        if not 0 <= value < 2**64:
+            raise ValueError(
+                f"temporal word {raw!r} for shard {label} is not a uint64 decimal string"
+            )
+        values.append(value)
+    if not labels:
+        return empty, empty
+    from mortie import decimals_to_words
+
+    shard_words = np.asarray(decimals_to_words(labels), dtype=np.uint64)
+    toc_words = np.asarray(values, dtype=np.uint64)
+    ordering = np.argsort(shard_words)
+    return shard_words[ordering], toc_words[ordering]

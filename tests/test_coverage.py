@@ -132,6 +132,80 @@ class TestRootEnvelope:
         assert coverage.parse_root_coverage(payload) is None
 
 
+class TestTemporalSection:
+    """The §10 ``zagg-coverage-toc/1`` key discipline and tier-1 decoder
+    (issue #45). Conformance on committed bytes is
+    ``test_spec_conformance.py::TestTemporalCoverageSection``; here are the
+    gate and the malformed-map postures."""
+
+    def _temporal(self, **overrides):
+        base = {
+            "spec": coverage.TEMPORAL_SPEC,
+            "source": "sweep",
+            "generated_at": "2026-07-17T00:00:00+00:00",
+            "fields": ["h_tdigest"],
+            "shards": {"-5111": "123", "-5113": "456"},
+        }
+        base.update(overrides)
+        return base
+
+    def test_known_spec_is_carried_through(self):
+        envelope = coverage.parse_root_coverage(_root(temporal=self._temporal()))
+        assert envelope["temporal"] == self._temporal()
+
+    @pytest.mark.parametrize(
+        "section",
+        [
+            {"spec": "zagg-coverage-toc/2", "shards": {}},  # future revision
+            {"shards": {}},  # unmarked carrier (no spec string): debris
+            "garbage",  # non-mapping value
+        ],
+    )
+    def test_unknown_or_malformed_section_reads_absent(self, section):
+        # §10 versioned-key discipline: the section reads as absent — the
+        # CARRIER stays usable, so the store/sidecar/query is never refused.
+        envelope = coverage.parse_root_coverage(_root(temporal=section))
+        assert envelope is not None and "temporal" not in envelope
+
+    def test_no_section_decodes_to_empty(self):
+        # §10 absence rule: no listing is not a claim of no data.
+        shard_words, toc_words = coverage.temporal_shard_words(_root())
+        assert shard_words.size == toc_words.size == 0
+        assert shard_words.dtype == toc_words.dtype == np.uint64
+
+    def test_map_decodes_row_aligned_in_shard_word_order(self):
+        envelope = _root(
+            temporal=self._temporal(shards={"-5113": "456", "-5111": "18446744073709551615"})
+        )
+        shard_words, toc_words = coverage.temporal_shard_words(envelope)
+        assert shard_words.dtype == toc_words.dtype == np.uint64
+        expected = sorted([(int(_words("-5111")[0]), 2**64 - 1), (int(_words("-5113")[0]), 456)])
+        assert list(zip(shard_words.tolist(), toc_words.tolist())) == expected
+
+    def test_empty_map_decodes_to_empty(self):
+        shard_words, toc_words = coverage.temporal_shard_words(
+            _root(temporal=self._temporal(shards={}))
+        )
+        assert shard_words.size == toc_words.size == 0
+
+    @pytest.mark.parametrize(
+        "shards",
+        [
+            {"-51112": "123"},  # key not at the carrier's order
+            {"-5111": 123},  # raw JSON number: float-mangled beyond 2^53
+            {"-5111": "-1"},  # not a uint64 decimal
+            {"-5111": "18446744073709551616"},  # 2^64: out of range
+            {"-5111": "junk"},
+        ],
+    )
+    def test_malformed_map_raises(self, shards):
+        # The ranges_words posture: a corrupt cache must never yield a
+        # plausible partial answer — validated whole, before any decode.
+        envelope = _root(temporal=self._temporal(shards=shards))
+        with pytest.raises(ValueError, match="temporal"):
+            coverage.temporal_shard_words(envelope)
+
+
 class TestRanges:
     def test_expansion(self):
         words = coverage.ranges_words(_root())
