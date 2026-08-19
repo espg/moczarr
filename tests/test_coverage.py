@@ -167,6 +167,32 @@ class TestTemporalSection:
         envelope = coverage.parse_root_coverage(_root(temporal=section))
         assert envelope is not None and "temporal" not in envelope
 
+    @pytest.mark.parametrize(
+        "shards",
+        [
+            None,  # sentinel: the required key is absent entirely
+            [],  # list: indexes by position, not by shard id
+            0,  # int
+            "11213",  # string: iterates per CHARACTER, not per shard
+        ],
+    )
+    def test_section_without_a_usable_shards_map_reads_absent(self, shards):
+        # §10.1 makes ``shards`` required, so a spec-marked section without a
+        # usable mapping is STRUCTURALLY malformed and takes the section's
+        # reads-as-absent posture — never a KeyError/TypeError out of an
+        # accelerator, which §10 says must never refuse the store.
+        section = self._temporal()
+        if shards is None:
+            section.pop("shards")
+        else:
+            section["shards"] = shards
+        envelope = coverage.parse_root_coverage(_root(temporal=section))
+        assert envelope is not None and "temporal" not in envelope
+        # And defensively at the decoder, for an envelope assembled by hand.
+        shard_words, toc_words = coverage.temporal_shard_words(_root(temporal=section))
+        assert shard_words.size == toc_words.size == 0
+        assert shard_words.dtype == toc_words.dtype == np.uint64
+
     def test_no_section_decodes_to_empty(self):
         # §10 absence rule: no listing is not a claim of no data.
         shard_words, toc_words = coverage.temporal_shard_words(_root())
