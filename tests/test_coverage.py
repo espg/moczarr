@@ -365,6 +365,25 @@ class TestAsMocWords:
         np.testing.assert_array_equal(coverage.as_moc_words(SHARD), _words(SHARD))
         word = int(_words(SHARD)[0])
         np.testing.assert_array_equal(coverage.as_moc_words([word]), _words(SHARD))
+        np.testing.assert_array_equal(coverage.as_moc_words(word), _words(SHARD))
+
+    def test_zero_dim_arrays_match_their_one_element_form(self):
+        # A 0-d array must yield its ELEMENT, not the container: handing
+        # morton_word the ndarray would str-parse the packed word as a
+        # decimal id (wrong cell, or ValueError).
+        word = int(_words(NORTH)[0])  # < 2**63, so it also fits the signed arm
+        for dtype in (np.uint64, np.int64):
+            scalar = np.array(word, dtype=dtype)
+            assert scalar.ndim == 0
+            np.testing.assert_array_equal(
+                coverage.as_moc_words(scalar),
+                coverage.as_moc_words(np.array([word], dtype=dtype)),
+            )
+            np.testing.assert_array_equal(coverage.as_moc_words(scalar), _words(NORTH))
+        # A southern word (>= 2**63) only lands in uint64, the fast path.
+        south = np.array(int(_words(SHARD)[0]), dtype=np.uint64)
+        np.testing.assert_array_equal(coverage.as_moc_words(south), _words(SHARD))
+        np.testing.assert_array_equal(coverage.as_moc_words(np.array(SHARD)), _words(SHARD))
 
     def test_empty(self):
         out = coverage.as_moc_words([])
