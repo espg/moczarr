@@ -528,7 +528,8 @@ def iter_occupancy_and(
     are skipped; an exhausted iterator with no yields means the stores share
     no occupancy.
 
-    ``aoi`` (a morton cover: packed words or decimal strings, mixed orders
+    ``aoi`` (a morton cover: packed words, decimal strings, or an object
+    exposing ``__morton_moc__()`` — mortie's ``Moc`` — mixed orders
     allowed) is a SHARD-LEVEL prefilter, and that is the contract, not an
     implementation detail: it runs through the same candidate-leaves
     arithmetic :func:`moczarr.open_hive` uses, so a leaf whose subtree
@@ -624,7 +625,9 @@ def occupancy_and(
     included), degradation, and errors are identical to
     :func:`iter_occupancy_and`.
 
-    ``aoi`` keeps the same contract it has there — a SHARD-LEVEL prefilter,
+    ``aoi`` keeps the same contract it has there — the same accepted forms
+    (packed words, decimal strings, or an object exposing
+    ``__morton_moc__()``), and a SHARD-LEVEL prefilter,
     with the cells of a kept leaf left unclipped, so the returned MOC is a
     superset with respect to the AOI (false positives possible, false
     negatives impossible: zagg's AOI-overhang convention). Worth restating

@@ -370,7 +370,9 @@ def bitmap_and(
 ) -> np.ndarray | None:
     """Exact cell-level intersection via a leaf's coverage (bitmap or full).
 
-    Reads the stamp once. ``encoding: "full"`` short-circuits to MOC
+    Reads the stamp once. ``aoi`` is a morton cover — packed ``uint64``
+    words, decimal strings, or an object exposing ``__morton_moc__()``
+    (mortie's ``Moc``). ``encoding: "full"`` short-circuits to MOC
     membership against the shard's own id — no sidecar GET, no expansion.
     The ``"bitmap"`` path pays the one sidecar GET. ``None`` when the leaf
     carries neither (box-only, debris, absent) — the caller falls back to
