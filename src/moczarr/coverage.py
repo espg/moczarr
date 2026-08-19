@@ -378,3 +378,98 @@ def temporal_shard_words(envelope: dict) -> tuple[np.ndarray, np.ndarray]:
     toc_words = np.asarray(values, dtype=np.uint64)
     ordering = np.argsort(shard_words)
     return shard_words[ordering], toc_words[ordering]
+
+
+def _instant_ns(value) -> int:
+    """One ``when`` window endpoint as internal ns (§8's continuous scale).
+
+    Ints pass through as ALREADY-internal ns — the scale ``span2toc`` takes
+    and ``toc2time`` returns (§10.3's ``toc-ns``, the house time axis);
+    ISO-8601 strings and ``numpy.datetime64`` values are UTC, converted
+    through ``mortie.from_datetime64``.
+    """
+    if isinstance(value, (int, np.integer)):
+        return int(value)
+    from mortie import from_datetime64
+
+    return int(from_datetime64(np.datetime64(value)))
+
+
+def as_toc_words(when) -> np.ndarray:
+    """Normalize a temporal query to packed ``uint64`` toc words.
+
+    The temporal twin of :func:`as_moc_words` (issue #45; espg ruling 4
+    made the grammar permanent). Three forms, in precedence order:
+
+    - an object with ``__toc_words__()`` — mortie's Toc protocol, duck-typed
+      (never ``isinstance``; no mortie import for the check) — is asked for
+      its words, then normalized below;
+    - a 2-tuple ``(start, end)``: a closed real window, each endpoint an
+      ISO-8601 string, a ``numpy.datetime64``, or an int of internal ns
+      (:func:`_instant_ns`), desugared through ``mortie.span2toc`` into one
+      outward-rounded range word. Degenerate and reversed windows follow
+      the kernel's own rules (an instant encodes exactly; ``end < start``
+      raises);
+    - raw toc words: ``uint64`` passes through; any other integer dtype
+      (a plain list of word ints included) casts exactly.
+
+    An EMPTY query raises, as ``mortie.toc_reduce`` does on an empty merge:
+    no word means no window, and silently matching nothing would prune
+    every listed shard. Internal like its twin: importable, but not in
+    ``__all__`` and not on the docs surface.
+    """
+    protocol = getattr(when, "__toc_words__", None)
+    if callable(protocol):
+        when = protocol()
+    if isinstance(when, tuple) and len(when) == 2:
+        from mortie import span2toc
+
+        start, end = (_instant_ns(v) for v in when)
+        return np.asarray([span2toc(start, end)], dtype=np.uint64)
+    values = np.atleast_1d(np.asarray(when))
+    if values.dtype != np.uint64:
+        integral = np.issubdtype(values.dtype, np.integer)
+        if not (integral and (not values.size or values.min() >= 0)):
+            raise ValueError(
+                f"cannot read {when!r} as a temporal query: pass a (start, end) window "
+                f"(ISO strings, datetime64, or internal-ns ints), uint64 toc words, or "
+                f"an object with __toc_words__()"
+            )
+        values = values.astype(np.uint64)
+    words = values.ravel()
+    if not words.size:
+        raise ValueError("empty temporal query: no toc words, no window")
+    return words
+
+
+def temporal_keep(shard_words, envelope: dict, when_words) -> np.ndarray:
+    """Mask over candidate shards: which MAY hold data in the window (§10).
+
+    The pruning asymmetry, exactly as ruled (issue #45): a shard the tier-1
+    map LISTS is dropped only when its word fails ``mortie.toc_overlaps``
+    for every query word's window; a shard ABSENT from the map is always
+    KEPT — the map lists only what a producer rolled up, so unlisted is
+    *unknown*, never *empty* (§10.2: not proof the shard has no data in
+    the window). An envelope with no usable ``temporal`` section keeps
+    everything. Each query word's conservative envelope (``toc2time``)
+    becomes the predicate's half-open window; a timestamp word queries its
+    exact instant as ``[t, t+1)`` — the grammar's empty window matches
+    nothing, which would silently invert a timestamp's meaning.
+    """
+    shard_words = np.atleast_1d(np.asarray(shard_words, dtype=np.uint64))
+    keep = np.ones(shard_words.size, dtype=bool)
+    listed, toc_words = temporal_shard_words(envelope)
+    if not listed.size or not shard_words.size:
+        return keep
+    from mortie import toc2time, toc_overlaps
+
+    starts, ends = toc2time(np.atleast_1d(np.asarray(when_words, dtype=np.uint64)))
+    overlaps = np.zeros(listed.size, dtype=bool)
+    for s, e in zip(np.atleast_1d(starts).tolist(), np.atleast_1d(ends).tolist()):
+        overlaps |= np.asarray(toc_overlaps(toc_words, int(s), max(int(e), int(s) + 1)), dtype=bool)
+    # `listed` is ascending (temporal_shard_words), so one searchsorted maps
+    # each candidate to its slot; the clip keeps the probe in-bounds and the
+    # equality check rejects both misses and the clipped tail.
+    position = np.minimum(np.searchsorted(listed, shard_words), listed.size - 1)
+    is_listed = listed[position] == shard_words
+    return ~is_listed | overlaps[position]

@@ -42,10 +42,12 @@ from moczarr.convention import (
 from moczarr.coverage import (
     aoi_mask,
     as_moc_words,
+    as_toc_words,
     box_and,
     parse_leaf_coverage,
     ranges_words,
     root_coverage_and,
+    temporal_keep,
 )
 from moczarr.exceptions import NoCoverageError
 from moczarr.fabricate import fabricate_cell_ids as _fabricate_cell_ids
@@ -84,6 +86,7 @@ def candidate_leaves(
     aoi=None,
     window: str | None = None,
     *,
+    when=None,
     store: Any = None,
     concurrency: int | None = None,
 ) -> list[str]:
@@ -131,9 +134,24 @@ def candidate_leaves(
       cell-level cut is :func:`moczarr.coverage.aoi_mask`, which
       :func:`open_hive` applies to the ``morton`` coordinate itself (tier 2
       — the coordinate is the truth; the MOC tiers are only indexes).
+    - **``when`` restriction (temporal, spec §10; issue #45).** A temporal
+      query — ``(start, end)`` as ISO strings / ``datetime64`` / internal-ns
+      ints, raw ``uint64`` toc words, or an object exposing
+      ``__toc_words__()`` (mortie's ``Toc``) — prunes candidates against the
+      root envelope's tier-1 per-shard toc word map, before anything is
+      opened. The §10 asymmetry is the contract: only a shard the map LISTS
+      whose word fails ``mortie.toc_overlaps`` for the window is dropped; a
+      shard ABSENT from the map is always KEPT (unlisted is *unknown*, never
+      *empty* — the section is a regenerable accelerator, not truth). A
+      store publishing no ``temporal`` section prunes nothing, silently
+      (§10's absence rule), and ``when=None`` is byte-identical to today.
+      Like ``aoi``, the cut is conservative and SHARD-level: kept leaves may
+      hold rows outside the window (``toc_overlaps`` may over-report near
+      window edges by up to one encoding quantum, never under-report).
     """
     if aoi is not None:
         aoi = as_moc_words(aoi)
+    when_words = as_toc_words(when) if when is not None else None
     windowed = manifest["spec"] == HIVE_SPEC_V2
     grouping = manifest_path_grouping(manifest)
     if window is not None:
@@ -156,6 +174,8 @@ def candidate_leaves(
             from mortie import clip2order
 
             words = np.unique(clip2order(int(manifest["shard_order"]), words))
+        if when_words is not None and words.size:
+            words = words[temporal_keep(words, envelope, when_words)]
         return [leaf_path(int(w), window=window, path_grouping=grouping) for w in np.sort(words)]
     # Walk fallback (no usable root MOC), and the windowed-discovery case.
     found: dict[str, int] = {}
@@ -184,6 +204,11 @@ def candidate_leaves(
             for rel, w in found.items()
             if moc_and(np.asarray([w], dtype=np.uint64), aoi).size
         }
+    if when_words is not None and found and envelope is not None:
+        mask = temporal_keep(
+            np.asarray(list(found.values()), dtype=np.uint64), envelope, when_words
+        )
+        found = {rel: w for (rel, w), kept in zip(found.items(), mask) if kept}
     return sorted(found, key=lambda rel: found[rel])
 
 
