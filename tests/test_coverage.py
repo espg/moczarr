@@ -799,6 +799,24 @@ class TestCoverageToc:
         assert coverage.coverage_toc(_root()) is None
         assert coverage.coverage_toc(_root(temporal={"spec": "zagg-coverage-toc/2"})) is None
 
+    def test_words_are_the_normalized_union_not_the_tier1_words(self):
+        # `Toc` normalizes eagerly, and normalization is lossy toward
+        # coverage: the inner shard's span sits inside the outer's, so its
+        # word is ABSORBED and two words in come back as one. The temporal
+        # twin of test_words_are_the_compacted_cover_not_the_expansion —
+        # pinned because the docstring warns callers that the result is
+        # neither row-aligned with nor as long as the tier-1 map.
+        shards = {
+            "-5111": str(int(coverage.as_toc_words(("2019-01-01", "2020-01-01"))[0])),
+            "-5113": str(int(coverage.as_toc_words(("2019-05-01", "2019-06-01"))[0])),
+        }
+        envelope = self._envelope(shards=shards)
+        _listed, tier1 = coverage.temporal_shard_words(envelope)
+        toc = coverage.coverage_toc(envelope)
+        assert tier1.size == 2
+        assert toc.words.size == 1
+        assert int(toc.words[0]) in {int(w) for w in tier1}
+
     def test_empty_map_is_none_too(self):
         # NOT a different claim from the test above: §10.2 rules that a
         # shard the map does not list is *unknown*, never *empty*, so a map
