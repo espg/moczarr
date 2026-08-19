@@ -14,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import xarray as xr
+from conftest import FakeMoc
 
 from moczarr import convention, open_hive, store
 from moczarr.moc_index import MortonMocIndex, _normalize_chunks
@@ -75,6 +76,15 @@ class TestConstruction:
         np.testing.assert_array_equal(
             aoi_index.ranges.fabricate(), moc_index.ranges.intersect([word]).fabricate()
         )
+
+    def test_from_moc_aoi_protocol(self, envelope):
+        # issue #45: the aoi seam takes a duck-typed __morton_moc__() cover.
+        word = convention.morton_word(SERC_SHARD)
+        direct = MortonMocIndex.from_moc(envelope, cell_order=CELL_ORDER, aoi=[word], dim="cells")
+        via_fake = MortonMocIndex.from_moc(
+            envelope, cell_order=CELL_ORDER, aoi=FakeMoc([word]), dim="cells"
+        )
+        np.testing.assert_array_equal(via_fake.ranges.fabricate(), direct.ranges.fabricate())
 
     def test_from_moc_order_mismatch_raises(self, envelope):
         ranges = MortonRanges.from_root_coverage(envelope, CELL_ORDER)

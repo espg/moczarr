@@ -98,7 +98,7 @@ from typing import Any, NamedTuple
 import numpy as np
 
 from moczarr.convention import morton_word, split_leaf_name
-from moczarr.coverage import aoi_mask, box_words, parse_leaf_coverage
+from moczarr.coverage import aoi_mask, as_moc_words, box_words, parse_leaf_coverage
 from moczarr.exceptions import ConservativeCoverageWarning
 from moczarr.store import (
     open_object_store,
@@ -439,6 +439,10 @@ def _setup(
     """
     if degrade not in _DEGRADE_MODES:
         raise ValueError(f"degrade={degrade!r} is not one of {_DEGRADE_MODES}")
+    if aoi is not None:
+        # Boundary normalization (coverage.as_moc_words, issue #45): both
+        # shapes' entry points funnel here, so internals below are array-first.
+        aoi = as_moc_words(aoi)
     a = _open_side(root_a, store_a, window_a, aoi, concurrency, store_kwargs)
     b = _open_side(root_b, store_b, window_b, aoi, concurrency, store_kwargs)
     out_order = min(a.cell_order, b.cell_order)

@@ -40,6 +40,7 @@ from moczarr.convention import (
 )
 from moczarr.coverage import (
     aoi_mask,
+    as_moc_words,
     box_and,
     parse_leaf_coverage,
     ranges_words,
@@ -57,20 +58,6 @@ from moczarr.store import (
     read_manifest,
     walk_leaves,
 )
-
-
-def _aoi_words(aoi) -> np.ndarray:
-    """Normalize an AOI cover to packed ``uint64`` words (strings accepted).
-
-    Idempotent, and cheaply so: an already-packed ``uint64`` array passes
-    straight through, which is what lets :func:`candidate_leaves` normalize
-    its own argument without charging a caller that already did.
-    """
-    values = np.asarray(aoi)
-    if values.dtype == np.uint64:
-        return values.ravel()
-    members = list(values.ravel()) if values.ndim else [aoi]
-    return np.asarray([morton_word(v) for v in members], dtype=np.uint64)
 
 
 def _shard_leaf_name(rel: str) -> tuple[str, str | None] | None:
@@ -144,7 +131,7 @@ def candidate_leaves(
       — the coordinate is the truth; the MOC tiers are only indexes).
     """
     if aoi is not None:
-        aoi = _aoi_words(aoi)
+        aoi = as_moc_words(aoi)
     windowed = manifest["spec"] == HIVE_SPEC_V2
     grouping = manifest_path_grouping(manifest)
     if window is not None:
@@ -427,7 +414,7 @@ def open_hive(
                     f"pass product=... to open one (D19, mortie spec §6.5)"
                 )
         raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
-    aoi_words = _aoi_words(aoi) if aoi is not None else None
+    aoi_words = as_moc_words(aoi) if aoi is not None else None
     group = str(manifest["cell_order"])
     opened = []
     candidates = candidate_leaves(

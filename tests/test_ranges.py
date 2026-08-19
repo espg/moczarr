@@ -12,6 +12,7 @@ from pathlib import Path
 
 import numpy as np
 import pytest
+from conftest import FakeMoc
 
 from moczarr import convention, open_hive, store
 from moczarr.coverage import aoi_mask, ranges_words
@@ -220,6 +221,14 @@ class TestAoiCrossCheck:
         fabricated = domain.fabricate()
         expected = fabricated[aoi_mask(fabricated, words)]
         np.testing.assert_array_equal(domain.intersect(words).fabricate(), expected)
+
+    def test_intersect_accepts_protocol(self, domain):
+        # issue #45: interval-space intersect runs the same boundary
+        # normalizer, so a duck-typed __morton_moc__() cover works here too.
+        words = np.asarray([convention.morton_word(SERC_SHARD)], dtype=np.uint64)
+        np.testing.assert_array_equal(
+            domain.intersect(FakeMoc(words)).fabricate(), domain.intersect(words).fabricate()
+        )
 
     def test_disjoint_aoi_is_empty(self, domain):
         empty = domain.intersect([convention.morton_word("-511")])

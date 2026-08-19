@@ -41,6 +41,37 @@ COVERAGE_SPEC = "morton-moc/1"
 COVERAGE_BOX_SLOTS = 4
 
 
+def as_moc_words(aoi) -> np.ndarray:
+    """Normalize an AOI morton cover to packed ``uint64`` words.
+
+    The one boundary normalizer every AOI-accepting seam runs (issue #45),
+    so internals stay array-first and a cover pays it once at the edge.
+    Three forms, in precedence order:
+
+    - an object with ``__morton_moc__()`` — mortie's Moc protocol, checked
+      by duck typing (never ``isinstance`` of a mortie type; no mortie
+      import is needed for the check) — is asked for its words, and the
+      result runs through the arms below;
+    - an already-packed ``uint64`` array passes straight through
+      (idempotent, and cheaply so: a caller that already normalized is not
+      charged again);
+    - anything else is member-wise decimal-id parsing through
+      :func:`moczarr.convention.morton_word` — strings or ints, mixed
+      orders, the §2 ``p`` point suffix included.
+
+    Internal by design (espg ruling, issue #45): importable, but not in
+    ``__all__`` and not on the docs surface.
+    """
+    protocol = getattr(aoi, "__morton_moc__", None)
+    if callable(protocol):
+        aoi = protocol()
+    values = np.asarray(aoi)
+    if values.dtype == np.uint64:
+        return values.ravel()
+    members = list(values.ravel()) if values.ndim else [aoi]
+    return np.asarray([morton_word(v) for v in members], dtype=np.uint64)
+
+
 def parse_leaf_coverage(stamp: object) -> dict | None:
     """The ``coverage`` envelope from a commit stamp, or ``None`` when absent.
 
@@ -158,7 +189,7 @@ def root_coverage_and(envelope: dict, aoi) -> np.ndarray:
     """
     from mortie import moc_and
 
-    return moc_and(ranges_words(envelope), np.asarray(aoi, dtype=np.uint64))
+    return moc_and(ranges_words(envelope), as_moc_words(aoi))
 
 
 def box_and(coverage: dict, aoi) -> np.ndarray:
@@ -171,7 +202,7 @@ def box_and(coverage: dict, aoi) -> np.ndarray:
     """
     from mortie import moc_and
 
-    return moc_and(box_words(coverage), np.asarray(aoi, dtype=np.uint64))
+    return moc_and(box_words(coverage), as_moc_words(aoi))
 
 
 def aoi_mask(cells, aoi) -> np.ndarray:
@@ -221,8 +252,7 @@ def aoi_mask(cells, aoi) -> np.ndarray:
     # -> their order-29 twins on the same path; area words pass through).
     cells = np.asarray(point_to_area29(cells), dtype=np.uint64)
     distinct_orders = np.unique(orders_of(cells))
-    members = np.atleast_1d(np.asarray(aoi, dtype=np.uint64))
-    members = np.asarray(point_to_area29(members), dtype=np.uint64)
+    members = np.asarray(point_to_area29(as_moc_words(aoi)), dtype=np.uint64)
     finest_cell_order = int(distinct_orders[-1])
     for member, member_order in zip(members, orders_of(members)):
         if member_order <= finest_cell_order:
