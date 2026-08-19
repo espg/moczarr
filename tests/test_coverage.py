@@ -193,6 +193,21 @@ class TestTemporalSection:
         assert shard_words.size == toc_words.size == 0
         assert shard_words.dtype == toc_words.dtype == np.uint64
 
+    @pytest.mark.parametrize("spec", ["zagg-coverage-toc/2", None])
+    def test_decoder_strict_checks_the_revision_itself(self, spec):
+        # A caller who does json.loads(root_coverage) and hands the envelope
+        # straight to the decoder bypasses parse_root_coverage's gate; §10
+        # says an unknown revision reads as ABSENT, so it must never decode
+        # a future revision's map under v1 semantics.
+        section = self._temporal(shards={"-5111": "123"})
+        if spec is None:
+            section.pop("spec")
+        else:
+            section["spec"] = spec
+        shard_words, toc_words = coverage.temporal_shard_words(_root(temporal=section))
+        assert shard_words.size == toc_words.size == 0
+        assert shard_words.dtype == toc_words.dtype == np.uint64
+
     def test_no_section_decodes_to_empty(self):
         # §10 absence rule: no listing is not a claim of no data.
         shard_words, toc_words = coverage.temporal_shard_words(_root())

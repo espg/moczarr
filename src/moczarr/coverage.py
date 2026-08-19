@@ -324,13 +324,17 @@ def temporal_shard_words(envelope: dict) -> tuple[np.ndarray, np.ndarray]:
     because a ``uint64`` exceeds 2^53 and a float-based JSON parser would
     silently mangle a raw number (§10.2) — into two ``uint64`` arrays,
     ascending in shard packed-word order. Both come back EMPTY when the
-    envelope carries no ``temporal`` section, or one whose ``shards`` is
-    missing or is not a mapping: §10.1 makes the key required, so a section
-    without a usable map is STRUCTURALLY malformed and takes the section's
-    reads-as-absent posture (the gate :func:`parse_root_coverage` applies,
-    re-checked here so a hand-assembled envelope cannot crash the decoder).
-    §10's absence rule — no listing is not a claim of no data, so a caller
-    prunes nothing.
+    envelope carries no ``temporal`` section, one at a revision other than
+    :data:`TEMPORAL_SPEC`, or one whose ``shards`` is missing or is not a
+    mapping. §10's strict-check-then-absent rule, enforced HERE as well as
+    at :func:`parse_root_coverage`'s gate: the decoder is reachable with an
+    envelope that never passed that gate (``json.loads`` straight in), and
+    an unknown revision must never decode under v1 semantics — keys are
+    never repurposed in place, so a ``/2`` map may mean something else
+    entirely. §10.1 makes ``shards`` required in turn, so a section without
+    a usable map is STRUCTURALLY malformed and takes the same posture.
+    §10's absence rule throughout — no listing is not a claim of no data,
+    so a caller prunes nothing.
 
     CONTENT-level corruption inside a well-formed map raises instead (the
     :func:`ranges_words` posture: a corrupt cache must never yield a
@@ -345,7 +349,7 @@ def temporal_shard_words(envelope: dict) -> tuple[np.ndarray, np.ndarray]:
     """
     empty = np.empty(0, dtype=np.uint64)
     temporal = envelope.get("temporal")
-    if not isinstance(temporal, dict):
+    if not isinstance(temporal, dict) or temporal.get("spec") != TEMPORAL_SPEC:
         return empty, empty
     shards = temporal.get("shards")
     if not isinstance(shards, dict):
