@@ -68,7 +68,10 @@ def as_moc_words(aoi) -> np.ndarray:
     values = np.asarray(aoi)
     if values.dtype == np.uint64:
         return values.ravel()
-    members = list(values.ravel()) if values.ndim else [aoi]
+    # atleast_1d, not a 0-d special case: widening yields the ELEMENT (a numpy
+    # scalar morton_word parses), where wrapping the 0-d array would hand
+    # morton_word the container and str-parse a packed word as a decimal id.
+    members = np.atleast_1d(values).ravel()
     return np.asarray([morton_word(v) for v in members], dtype=np.uint64)
 
 
