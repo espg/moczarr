@@ -792,3 +792,68 @@ class TestOpenHiveMocIndex:
         np.testing.assert_array_equal(
             sub["count"].values, ds.isel(cells=slice(4, 8))["count"].values
         )
+
+
+class TestMocTocAcceptance:
+    """The ruled acceptance target for issue #45 — zagg's ``07_minimal``
+    snippet, run end to end on in-tree fixtures (offline, no live store).
+
+    This is the whole point of the seam: a caller builds geometry and time
+    as mortie objects, asks the store's own coverage whether they are
+    covered, and gets the leaf roster back — without opening a leaf, and
+    without any adapter between the two libraries.
+    """
+
+    SERC = str(FIXTURE)
+    TEMPORAL = str(Path(__file__).parent / "data" / "spec" / "temporal")
+    AOI_GEOJSON = {
+        "type": "Polygon",
+        "coordinates": [
+            [
+                [-76.56, 38.87],
+                [-76.50, 38.87],
+                [-76.50, 38.91],
+                [-76.56, 38.91],
+                [-76.56, 38.87],
+            ]
+        ],
+    }
+
+    def test_spatial_half(self):
+        import mortie
+
+        cov = store.load_root_coverage(self.SERC)
+        q_area = mortie.moc(self.AOI_GEOJSON)
+        assert coverage.coverage_moc(cov).contains(q_area)
+        rels = candidate_leaves(self.SERC, store.read_manifest(self.SERC), aoi=q_area)
+        assert rels == [convention.leaf_path(SERC_SHARD)]
+
+    def test_temporal_half(self):
+        import mortie
+
+        cov = store.load_root_coverage(self.TEMPORAL)
+        manifest = store.read_manifest(self.TEMPORAL)
+        q_when = mortie.Toc("2019-05-14T02:00:00", "2019-05-14T03:00:00")
+        assert coverage.coverage_toc(cov).overlaps(q_when)
+        assert candidate_leaves(self.TEMPORAL, manifest, when=q_when)
+        # A window the store's tier-1 word does not meet prunes it away.
+        assert (
+            candidate_leaves(self.TEMPORAL, manifest, when=mortie.Toc("2003-01-01", "2003-02-01"))
+            == []
+        )
+
+    def test_typed_pair_composes_through_one_call(self):
+        # `Moc` and `Toc` ride the __morton_moc__()/__toc_words__() protocols
+        # straight into the seam — the spatiotemporal roster in one metadata
+        # GET, which is what the issue set out to collapse.
+        import mortie
+
+        cov = store.load_root_coverage(self.TEMPORAL)
+        manifest = store.read_manifest(self.TEMPORAL)
+        rels = candidate_leaves(
+            self.TEMPORAL,
+            manifest,
+            aoi=coverage.coverage_moc(cov),
+            when=mortie.Toc("2019-05-14T02:00:00", "2019-05-14T03:00:00"),
+        )
+        assert rels == candidate_leaves(self.TEMPORAL, manifest)

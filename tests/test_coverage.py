@@ -755,3 +755,79 @@ class TestCoverageMoc:
     def test_empty_ranges_cast_to_an_empty_moc(self):
         moc = coverage.coverage_moc(_root(ranges=[]))
         assert moc.words.size == 0
+
+
+class TestCoverageToc:
+    """The typed temporal cast (issue #45 phase 5, mortie >= 0.9.10).
+
+    Same direction as :func:`coverage_moc`: moczarr decodes the §10
+    section, mortie types the words. The load-bearing case is ABSENCE —
+    see :meth:`test_no_section_is_none_not_an_empty_cover`.
+    """
+
+    def _envelope(self, shards=None):
+        return _root(
+            temporal={
+                "spec": coverage.TEMPORAL_SPEC,
+                "source": "sweep",
+                "generated_at": "2026-07-17T00:00:00+00:00",
+                "fields": ["h_tdigest"],
+                "shards": (
+                    {"-5111": str(int(coverage.as_toc_words(("2019-05-01", "2019-06-01"))[0]))}
+                    if shards is None
+                    else shards
+                ),
+            }
+        )
+
+    def test_casts_the_tier1_words(self):
+        import mortie
+
+        toc = coverage.coverage_toc(self._envelope())
+        assert isinstance(toc, mortie.Toc)
+        _shards, words = coverage.temporal_shard_words(self._envelope())
+        assert toc == mortie.Toc(words)
+        assert toc.overlaps(mortie.Toc("2019-05-10", "2019-05-20"))
+        assert not toc.overlaps(mortie.Toc("2003-01-01", "2003-02-01"))
+
+    def test_no_section_is_none_not_an_empty_cover(self):
+        # §10's absence rule, and the reason the signature is `Toc | None`:
+        # "publishes no temporal coverage" is NOT "has no data in any
+        # window". An empty Toc would answer .overlaps(q) False for every
+        # query — the exact false negative §10 forbids — so absence must
+        # surface as None and make the caller decide.
+        assert coverage.coverage_toc(_root()) is None
+        assert coverage.coverage_toc(_root(temporal={"spec": "zagg-coverage-toc/2"})) is None
+
+    def test_listed_but_empty_map_is_an_empty_cover(self):
+        # The reachable empty case, and a DIFFERENT claim: a section that
+        # lists no shards really does cover nothing.
+        import mortie
+
+        toc = coverage.coverage_toc(self._envelope(shards={}))
+        assert isinstance(toc, mortie.Toc) and toc.words.size == 0
+        assert not toc.overlaps(mortie.Toc("2019-05-10", "2019-05-20"))
+
+    def test_result_feeds_back_into_the_when_seam(self):
+        # The payoff: Toc satisfies __toc_words__(), so the cast round-trips
+        # into the phase-3 temporal seams without any new adapter.
+        envelope = self._envelope()
+        toc = coverage.coverage_toc(envelope)
+        np.testing.assert_array_equal(coverage.as_toc_words(toc), toc.words)
+        keep = coverage.temporal_keep(_words("-5111"), envelope, coverage.as_toc_words(toc))
+        assert keep.all()
+
+    def test_union_over_several_listed_shards(self):
+        # "When does this store hold data" is the union across listed
+        # shards — two disjoint campaigns stay two spans (Toc is gappy).
+        shards = {
+            "-5111": str(int(coverage.as_toc_words(("2019-05-01", "2019-06-01"))[0])),
+            "-5113": str(int(coverage.as_toc_words(("2003-01-01", "2003-02-01"))[0])),
+        }
+        toc = coverage.coverage_toc(self._envelope(shards=shards))
+        import mortie
+
+        assert toc.overlaps(mortie.Toc("2019-05-10", "2019-05-20"))
+        assert toc.overlaps(mortie.Toc("2003-01-10", "2003-01-20"))
+        # The gap between the campaigns is not bridged.
+        assert not toc.overlaps(mortie.Toc("2010-01-01", "2010-02-01"))

@@ -49,6 +49,29 @@ COVERAGE_BOX_SLOTS = 4
 TEMPORAL_SPEC = "zagg-coverage-toc/1"
 
 
+def _usable_temporal(envelope: dict) -> dict | None:
+    """The envelope's §10 temporal section if it is READABLE, else ``None``.
+
+    ONE definition of the strict gate, shared by every site that reads the
+    section (:func:`parse_root_coverage`, :func:`temporal_shard_words`,
+    :func:`coverage_toc`) so the three cannot drift: a mapping, declaring
+    exactly :data:`TEMPORAL_SPEC`, carrying the ``shards`` mapping §10.1
+    requires. Anything else — a future revision, an unmarked carrier,
+    debris, a section missing its required tier-1 key — reads as ABSENT
+    rather than raising, because the section is a regenerable accelerator
+    whose truth lives in the leaves (§10's versioned-key discipline).
+    Corruption INSIDE a well-formed map is a different matter and still
+    raises; see :func:`temporal_shard_words`.
+    """
+    temporal = envelope.get("temporal")
+    usable = (
+        isinstance(temporal, dict)
+        and temporal.get("spec") == TEMPORAL_SPEC
+        and isinstance(temporal.get("shards"), dict)
+    )
+    return temporal if usable else None
+
+
 def as_moc_words(aoi) -> np.ndarray:
     """Normalize an AOI morton cover to packed ``uint64`` words.
 
@@ -174,12 +197,7 @@ def parse_root_coverage(payload: object) -> dict | None:
     if not usable:
         return None
     envelope = dict(payload)
-    temporal = envelope.get("temporal")
-    if not (
-        isinstance(temporal, dict)
-        and temporal.get("spec") == TEMPORAL_SPEC
-        and isinstance(temporal.get("shards"), dict)
-    ):
+    if _usable_temporal(envelope) is None:
         envelope.pop("temporal", None)
     return envelope
 
@@ -353,12 +371,10 @@ def temporal_shard_words(envelope: dict) -> tuple[np.ndarray, np.ndarray]:
     never *empty*: its temporal contribution has not been rolled up yet.
     """
     empty = np.empty(0, dtype=np.uint64)
-    temporal = envelope.get("temporal")
-    if not isinstance(temporal, dict) or temporal.get("spec") != TEMPORAL_SPEC:
+    temporal = _usable_temporal(envelope)
+    if temporal is None:
         return empty, empty
-    shards = temporal.get("shards")
-    if not isinstance(shards, dict):
-        return empty, empty
+    shards = temporal["shards"]
     order = int(envelope["order"])
     labels, values = list(shards), []
     for label in labels:
@@ -539,3 +555,48 @@ def coverage_moc(envelope: dict) -> "mortie.Moc":
     from mortie import Moc
 
     return Moc(ranges_words(envelope))
+
+
+def coverage_toc(envelope: dict) -> "mortie.Toc | None":
+    """The envelope's §10 tier-1 temporal coverage as a :class:`mortie.Toc`,
+    or ``None`` when the store publishes none.
+
+    The temporal twin of :func:`coverage_moc`, same direction: moczarr
+    decodes its own section grammar (:func:`temporal_shard_words`) and
+    mortie types the words. ``Toc`` normalizes eagerly, so the result is
+    the canonical gappy cover over every listed shard's envelope word —
+    the union, which is what "when does this store hold data" asks.
+
+    **``None`` is the whole point of the signature.** It means the store
+    publishes no READABLE temporal coverage — the section is missing, or
+    is at a revision this reader does not know, or lacks the ``shards``
+    key §10.1 requires (one shared gate, ``_usable_temporal``, so this
+    agrees with :func:`parse_root_coverage` even when a caller hands in an
+    envelope that never went through it). §10 says that state means
+    "this store publishes no temporal coverage", which is
+    NOT the same claim as "this store has no data in any window" — and an
+    empty ``Toc`` would say the second: ``.overlaps(q)`` would answer
+    ``False`` for every query, a false negative of exactly the kind §10's
+    absence rule exists to forbid. So absence surfaces as ``None`` (the
+    house idiom — :func:`parse_root_coverage` and
+    :func:`moczarr.store.load_root_coverage` already read "no usable
+    envelope" that way) and the caller must decide, loudly, rather than be
+    handed a confident wrong answer. An empty ``Toc`` is still reachable
+    and still means "covers nothing": a section that lists no shards.
+
+    The same staleness posture rides along one level up: the tier-1 map
+    lists only shards a producer rolled up, so this cover is a claim about
+    LISTED shards, not about the store. For per-shard pruning use
+    :func:`temporal_keep` (or ``candidate_leaves(..., when=)``), which
+    keeps unlisted shards by construction. Tier-2 density queries ("how
+    MUCH data in this window") are not on this surface at all: the
+    ``digest`` block is a t-digest in the store's native forms and rides
+    the existing CDF machinery (:mod:`moczarr.stats`), per the design
+    ruling that it gets no new moczarr surface.
+    """
+    from mortie import Toc
+
+    if _usable_temporal(envelope) is None:
+        return None
+    _shards, words = temporal_shard_words(envelope)
+    return Toc(words)
