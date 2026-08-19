@@ -822,19 +822,26 @@ class TestMocTocAcceptance:
     def test_spatial_half(self):
         import mortie
 
+        import moczarr as mz
+
         cov = store.load_root_coverage(self.SERC)
         q_area = mortie.moc(self.AOI_GEOJSON)
-        assert coverage.coverage_moc(cov).contains(q_area)
+        # Package-level spelling on purpose: the ruled snippet is
+        # `mz.coverage_moc(cov).contains(q_area)`, so that is what is pinned.
+        assert mz.coverage_moc(cov).contains(q_area)
         rels = candidate_leaves(self.SERC, store.read_manifest(self.SERC), aoi=q_area)
         assert rels == [convention.leaf_path(SERC_SHARD)]
 
     def test_temporal_half(self):
         import mortie
 
+        import moczarr as mz
+
         cov = store.load_root_coverage(self.TEMPORAL)
         manifest = store.read_manifest(self.TEMPORAL)
         q_when = mortie.Toc("2019-05-14T02:00:00", "2019-05-14T03:00:00")
-        assert coverage.coverage_toc(cov).overlaps(q_when)
+        # Ruled spelling again: `mz.coverage_toc(cov).overlaps(q_when)`.
+        assert mz.coverage_toc(cov).overlaps(q_when)
         assert candidate_leaves(self.TEMPORAL, manifest, when=q_when)
         # A window the store's tier-1 word does not meet prunes it away.
         assert (
@@ -848,12 +855,14 @@ class TestMocTocAcceptance:
         # GET, which is what the issue set out to collapse.
         import mortie
 
+        import moczarr as mz
+
         cov = store.load_root_coverage(self.TEMPORAL)
         manifest = store.read_manifest(self.TEMPORAL)
         rels = candidate_leaves(
             self.TEMPORAL,
             manifest,
-            aoi=coverage.coverage_moc(cov),
+            aoi=mz.coverage_moc(cov),
             when=mortie.Toc("2019-05-14T02:00:00", "2019-05-14T03:00:00"),
         )
         assert rels == candidate_leaves(self.TEMPORAL, manifest)

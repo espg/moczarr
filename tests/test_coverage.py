@@ -702,6 +702,20 @@ class TestPublicSurface:
             assert temporal in moczarr.__all__
             assert getattr(moczarr, temporal) is getattr(coverage, temporal)
 
+    def test_typed_casts_are_a_package_level_pair(self):
+        # The phase-4/5 additions, and the spelling espg ruled the acceptance
+        # snippet in: `mz.coverage_moc(cov)` / `mz.coverage_toc(cov)`. They
+        # go on the surface together — one typed cast per tier, twinned the
+        # way `ranges_words`/`temporal_shard_words` are — and stay on the
+        # docs surface too (the filters above are an exclusion list).
+        import moczarr
+
+        filters = (Path(__file__).parents[1] / "docs/api/coverage.md").read_text()
+        for name in ("coverage_moc", "coverage_toc"):
+            assert name in moczarr.__all__
+            assert getattr(moczarr, name) is getattr(coverage, name)
+            assert f'"!^{name}$"' not in filters
+
     def test_boundary_normalizers_stay_internal(self):
         import moczarr
 
