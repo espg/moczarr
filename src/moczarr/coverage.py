@@ -572,7 +572,8 @@ def coverage_toc(envelope: dict) -> "mortie.Toc | None":
     is at a revision this reader does not know, or lacks the ``shards``
     key §10.1 requires (one shared gate, ``_usable_temporal``, so this
     agrees with :func:`parse_root_coverage` even when a caller hands in an
-    envelope that never went through it). §10 says that state means
+    envelope that never went through it), or lists no shards at all. §10
+    says that state means
     "this store publishes no temporal coverage", which is
     NOT the same claim as "this store has no data in any window" — and an
     empty ``Toc`` would say the second: ``.overlaps(q)`` would answer
@@ -581,8 +582,12 @@ def coverage_toc(envelope: dict) -> "mortie.Toc | None":
     house idiom — :func:`parse_root_coverage` and
     :func:`moczarr.store.load_root_coverage` already read "no usable
     envelope" that way) and the caller must decide, loudly, rather than be
-    handed a confident wrong answer. An empty ``Toc`` is still reachable
-    and still means "covers nothing": a section that lists no shards.
+    handed a confident wrong answer. An empty ``Toc`` is therefore NOT
+    reachable through this function, and a caller never has to tell one
+    apart from a real cover: a section that lists NO shards is §10.2's
+    unlisted-is-*unknown* rule applied to every shard at once — nothing
+    was rolled up, so nothing is known, which is the same epistemic state
+    as no section at all and takes the same ``None`` arm.
 
     The same staleness posture rides along one level up: the tier-1 map
     lists only shards a producer rolled up, so this cover is a claim about
@@ -599,4 +604,4 @@ def coverage_toc(envelope: dict) -> "mortie.Toc | None":
     if _usable_temporal(envelope) is None:
         return None
     _shards, words = temporal_shard_words(envelope)
-    return Toc(words)
+    return Toc(words) if words.size else None

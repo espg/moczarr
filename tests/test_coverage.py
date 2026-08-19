@@ -799,14 +799,14 @@ class TestCoverageToc:
         assert coverage.coverage_toc(_root()) is None
         assert coverage.coverage_toc(_root(temporal={"spec": "zagg-coverage-toc/2"})) is None
 
-    def test_listed_but_empty_map_is_an_empty_cover(self):
-        # The reachable empty case, and a DIFFERENT claim: a section that
-        # lists no shards really does cover nothing.
-        import mortie
-
-        toc = coverage.coverage_toc(self._envelope(shards={}))
-        assert isinstance(toc, mortie.Toc) and toc.words.size == 0
-        assert not toc.overlaps(mortie.Toc("2019-05-10", "2019-05-20"))
+    def test_empty_map_is_none_too(self):
+        # NOT a different claim from the test above: §10.2 rules that a
+        # shard the map does not list is *unknown*, never *empty*, so a map
+        # listing NOTHING knows nothing about every shard at once — the same
+        # epistemic state as no section, and it must take the same arm. An
+        # empty Toc here would answer .overlaps(q) False for every query,
+        # the very false negative the None arm exists to prevent.
+        assert coverage.coverage_toc(self._envelope(shards={})) is None
 
     def test_result_feeds_back_into_the_when_seam(self):
         # The payoff: Toc satisfies __toc_words__(), so the cast round-trips
