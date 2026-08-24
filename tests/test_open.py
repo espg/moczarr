@@ -846,6 +846,13 @@ class TestCandidateConvenience:
 
         monkeypatch.setattr(mstore, "open_object_store", _boom)
         assert candidate_shards(serc, store=handle) == want
+        # Both given is the case the docstrings claim and nothing pinned:
+        # store= wins and the kwargs are DROPPED (_resolve_store ignores
+        # them whenever store is not None) — silently, not as a TypeError.
+        assert candidate_shards(serc, store=handle, anonymous=True, region="us-west-2") == want
+        assert candidate_leaves(serc, store=handle, probe="marker") == candidate_leaves(
+            serc, store=handle
+        )
 
 
 class TestCandidateLeavesWhen:
