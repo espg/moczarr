@@ -613,6 +613,24 @@ class TestCandidateShards:
         assert point_id not in candidate_shards(str(copy), manifest)
         assert not [rel for rel in candidate_leaves(str(copy), manifest) if point_id in rel]
 
+    def test_walk_may_repeat_an_id_when_a_shard_sits_at_two_nodes(self, tmp_path):
+        # The documented walk<->arithmetic asymmetry: a *.zarr object is a
+        # leaf at whatever node holds it, so one shard present at two nodes
+        # walks as two leaves — two distinguishable paths, two EQUAL ids.
+        # Deduping would break the positional correspondence, so the
+        # behavior is pinned rather than removed.
+        copy = tmp_path / "serc"
+        shutil.copytree(FIXTURE, copy)
+        (copy / convention.ROOT_COVERAGE_NAME).unlink()  # force the walk route
+        leaf = copy / convention.leaf_path(SERC_SHARD)
+        shutil.copytree(leaf, leaf.parents[2] / leaf.name)
+        manifest = store.read_manifest(str(copy))
+        ids = candidate_shards(str(copy), manifest)
+        rels = candidate_leaves(str(copy), manifest)
+        assert ids.count(SERC_SHARD) == 2
+        assert len(set(rels)) == len(rels)
+        assert ids == self._stems(rels)
+
     def test_windowed_ids_are_bare_shards(self, tmp_path):
         # A windowed leaf's id excludes the window label: open_leaf takes the
         # same window= the selection did, so the id must stay the bare shard.
