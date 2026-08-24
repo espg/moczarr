@@ -327,8 +327,8 @@ def _candidate_pairs(
             if names:
                 raise ValueError(
                     f"{store_root} is a multi-product store root (products: {names}); "
-                    f"point at one product's subtree root "
-                    f"({store_root.rstrip('/')}/{{name}}) instead (D19, mortie spec §6.5)"
+                    f"point at one product's subtree root instead — e.g. "
+                    f"{store_root.rstrip('/')}/{names[0]} (D19, mortie spec §6.5)"
                 )
             raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
     else:
