@@ -691,6 +691,80 @@ class TestCandidateShards:
         assert rels == [convention.leaf_path(SERC_SHARD, window="2019")]
 
 
+class TestCandidateConvenience:
+    """Optional ``manifest`` + ``**store_kwargs`` passthrough (issue #49).
+
+    The zero-bookkeeping spelling — ``candidate_shards(root, aoi=q,
+    anonymous=True)`` with no handle and no manifest threaded by the caller
+    — pinned equal to the verbose form. ``store=`` remains the
+    share-one-handle path and wins when both are given (the
+    ``_resolve_store`` posture the sibling functions share).
+    """
+
+    MULTIROOT = str(Path(__file__).parent / "data" / "multiproduct_hive")
+
+    def test_manifest_fetched_when_omitted(self, serc):
+        manifest = store.read_manifest(serc)
+        assert candidate_leaves(serc) == candidate_leaves(serc, manifest)
+        assert candidate_shards(serc, aoi=[SERC_SHARD]) == candidate_shards(
+            serc, manifest, [SERC_SHARD]
+        )
+
+    def test_explicit_manifest_skips_the_get(self, serc, monkeypatch):
+        # The one-GET posture mirrors open_leaf(manifest=None): passing the
+        # manifest is the loop-over-many-AOIs path and must not re-fetch.
+        import moczarr.open as mo
+
+        manifest = store.read_manifest(serc)
+
+        def _boom(*a, **k):
+            raise AssertionError("manifest GET should have been skipped")
+
+        monkeypatch.setattr(mo, "read_manifest", _boom)
+        assert candidate_shards(serc, manifest) == _stamped_shards(serc)
+
+    def test_no_manifest_is_a_pointed_error(self, tmp_path):
+        empty = tmp_path / "not_a_store"
+        empty.mkdir()
+        with pytest.raises(ValueError, match="no morton_hive.json"):
+            candidate_leaves(str(empty))
+
+    def test_multiproduct_root_names_its_products(self):
+        # A multi-product root has no root manifest by design (§6.5); the
+        # error points at the product subtrees, which then work directly.
+        with pytest.raises(ValueError, match="multi-product.*atl06"):
+            candidate_shards(self.MULTIROOT)
+        assert candidate_shards(f"{self.MULTIROOT}/atl06")
+
+    def test_store_kwargs_reach_the_transport(self, serc, monkeypatch):
+        # The passthrough ends at open_object_store, like the siblings'.
+        import moczarr.store as mstore
+
+        real, calls = mstore.open_object_store, []
+
+        def spy(path, **kwargs):
+            calls.append(kwargs)
+            return real(path)
+
+        monkeypatch.setattr(mstore, "open_object_store", spy)
+        assert candidate_leaves(serc, probe="marker") == candidate_leaves(serc)
+        assert calls and all(c.get("probe") == "marker" for c in calls[: len(calls) // 2])
+
+    def test_shared_store_wins_over_kwargs(self, serc, monkeypatch):
+        # store= is the share-one-handle path: with a handle given, no
+        # per-call store is constructed at all.
+        import moczarr.store as mstore
+
+        handle = mstore.open_object_store(serc)
+        want = _stamped_shards(serc)
+
+        def _boom(path, **kwargs):
+            raise AssertionError("store= given: no per-call store construction")
+
+        monkeypatch.setattr(mstore, "open_object_store", _boom)
+        assert candidate_shards(serc, store=handle) == want
+
+
 class TestCandidateLeavesWhen:
     """Spatiotemporal pruning through the §10 tier-1 map (issue #45).
 
