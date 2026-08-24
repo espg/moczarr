@@ -546,6 +546,31 @@ class TestCandidateLeaves:
             candidate_leaves(serc, store.read_manifest(serc), None, "2019")
 
 
+#: The §10 tier-1 fixture: one listed-overlapping shard, one listed-disjoint,
+#: one unlisted. Module level because both candidate views test against it.
+TEMPORAL_IN, TEMPORAL_OUT, TEMPORAL_UNLISTED = "4311111", "4311112", "4311113"
+TEMPORAL_WINDOW = ("2019-05-10", "2019-05-20")
+
+
+@pytest.fixture()
+def temporal_store(tmp_path):
+    root = build_many_leaf_store(tmp_path / "twhen", [TEMPORAL_IN, TEMPORAL_OUT, TEMPORAL_UNLISTED])
+    cov_path = Path(root) / convention.ROOT_COVERAGE_NAME
+    envelope = json.loads(cov_path.read_text())
+    envelope["temporal"] = {
+        "spec": coverage.TEMPORAL_SPEC,
+        "source": "sweep",
+        "generated_at": "2026-07-17T00:00:00+00:00",
+        "fields": ["h_tdigest"],
+        "shards": {
+            TEMPORAL_IN: str(int(coverage.as_toc_words(("2019-05-01", "2019-06-01"))[0])),
+            TEMPORAL_OUT: str(int(coverage.as_toc_words(("2003-01-01", "2003-02-01"))[0])),
+        },
+    }
+    cov_path.write_text(json.dumps(envelope))
+    return root
+
+
 class TestCandidateShards:
     """``candidate_leaves``' id-returning sibling (issue #49).
 
@@ -636,6 +661,18 @@ class TestCandidateShards:
         assert len(set(rels)) == len(rels)
         assert ids == self._stems(rels)
 
+    def test_when_prunes_both_views_identically(self, temporal_store):
+        # when= is the one argument that DROPS candidates after the words are
+        # chosen (temporal_keep, inside the shared implementation), so it is
+        # the one place a future edit could make the two views select
+        # different sets while both still "work".
+        manifest = store.read_manifest(temporal_store)
+        ids = candidate_shards(temporal_store, manifest, when=TEMPORAL_WINDOW)
+        rels = candidate_leaves(temporal_store, manifest, when=TEMPORAL_WINDOW)
+        assert ids == self._stems(rels)
+        assert ids == [TEMPORAL_IN, TEMPORAL_UNLISTED]  # §10: unlisted is kept
+        assert set(ids) < set(candidate_shards(temporal_store, manifest))
+
     def test_windowed_ids_are_bare_shards(self, tmp_path):
         # A windowed leaf's id excludes the window label: open_leaf takes the
         # same window= the selection did, so the id must stay the bare shard.
@@ -663,26 +700,8 @@ class TestCandidateLeavesWhen:
     shards: one listed-overlapping, one listed-disjoint, one unlisted.
     """
 
-    IN, OUT, UNLISTED = "4311111", "4311112", "4311113"
-    WINDOW = ("2019-05-10", "2019-05-20")
-
-    @pytest.fixture()
-    def temporal_store(self, tmp_path):
-        root = build_many_leaf_store(tmp_path / "twhen", [self.IN, self.OUT, self.UNLISTED])
-        cov_path = Path(root) / convention.ROOT_COVERAGE_NAME
-        envelope = json.loads(cov_path.read_text())
-        envelope["temporal"] = {
-            "spec": coverage.TEMPORAL_SPEC,
-            "source": "sweep",
-            "generated_at": "2026-07-17T00:00:00+00:00",
-            "fields": ["h_tdigest"],
-            "shards": {
-                self.IN: str(int(coverage.as_toc_words(("2019-05-01", "2019-06-01"))[0])),
-                self.OUT: str(int(coverage.as_toc_words(("2003-01-01", "2003-02-01"))[0])),
-            },
-        }
-        cov_path.write_text(json.dumps(envelope))
-        return root
+    IN, OUT, UNLISTED = TEMPORAL_IN, TEMPORAL_OUT, TEMPORAL_UNLISTED
+    WINDOW = TEMPORAL_WINDOW
 
     def _shards(self, rels):
         return [convention.split_leaf_name(rel.rsplit("/", 1)[-1])[0] for rel in rels]
