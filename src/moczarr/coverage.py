@@ -530,8 +530,9 @@ def _root_form(envelope: dict | str, store: Any, store_kwargs: dict) -> dict | N
 
     A ``str`` is a STORE ROOT: fetch its envelope — one metadata GET through
     :func:`moczarr.store.load_root_coverage` (lazy import; ``store`` imports
-    this module) — and return the dict, or ``None`` exactly where that
-    function says the store publishes no usable envelope. Absence is
+    this module), on ONE object store resolved up front and threaded through
+    every read this call makes — and return the dict, or ``None`` exactly
+    where that function says the store publishes no usable envelope. Absence is
     CONFIRMED before it is reported: an object store answers a missing
     bucket or a mistyped prefix with the same 404 as a missing sidecar, so
     the absence path probes ``morton_hive.json`` (one extra GET, that path
@@ -544,10 +545,18 @@ def _root_form(envelope: dict | str, store: Any, store_kwargs: dict) -> dict | N
     otherwise die two frames down inside :func:`ranges_words`.
     """
     if isinstance(envelope, str):
-        from moczarr.store import load_root_coverage, read_manifest
+        from moczarr.store import _resolve_store, load_root_coverage, read_manifest
 
-        fetched = load_root_coverage(envelope, store=store, **store_kwargs)
-        if fetched is None and read_manifest(envelope, store=store, **store_kwargs) is None:
+        # ONE handle for both reads, resolved here rather than per callee
+        # (the rule :func:`moczarr.open._candidate_pairs` states): otherwise
+        # the sidecar and the absence-path manifest probe each construct
+        # their own object store, re-running the ambient credential
+        # resolution, so one call could read its two objects under two
+        # identities across an SSO refresh. ``store=`` still wins and the
+        # kwargs are consumed HERE, per ``moczarr.store._resolve_store``.
+        handle = _resolve_store(envelope, store, store_kwargs)
+        fetched = load_root_coverage(envelope, store=handle)
+        if fetched is None and read_manifest(envelope, store=handle) is None:
             raise ValueError(f"no morton_hive.json at {envelope} — not a hive store root")
         return fetched
     if not isinstance(envelope, dict):
