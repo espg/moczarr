@@ -1023,4 +1023,24 @@ class TestRootFormCasts:
 
         monkeypatch.setattr(mstore, "open_object_store", spy)
         coverage.coverage_moc(self.SERC, probe="marker")
+        coverage.coverage_toc(self.TEMPORAL, probe="marker")
         assert calls and all(c.get("probe") == "marker" for c in calls)
+
+    def test_a_shared_handle_constructs_nothing(self, monkeypatch):
+        # The point of store= on the root form, and the half of the
+        # documented "store= / **store_kwargs exactly as load_root_coverage
+        # takes them" that only appeared in the shape where it is REJECTED.
+        import moczarr.store as mstore
+
+        handle = mstore.open_object_store(self.SERC)
+        temporal = mstore.open_object_store(self.TEMPORAL)
+        want = coverage.coverage_moc(self.SERC)
+
+        def _boom(path, **kwargs):
+            raise AssertionError("store= given: no per-call store construction")
+
+        monkeypatch.setattr(mstore, "open_object_store", _boom)
+        np.testing.assert_array_equal(
+            coverage.coverage_moc(self.SERC, store=handle).words, want.words
+        )
+        assert coverage.coverage_toc(self.TEMPORAL, store=temporal).words.size
