@@ -7,6 +7,7 @@ moczarr only decodes, so the goldens are compressed here and decoded back —
 any bit-convention drift between writer and reader fails these first.
 """
 
+import json
 from pathlib import Path
 
 import numpy as np
@@ -945,6 +946,25 @@ class TestRootFormCasts:
         # an empty cover.
         with pytest.raises(ValueError, match="no usable root coverage envelope"):
             coverage.coverage_moc(self._hive_root(tmp_path, "no_sidecar"))
+
+    def test_an_unusable_sidecar_is_absence_for_both(self, tmp_path):
+        # The arm the moc message actually enumerates ("an unknown
+        # spec/encoding"), and the only one where a non-empty payload parses
+        # to None — a regression here reads as KeyError('order') out of
+        # `ranges_words` rather than the ValueError. The manifest is present,
+        # so this is genuine absence, not a wrong root.
+        root = self._hive_root(tmp_path, "odd_encoding", json.dumps(_root(encoding="bitmap")))
+        with pytest.raises(ValueError, match="no usable root coverage envelope"):
+            coverage.coverage_moc(root)
+        assert coverage.coverage_toc(root) is None
+
+    def test_an_unparsable_sidecar_is_absence_for_both(self, tmp_path):
+        # The other cause the message now names: json.JSONDecodeError is a
+        # ValueError, swallowed by `load_root_coverage`.
+        root = self._hive_root(tmp_path, "torn_json", "{")
+        with pytest.raises(ValueError, match="no usable root coverage envelope"):
+            coverage.coverage_moc(root)
+        assert coverage.coverage_toc(root) is None
 
     def test_a_root_that_is_no_store_raises_for_both(self, tmp_path):
         # The discrimination the absence path buys with its extra GET: an
