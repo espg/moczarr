@@ -58,12 +58,14 @@ class TestPackageSurface:
             assert hasattr(mz, name), f"mz.{name} missing from the package root"
             assert name in mz.__all__, f"{name} reachable but not declared in __all__"
 
-    def test_all_names_resolve_and_stay_sorted(self):
-        # __all__ is the surface contract: no dangling names, and kept
-        # sorted so additions land in one obvious place.
+    def test_all_names_resolve(self):
+        # __all__ is the surface contract: no dangling names. ORDER is not
+        # asserted here — ruff's RUF022 owns that invariant and sorts
+        # __all__ naturally (SCREAMING_CASE, CamelCase, snake_case), which
+        # disagrees with plain str order on this file, so a test pinning
+        # sorted() would go red the first time anyone ran the autofix.
         for name in mz.__all__:
             assert getattr(mz, name, None) is not None, f"__all__ names unresolvable {name}"
-        assert list(mz.__all__) == sorted(mz.__all__)
 
     def test_open_ragged_is_the_module_function(self):
         # The export is the same object, not a wrapper — module-path callers
