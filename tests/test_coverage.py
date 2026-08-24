@@ -966,6 +966,16 @@ class TestRootFormCasts:
         with pytest.raises(FileNotFoundError):
             coverage.coverage_toc(gone)
 
+    def test_a_first_argument_of_neither_form_names_its_type(self):
+        # A Path root is the likely slip (everything here is str-rooted), and
+        # it used to fall through to `ranges_words` and die on an internal.
+        with pytest.raises(TypeError, match="got PosixPath"):
+            coverage.coverage_moc(Path(self.SERC))
+        # Store arguments must not misdiagnose it as "already fetched": the
+        # type arm comes first.
+        with pytest.raises(TypeError, match="got PosixPath"):
+            coverage.coverage_toc(Path(self.TEMPORAL), anonymous=True)
+
     def test_dict_form_refuses_store_arguments(self):
         with pytest.raises(TypeError, match="root .str. form"):
             coverage.coverage_moc(_root(), anonymous=True)
