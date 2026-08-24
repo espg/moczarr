@@ -226,7 +226,14 @@ def candidate_shards(
     On a windowed store the id is the BARE shard — the window label is not
     part of it; pass the same ``window=`` to :func:`moczarr.open_leaf`.
     Positionally identical lists: ``candidate_shards(...)[i]`` names the
-    leaf ``candidate_leaves(...)[i]`` locates, for equal arguments.
+    leaf ``candidate_leaves(...)[i]`` locates, for equal arguments against
+    an unchanged store. The shared implementation makes ONE discovery's two
+    views agree; it does not join two calls. Each call is its own discovery
+    — two root-MOC GETs, or two full walks — so against a store being
+    written concurrently the two lists can differ in length, and index
+    ``i`` then names different things. A caller needing a tear-free pair
+    takes one view and derives the other (the id is the path's stem)
+    instead of issuing both calls.
     """
     pairs = _candidate_pairs(
         store_root, manifest, aoi, window, when=when, store=store, concurrency=concurrency
