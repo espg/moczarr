@@ -31,6 +31,7 @@ import numpy as np
 from moczarr.convention import (
     HIVE_SPEC_V2,
     decimal_order,
+    is_point_word,
     leaf_path,
     manifest_path_grouping,
     morton_decimal,
@@ -71,12 +72,21 @@ def _shard_leaf_name(rel: str) -> tuple[str, str | None] | None:
     zagg spec §4.2), so their stems are not morton decimals. The source walk
     skips them — the MOC-arithmetic path never names them at all (the root
     MOC is the *source* domain), and the walk must match it.
+
+    An order-29 POINT stem (the §2 ``p`` kind-suffix, which
+    :func:`convention.morton_word` parses) is ``None`` for the same reason:
+    ``convention.leaf_path`` refuses point words, so the arithmetic route
+    can never name one, and a walk that named it would hand back an id
+    :func:`moczarr.open_leaf` rejects (§2/§6.6 — points never live in hive
+    paths).
     """
     try:
         shard, label = split_leaf_name(rel.rsplit("/", 1)[-1])
-        morton_word(shard)
+        word = morton_word(shard)
     except ValueError:
         return None
+    if is_point_word(word):
+        return None  # points never live in hive paths (§2/§6.6): leaf_path refuses them
     return shard, label
 
 
