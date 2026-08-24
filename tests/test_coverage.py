@@ -884,3 +884,78 @@ class TestCoverageToc:
         assert toc.overlaps(mortie.Toc("2003-01-10", "2003-01-20"))
         # The gap between the campaigns is not bridged.
         assert not toc.overlaps(mortie.Toc("2010-01-01", "2010-02-01"))
+
+
+class TestRootFormCasts:
+    """The ``str``-root overload on both typed casts (issue #49).
+
+    A root fetches-then-casts (one metadata GET); a dict is today's
+    behavior unchanged. The load-bearing arms: ``coverage_toc``'s two
+    absences collapse to the one ``None``, ``coverage_moc`` still has no
+    absence arm at all, and an unreachable STORE raises for both — absence
+    of coverage is not absence of a store.
+    """
+
+    SERC = str(Path(__file__).parent / "data" / "serc_hive")
+    TEMPORAL = str(Path(__file__).parent / "data" / "spec" / "temporal")
+
+    def test_moc_root_form_equals_the_fetched_dict_form(self):
+        import mortie
+
+        from moczarr.store import load_root_coverage
+
+        by_root = coverage.coverage_moc(self.SERC)
+        by_dict = coverage.coverage_moc(load_root_coverage(self.SERC))
+        assert isinstance(by_root, mortie.Moc)
+        np.testing.assert_array_equal(by_root.words, by_dict.words)
+
+    def test_toc_root_form_equals_the_fetched_dict_form(self):
+        from moczarr.store import load_root_coverage
+
+        by_root = coverage.coverage_toc(self.TEMPORAL)
+        by_dict = coverage.coverage_toc(load_root_coverage(self.TEMPORAL))
+        np.testing.assert_array_equal(by_root.words, by_dict.words)
+
+    def test_toc_both_absences_are_the_one_none(self, tmp_path):
+        # (1) no usable sidecar at all; (2) a sidecar with no temporal
+        # section (the SERC root publishes only spatial coverage). Both mean
+        # "publishes no usable temporal coverage" — the docstring's collapse.
+        bare = tmp_path / "bare_store"
+        bare.mkdir()
+        assert coverage.coverage_toc(str(bare)) is None
+        assert coverage.coverage_toc(self.SERC) is None
+
+    def test_moc_absence_raises_not_degrades(self, tmp_path):
+        # No absence arm on the spatial cast, root form included: the root
+        # envelope is a regenerable cache, so its absence must not read as
+        # an empty cover.
+        bare = tmp_path / "bare_store"
+        bare.mkdir()
+        with pytest.raises(ValueError, match="no usable root coverage envelope"):
+            coverage.coverage_moc(str(bare))
+
+    def test_unreachable_store_raises_for_both(self, tmp_path):
+        gone = str(tmp_path / "never_created")
+        with pytest.raises(FileNotFoundError):
+            coverage.coverage_moc(gone)
+        with pytest.raises(FileNotFoundError):
+            coverage.coverage_toc(gone)
+
+    def test_dict_form_refuses_store_arguments(self):
+        with pytest.raises(TypeError, match="root .str. form"):
+            coverage.coverage_moc(_root(), anonymous=True)
+        with pytest.raises(TypeError, match="root .str. form"):
+            coverage.coverage_toc(_root(), store=object())
+
+    def test_store_kwargs_reach_the_transport(self, monkeypatch):
+        import moczarr.store as mstore
+
+        real, calls = mstore.open_object_store, []
+
+        def spy(path, **kwargs):
+            calls.append(kwargs)
+            return real(path)
+
+        monkeypatch.setattr(mstore, "open_object_store", spy)
+        coverage.coverage_moc(self.SERC, probe="marker")
+        assert calls and all(c.get("probe") == "marker" for c in calls)
