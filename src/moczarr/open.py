@@ -266,9 +266,16 @@ def candidate_shards(
     views agree; it does not join two calls. Each call is its own discovery
     — two root-MOC GETs, or two full walks — so against a store being
     written concurrently the two lists can differ in length, and index
-    ``i`` then names different things. A caller needing a tear-free pair
-    takes one view and derives the other (the id is the path's stem)
-    instead of issuing both calls.
+    ``i`` then names different things. The ruled idiom (issue #49 review;
+    the internal pair stays private until a consumer shows real friction):
+    make both calls share their inputs — fetch the manifest ONCE (or thread
+    one ``store=``) and pass it to both — and the views align whenever the
+    store is unchanged between the calls; a pair that must be tear-proof
+    against a concurrent writer takes one view and derives the other
+    through the convention seam (:func:`moczarr.convention.split_leaf_name`
+    on a path's stem, :func:`moczarr.convention.leaf_path` on an id) —
+    library parsers, not caller-side string surgery — instead of issuing
+    both calls.
     """
     pairs = _candidate_pairs(
         store_root,
