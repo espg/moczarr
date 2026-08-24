@@ -2,7 +2,8 @@
 
 ## Unreleased
 
-- New public `candidate_shards(store_root, manifest, aoi=None, window=None)`
+- New public `candidate_shards(store_root, manifest=None, aoi=None,
+  window=None, **store_kwargs)`
   ([#49](https://github.com/espg/moczarr/issues/49)): `candidate_leaves`
   returning what `open_leaf` takes — shard IDS (morton decimal strings),
   ascending in packed-word order — from the same discovery seam through one
@@ -23,10 +24,16 @@
   `manifest` optional, fetched in one extra metadata GET when omitted —
   the same one-GET-if-absent posture as `open_leaf(manifest=None)` — so
   the whole selection is one call: `candidate_shards(root, aoi=q,
-  anonymous=True)`. One behavior change rides along on `candidate_leaves`:
-  the discovery walk no longer names an object whose stem is an order-29
-  POINT id, matching the arithmetic route, which never could (§2/§6.6 —
-  `convention.leaf_path` refuses point words).
+  anonymous=True)`. The GET is the whole extra cost: a call now resolves
+  ONE object store up front and threads it through the manifest read, the
+  envelope read and the discovery walk alike, so the transport count is one
+  per call whichever route runs (it was 2-3, each re-running the ambient
+  credential resolution). A passed `manifest` is `parse_manifest`-validated
+  like a fetched one, so the two spellings cannot disagree. One behavior
+  change rides along on `candidate_leaves`: the discovery walk no longer
+  names an object whose stem is an order-29 POINT id, matching the
+  arithmetic route, which never could (§2/§6.6 — `convention.leaf_path`
+  refuses point words).
 
 - The MOC/TOC seam ([#45](https://github.com/espg/moczarr/issues/45)):
   moczarr decodes zagg spec §10's `zagg-coverage-toc/1` root section — the
