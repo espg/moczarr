@@ -2,14 +2,17 @@
 
 ## Unreleased
 
-- `open_ragged` is now on the package root
-  ([#49](https://github.com/espg/moczarr/issues/49)): it was importable only
-  by module path (`moczarr.ragged.open_ragged`) while `open_leaf`,
-  `read_ragged`, `read_cell` and `read_tensors` — the functions it is used
-  alongside — all sat on the root, so a per-leaf workflow was forced to mix
-  two import spellings. Same object, no wrapper. A surface-consistency test
-  (`tests/test_surface.py`) pins the public-workflow roster to the package
-  root so the asymmetry cannot recur.
+- `open_ragged`, `read_commits` and `read_leaf_metas` are now on the package
+  root ([#49](https://github.com/espg/moczarr/issues/49)): each was
+  importable only by module path (`moczarr.ragged.open_ragged`,
+  `moczarr.store.read_commits`, `moczarr.store.read_leaf_metas`) while
+  `open_leaf`, `read_ragged`, `read_cell`, `read_tensors` and the
+  one-at-a-time `read_commit` — the functions they are used alongside — all
+  sat on the root, so a per-leaf workflow was forced to mix two import
+  spellings, and a reader reaching for the batched stamp read found only the
+  singular one and wrote the N-GET loop. Same objects, no wrappers. A
+  surface-consistency test (`tests/test_surface.py`) pins the public-workflow
+  roster to the package root so the asymmetry cannot recur.
 
 - Root-taking `coverage_moc` / `coverage_toc`
   ([#49](https://github.com/espg/moczarr/issues/49)): both typed casts now
