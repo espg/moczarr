@@ -249,10 +249,14 @@ def candidate_shards(
     ``{id}_{window}`` dialect). With the manifest fetched when omitted and
     ``**store_kwargs`` passing through (issue #49; the posture and the
     one-extra-GET cost are on :func:`candidate_leaves`'s docstring), the
-    whole selection is one call::
+    whole selection is one call — and the manifest it fetched is worth
+    reading once for the loop, since ``open_leaf(manifest=...)`` skips its
+    own GET::
 
-        for shard in candidate_shards(root, aoi=q, anonymous=True):
-            leaf = open_leaf(root, shard, anonymous=True)
+        shards = candidate_shards(root, aoi=q, anonymous=True)
+        manifest = read_manifest(root, anonymous=True)  # once, not per leaf
+        for shard in shards:
+            leaf = open_leaf(root, shard, manifest=manifest, anonymous=True)
 
     On a windowed store the id is the BARE shard — the window label is not
     part of it; pass the same ``window=`` to :func:`moczarr.open_leaf`.
