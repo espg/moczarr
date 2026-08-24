@@ -9,6 +9,9 @@ the quickstart, the demo-notebook selection loop, the per-leaf readers —
 must be reachable as ``mz.<name>``, and every ``__all__`` name must resolve.
 """
 
+import subprocess
+import sys
+
 import moczarr as mz
 
 #: The public-workflow roster: what a reader following the documented flows
@@ -66,6 +69,20 @@ class TestPackageSurface:
         # sorted() would go red the first time anyone ran the autofix.
         for name in mz.__all__:
             assert getattr(mz, name, None) is not None, f"__all__ names unresolvable {name}"
+
+    def test_the_root_stays_xarray_free(self):
+        # __init__.py's stated reason for withholding MortonMocIndex, pinned
+        # rather than left to prose: the only module-level `import xarray`
+        # in the package is moc_index.py / dggs.py, and neither is imported
+        # from the root. A fresh interpreter because sibling tests in this
+        # session have already imported xarray.
+        probe = subprocess.run(
+            [sys.executable, "-c", "import sys, moczarr; assert 'xarray' not in sys.modules"],
+            capture_output=True,
+            text=True,
+        )
+        assert probe.returncode == 0, f"importing moczarr pulled in xarray\n{probe.stderr}"
+        assert "MortonMocIndex" not in mz.__all__
 
     def test_open_ragged_is_the_module_function(self):
         # The export is the same object, not a wrapper — module-path callers
