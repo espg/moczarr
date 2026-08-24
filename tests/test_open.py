@@ -723,6 +723,15 @@ class TestCandidateConvenience:
         monkeypatch.setattr(mo, "read_manifest", _boom)
         assert candidate_shards(serc, manifest) == _stamped_shards(serc)
 
+    def test_passed_manifest_is_validated_like_the_fetched_one(self, serc):
+        # Both doors run parse_manifest (open_leaf's posture): a manifest
+        # with no orders is a pointed ValueError, not confident-looking
+        # order-1 paths that resolve to nothing.
+        with pytest.raises(ValueError, match="cell_order must be an integer"):
+            candidate_leaves(serc, {"spec": convention.HIVE_SPEC})
+        with pytest.raises(ValueError, match="cell_order must be an integer"):
+            candidate_shards(serc, {"spec": convention.HIVE_SPEC})
+
     def test_no_manifest_is_a_pointed_error(self, tmp_path):
         empty = tmp_path / "not_a_store"
         empty.mkdir()
