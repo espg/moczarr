@@ -702,6 +702,9 @@ class TestCandidateConvenience:
     """
 
     MULTIROOT = str(Path(__file__).parent / "data" / "multiproduct_hive")
+    # No coverage.moc -> the discovery walk, the route the arithmetic tests
+    # below never reach.
+    WALKROOT = str(Path(__file__).parent / "data" / "strata_hive")
 
     def test_manifest_fetched_when_omitted(self, serc):
         manifest = store.read_manifest(serc)
@@ -744,6 +747,30 @@ class TestCandidateConvenience:
         with pytest.raises(ValueError, match="multi-product.*atl06"):
             candidate_shards(self.MULTIROOT)
         assert candidate_shards(f"{self.MULTIROOT}/atl06")
+
+    def test_walk_route_shares_the_one_handle_too(self, serc, monkeypatch):
+        # The walk branch forwarded **store_kwargs into walk_leaves, which
+        # takes its own path_grouping= — so path_grouping= was a TypeError
+        # here and a silent no-op on the arithmetic route. With one handle
+        # resolved up front the kwargs never reach walk_leaves: one
+        # construction carrying them, and reserved-looking names behave the
+        # same on both routes (D9 — a caller never keys on which one ran).
+        import moczarr.store as mstore
+
+        real, calls = mstore.open_object_store, []
+
+        def spy(path, **kwargs):
+            calls.append(kwargs)
+            return real(path)
+
+        monkeypatch.setattr(mstore, "open_object_store", spy)
+        want = candidate_leaves(self.WALKROOT)
+        assert want and calls == [{}]
+        calls.clear()
+        assert candidate_leaves(self.WALKROOT, probe="marker") == want
+        assert calls == [{"probe": "marker"}]
+        assert candidate_leaves(self.WALKROOT, path_grouping=3) == want
+        assert candidate_leaves(serc, path_grouping=3) == candidate_leaves(serc)
 
     def test_store_kwargs_reach_the_transport(self, serc, monkeypatch):
         # The passthrough ends at open_object_store, like the siblings'.
