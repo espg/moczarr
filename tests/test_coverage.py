@@ -1044,3 +1044,20 @@ class TestRootFormCasts:
             coverage.coverage_moc(self.SERC, store=handle).words, want.words
         )
         assert coverage.coverage_toc(self.TEMPORAL, store=temporal).words.size
+
+    def test_the_absence_path_constructs_one_store(self, monkeypatch, tmp_path):
+        # The path that reads TWO objects — no usable sidecar, so the
+        # manifest probe runs too — is the one that could resolve two
+        # handles. One construction per call, or the two GETs can land under
+        # two identities across an SSO refresh.
+        import moczarr.store as mstore
+
+        real, calls = mstore.open_object_store, []
+
+        def spy(path, **kwargs):
+            calls.append(path)
+            return real(path, **kwargs)
+
+        monkeypatch.setattr(mstore, "open_object_store", spy)
+        assert coverage.coverage_toc(self._hive_root(tmp_path, "one_handle")) is None
+        assert len(calls) == 1
