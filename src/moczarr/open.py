@@ -269,13 +269,23 @@ def candidate_shards(
     ``i`` then names different things. The ruled idiom (issue #49 review;
     the internal pair stays private until a consumer shows real friction):
     make both calls share their inputs — fetch the manifest ONCE (or thread
-    one ``store=``) and pass it to both — and the views align whenever the
-    store is unchanged between the calls; a pair that must be tear-proof
-    against a concurrent writer takes one view and derives the other
-    through the convention seam (:func:`moczarr.convention.split_leaf_name`
-    on a path's stem, :func:`moczarr.convention.leaf_path` on an id) —
-    library parsers, not caller-side string surgery — instead of issuing
-    both calls.
+    one ``store=``) and pass it to both. Sharing buys exactly two things —
+    the duplicate manifest GET is skipped, and ONE ``path_grouping`` is
+    pinned across the pair so both render the same path grammar. It
+    snapshots nothing: each call still re-GETs the root envelope (or
+    re-walks), so the "unchanged store" caveat above is untouched by the
+    idiom. A pair that must be tear-proof against a concurrent writer takes
+    ONE view and derives the other through the convention seam — library
+    parsers, not caller-side string surgery — instead of issuing both
+    calls. Path to id: :func:`moczarr.convention.split_leaf_name` on the
+    path's BASENAME (``rel.rsplit("/", 1)[-1]``, ``.zarr`` suffix included
+    — it is the suffixed name the parser requires, not the bare id),
+    returning ``(id, window_label)``. Id to path:
+    :func:`moczarr.convention.leaf_path` threaded with the same two
+    arguments the discovery used, ``leaf_path(shard, window=window,
+    path_grouping=manifest_path_grouping(manifest))`` — a bare
+    ``leaf_path(shard)`` silently drops the window label and assumes
+    ``path_grouping=1``, and stops naming the same objects.
     """
     pairs = _candidate_pairs(
         store_root,
