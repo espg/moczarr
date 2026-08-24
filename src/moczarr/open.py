@@ -331,6 +331,15 @@ def _candidate_pairs(
                     f"({store_root.rstrip('/')}/{{name}}) instead (D19, mortie spec §6.5)"
                 )
             raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
+    else:
+        # Both doors validated, as open_leaf does it (open.py's manifest=None
+        # branch): the FETCHED manifest is parse_manifest'd inside
+        # read_manifest, so a PASSED one must be too or the two routes
+        # disagree — a manifest with no orders would otherwise reach
+        # manifest_path_grouping's default and a bare KeyError instead of
+        # parse_manifest's pointed ValueError. Idempotent and pure, so the
+        # hot-loop caller that already validated once pays nothing.
+        manifest = parse_manifest(manifest)
     if aoi is not None:
         aoi = as_moc_words(aoi)
     when_words = as_toc_words(when) if when is not None else None
