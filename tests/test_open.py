@@ -1169,7 +1169,7 @@ class TestMocTocAcceptance:
 
 
 @pytest.mark.skipif(
-    not os.environ.get("MOCZARR_LIVE_TESTS"),
+    os.environ.get("MOCZARR_LIVE_TESTS", "").lower() not in {"1", "true", "yes"},
     reason="live S3 acceptance (anonymous, metadata-only); set MOCZARR_LIVE_TESTS=1 to run",
 )
 class TestLiveNotebookAcceptance:
