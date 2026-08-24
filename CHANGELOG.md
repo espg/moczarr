@@ -2,6 +2,25 @@
 
 ## Unreleased
 
+- New public `candidate_shards(store_root, manifest, aoi=None, window=None)`
+  ([#49](https://github.com/espg/moczarr/issues/49)): `candidate_leaves`
+  returning what `open_leaf` takes — shard IDS (morton decimal strings),
+  ascending in packed-word order — from the same discovery seam through one
+  shared implementation, so the path view and the id view cannot disagree:
+  for equal arguments against an unchanged store, `candidate_shards(...)[i]`
+  names the leaf `candidate_leaves(...)[i]` locates (each call is its own
+  discovery, so a tear-free pair is derived from one view, not from two
+  calls). Select-then-open needs no string surgery and no knowledge of the
+  path grammar (the `.zarr` suffix, the `path_grouping` node depth, the
+  windowed `{id}_{window}` dialect), and on a windowed store the id stays
+  the BARE shard — the window label is not part of it, so the same
+  `window=` goes to `open_leaf`. A separate name rather than a flag because
+  the return TYPE changes (mortie's `Moc.to_order` precedent,
+  espg/mortie#197). One behavior change rides along on `candidate_leaves`:
+  the discovery walk no longer names an object whose stem is an order-29
+  POINT id, matching the arithmetic route, which never could (§2/§6.6 —
+  `convention.leaf_path` refuses point words).
+
 - The MOC/TOC seam ([#45](https://github.com/espg/moczarr/issues/45)):
   moczarr decodes zagg spec §10's `zagg-coverage-toc/1` root section — the
   tier-1 per-shard envelope-word map, via the new public `TEMPORAL_SPEC` /
