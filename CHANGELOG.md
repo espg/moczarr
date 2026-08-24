@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- `open_ragged` is now on the package root
+  ([#49](https://github.com/espg/moczarr/issues/49)): it was importable only
+  by module path (`moczarr.ragged.open_ragged`) while `open_leaf`,
+  `read_ragged`, `read_cell` and `read_tensors` — the functions it is used
+  alongside — all sat on the root, so a per-leaf workflow was forced to mix
+  two import spellings. Same object, no wrapper. A surface-consistency test
+  (`tests/test_surface.py`) pins the public-workflow roster to the package
+  root so the asymmetry cannot recur.
+
 - Root-taking `coverage_moc` / `coverage_toc`
   ([#49](https://github.com/espg/moczarr/issues/49)): both typed casts now
   overload on the first argument — a `str` STORE ROOT fetches the envelope
