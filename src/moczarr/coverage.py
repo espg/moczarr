@@ -531,16 +531,23 @@ def _root_form(envelope: dict | str, store: Any, store_kwargs: dict) -> dict | N
     A ``str`` is a STORE ROOT: fetch its envelope — one metadata GET through
     :func:`moczarr.store.load_root_coverage` (lazy import; ``store`` imports
     this module) — and return the dict, or ``None`` exactly where that
-    function says the store publishes no usable envelope. A store-level
-    failure (unreachable root, bad credentials) raises out of the transport
-    untouched: absence of COVERAGE is not absence of a STORE. A ``dict`` is
-    already the envelope: hand it back unchanged, and refuse store arguments
-    loudly — silently ignoring them would hide a caller's real intent.
+    function says the store publishes no usable envelope. Absence is
+    CONFIRMED before it is reported: an object store answers a missing
+    bucket or a mistyped prefix with the same 404 as a missing sidecar, so
+    the absence path probes ``morton_hive.json`` (one extra GET, that path
+    only) and a root carrying none raises the library's house
+    not-a-hive-store ``ValueError``. Absence of COVERAGE is not absence of
+    a STORE. A ``dict`` is already the envelope: hand it back unchanged,
+    and refuse store arguments loudly — silently ignoring them would hide
+    a caller's real intent.
     """
     if isinstance(envelope, str):
-        from moczarr.store import load_root_coverage
+        from moczarr.store import load_root_coverage, read_manifest
 
-        return load_root_coverage(envelope, store=store, **store_kwargs)
+        fetched = load_root_coverage(envelope, store=store, **store_kwargs)
+        if fetched is None and read_manifest(envelope, store=store, **store_kwargs) is None:
+            raise ValueError(f"no morton_hive.json at {envelope} — not a hive store root")
+        return fetched
     if store is not None or store_kwargs:
         raise TypeError(
             "store= / **store_kwargs apply only to the root (str) form; "
@@ -569,10 +576,15 @@ def coverage_moc(envelope: dict | str, *, store: Any = None, **store_kwargs: Any
     ``ValueError`` (there is no ``Moc`` to hand back, and the root envelope
     is a regenerable CACHE — its absence says nothing about the store's
     actual coverage, so no empty or degraded cover is fabricated in its
-    place). An UNREACHABLE store raises the transport's own error, never
-    that ``ValueError`` — absence of coverage is not absence of a store.
-    The ``dict`` form is unchanged; store arguments with a dict are a
-    ``TypeError``.
+    place). A store-level failure that signals as anything other than a
+    404 — bad credentials, wrong region, 5xx, DNS — propagates untouched,
+    and a 404-shaped root (missing bucket, mistyped prefix), which the
+    transport cannot tell from an absent sidecar, is settled by probing
+    ``morton_hive.json`` on the absence path only (one extra GET): a root
+    carrying no manifest raises the library's house ``ValueError`` (*not a
+    hive store root*) instead, so absence of coverage is never reported
+    for absence of a store. The ``dict`` form is unchanged; store
+    arguments with a dict are a ``TypeError``.
 
     The cast to the geometry world (issue #45): moczarr parses its own
     storage grammar — the ``"ranges"`` encoding of :func:`ranges_words` —
@@ -627,10 +639,15 @@ def coverage_toc(
     Both already mean the same thing to a caller — this store publishes no
     usable temporal coverage — so they share the answer deliberately; a
     caller who must tell them apart fetches the envelope itself and passes
-    the dict. An UNREACHABLE store still RAISES the transport's own error,
-    never ``None`` — absence of coverage is not absence of a store. The
-    ``dict`` form is unchanged; store arguments with a dict are a
-    ``TypeError``.
+    the dict. An UNREACHABLE store still RAISES rather than answering
+    ``None``: a store-level failure signalling as anything other than a
+    404 propagates untouched, and a 404-shaped root — missing bucket,
+    mistyped prefix, indistinguishable from an absent sidecar at the
+    transport — is settled by probing ``morton_hive.json`` on the absence
+    path only (one extra GET), a root carrying none raising the library's
+    house ``ValueError`` (*not a hive store root*). Absence of coverage is
+    not absence of a store. The ``dict`` form is unchanged; store
+    arguments with a dict are a ``TypeError``.
 
     The two arms are not the same failure and the split is deliberate: an
     UNREADABLE section degrades to ``None`` (below), while CORRUPT CONTENT

@@ -899,6 +899,21 @@ class TestRootFormCasts:
     SERC = str(Path(__file__).parent / "data" / "serc_hive")
     TEMPORAL = str(Path(__file__).parent / "data" / "spec" / "temporal")
 
+    @staticmethod
+    def _hive_root(tmp_path, name, sidecar=None):
+        """A tmp root that IS a hive store — manifest present, sidecar optional.
+
+        The manifest is what the absence path probes for, so an absence
+        fixture has to carry one or it reads as "not a store root" instead.
+        """
+        root = tmp_path / name
+        root.mkdir()
+        manifest = Path(__file__).parent / "data" / "serc_hive" / convention.MANIFEST_NAME
+        (root / convention.MANIFEST_NAME).write_text(manifest.read_text())
+        if sidecar is not None:
+            (root / convention.ROOT_COVERAGE_NAME).write_text(sidecar)
+        return str(root)
+
     def test_moc_root_form_equals_the_fetched_dict_form(self):
         import mortie
 
@@ -917,22 +932,32 @@ class TestRootFormCasts:
         np.testing.assert_array_equal(by_root.words, by_dict.words)
 
     def test_toc_both_absences_are_the_one_none(self, tmp_path):
-        # (1) no usable sidecar at all; (2) a sidecar with no temporal
-        # section (the SERC root publishes only spatial coverage). Both mean
-        # "publishes no usable temporal coverage" — the docstring's collapse.
-        bare = tmp_path / "bare_store"
-        bare.mkdir()
-        assert coverage.coverage_toc(str(bare)) is None
+        # (1) a hive store with no usable sidecar at all; (2) a sidecar with
+        # no temporal section (the SERC root publishes only spatial
+        # coverage). Both mean "publishes no usable temporal coverage" — the
+        # docstring's collapse.
+        assert coverage.coverage_toc(self._hive_root(tmp_path, "no_sidecar")) is None
         assert coverage.coverage_toc(self.SERC) is None
 
     def test_moc_absence_raises_not_degrades(self, tmp_path):
         # No absence arm on the spatial cast, root form included: the root
         # envelope is a regenerable cache, so its absence must not read as
         # an empty cover.
-        bare = tmp_path / "bare_store"
-        bare.mkdir()
         with pytest.raises(ValueError, match="no usable root coverage envelope"):
+            coverage.coverage_moc(self._hive_root(tmp_path, "no_sidecar"))
+
+    def test_a_root_that_is_no_store_raises_for_both(self, tmp_path):
+        # The discrimination the absence path buys with its extra GET: an
+        # object store answers a mistyped prefix or a missing bucket with the
+        # same 404 as a missing sidecar, so absence is only ANSWERED once the
+        # manifest probe confirms a store is there. A directory that exists
+        # but holds no manifest is the local stand-in for that 404 root.
+        bare = tmp_path / "not_a_store"
+        bare.mkdir()
+        with pytest.raises(ValueError, match="not a hive store root"):
             coverage.coverage_moc(str(bare))
+        with pytest.raises(ValueError, match="not a hive store root"):
+            coverage.coverage_toc(str(bare))
 
     def test_unreachable_store_raises_for_both(self, tmp_path):
         gone = str(tmp_path / "never_created")
