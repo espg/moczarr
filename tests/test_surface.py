@@ -32,6 +32,9 @@ WORKFLOW = [
     "read_cell",
     "read_ragged",
     "read_tensors",
+    # batched leaf readers the candidate roster feeds (issue #5)
+    "read_commits",
+    "read_leaf_metas",
     # cross-store composition and stats sidecars
     "iter_occupancy_and",
     "occupancy_and",
