@@ -228,12 +228,22 @@ def candidate_shards(
     Positionally identical lists: ``candidate_shards(...)[i]`` names the
     leaf ``candidate_leaves(...)[i]`` locates, for equal arguments.
     """
-    return [
-        morton_decimal(word)
-        for word, _ in _candidate_pairs(
-            store_root, manifest, aoi, window, when=when, store=store, concurrency=concurrency
-        )
-    ]
+    pairs = _candidate_pairs(
+        store_root, manifest, aoi, window, when=when, store=store, concurrency=concurrency
+    )
+    if not pairs:
+        return []
+    # The batch render, not ``convention.morton_decimal`` in a loop: that
+    # seam renders ONE word by contract (its docstring's own rule, the twin
+    # of ``morton_word``'s) and mortie vectorizes this — measured 33x over
+    # 3,000 words, and an o9 AOI runs to a few thousand shards. Equivalent
+    # because candidates never hold a POINT word (``_shard_leaf_name`` skips
+    # them, ``leaf_path`` refuses them), which is the one kind whose render
+    # needs the moczarr-side §2 ``p`` marker ``decimal_repr`` does not add.
+    from mortie import MortonIndexArray
+
+    words = np.asarray([word for word, _ in pairs], dtype=np.uint64)
+    return list(MortonIndexArray.from_words(words).decimal_repr())
 
 
 def _candidate_pairs(

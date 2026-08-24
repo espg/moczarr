@@ -561,6 +561,11 @@ class TestCandidateShards:
     def test_ids_name_the_leaves_positionally(self, serc):
         manifest = store.read_manifest(serc)
         assert candidate_shards(serc, manifest) == self._stems(candidate_leaves(serc, manifest))
+        # The batch render is the one-word convention seam, word for word.
+        assert candidate_shards(serc, manifest) == [
+            convention.morton_decimal(convention.morton_word(shard))
+            for shard in self._stems(candidate_leaves(serc, manifest))
+        ]
         assert candidate_shards(serc, manifest, [SERC_SHARD]) == [SERC_SHARD]
         # Sub-shard AOI member: shards are cut whole, ids at shard order.
         assert candidate_shards(serc, manifest, [SERC_SHARD + "1"]) == [SERC_SHARD]
