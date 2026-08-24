@@ -976,6 +976,16 @@ class TestRootFormCasts:
         with pytest.raises(TypeError, match="got PosixPath"):
             coverage.coverage_toc(Path(self.TEMPORAL), anonymous=True)
 
+    def test_none_stays_a_typeerror(self, tmp_path):
+        # `coverage_moc(load_root_coverage(root))` written without a None
+        # check is the two-call spelling this overload replaces; it raised
+        # TypeError before #49 and must not become a ValueError naming a
+        # store root that was never passed.
+        with pytest.raises(TypeError, match="got NoneType"):
+            coverage.coverage_moc(None)
+        with pytest.raises(TypeError, match="got NoneType"):
+            coverage.coverage_toc(None)
+
     def test_dict_form_refuses_store_arguments(self):
         with pytest.raises(TypeError, match="root .str. form"):
             coverage.coverage_moc(_root(), anonymous=True)

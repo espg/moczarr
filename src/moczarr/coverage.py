@@ -623,8 +623,9 @@ def coverage_moc(envelope: dict | str, *, store: Any = None, **store_kwargs: Any
     if fetched is None:
         raise ValueError(
             f"no usable root coverage envelope at {envelope} — the store publishes "
-            f"none (missing sidecar, or an unknown spec/encoding); there is no Moc "
-            f"to hand back, and a fabricated empty cover would be a wrong answer"
+            f"none (missing or unparsable sidecar, or an unknown spec/encoding; "
+            f"enable moczarr's debug log to see which); there is no Moc to hand "
+            f"back, and a fabricated empty cover would be a wrong answer"
         )
     return Moc(ranges_words(fetched))
 
