@@ -96,8 +96,13 @@ def candidate_leaves(
     :func:`moczarr.iter_occupancy_and` so the two agree on what a store
     contains by construction rather than by duplicated arithmetic. Public
     (issue #39) for readers that need the leaf roster without opening
-    anything — the paths are what :func:`moczarr.open_leaf`,
-    ``moczarr.store.read_commits`` and the ragged/HHDC readers take.
+    anything — the paths are what ``moczarr.store.read_commits`` and the
+    ragged/HHDC readers take. :func:`candidate_shards` is the same seam
+    returning shard IDS — what :func:`moczarr.open_leaf` takes — through
+    one shared implementation (issue #49), so the two views can never
+    disagree; a caller wanting ids asks it rather than re-parsing these
+    paths, whose grammar (the ``.zarr`` suffix, the ``path_grouping`` node
+    depth, the windowed ``{id}_{window}`` dialect) is the store's own.
 
     Contract, in three parts:
 
@@ -163,6 +168,72 @@ def candidate_leaves(
       the shard's own outward-rounded word under ``mortie.toc_overlaps`` —
       and every widening is outward, so it never under-reports.
     """
+    return [
+        rel
+        for _, rel in _candidate_pairs(
+            store_root, manifest, aoi, window, when=when, store=store, concurrency=concurrency
+        )
+    ]
+
+
+def candidate_shards(
+    store_root: str,
+    manifest: dict,
+    aoi=None,
+    window: str | None = None,
+    *,
+    when=None,
+    store: Any = None,
+    concurrency: int | None = None,
+) -> list[str]:
+    """Candidate shard IDS (morton decimal strings), ascending in packed-word order.
+
+    :func:`candidate_leaves` returning what :func:`moczarr.open_leaf` takes
+    (issue #49): the same discovery seam through the same one implementation
+    — discovery routes, ``window`` selection, the shard-level ``aoi`` and
+    ``when`` restrictions, and every posture in that docstring hold here
+    verbatim; only what is handed back differs. A separate name rather than
+    a flag because the return TYPE changes (mortie's ``Moc.to_order``
+    precedent, espg/mortie#197): ids like ``"11213"``, not store-relative
+    paths like ``"1/1/2/1/3/11213.zarr"``.
+
+    The id is the path's stem the library knew before it built the path, so
+    select-then-open needs no string surgery and no knowledge of the path
+    grammar (``.zarr`` suffix, ``path_grouping`` depth, the windowed
+    ``{id}_{window}`` dialect)::
+
+        for shard in candidate_shards(root, manifest, aoi=q):
+            leaf = open_leaf(root, shard, manifest=manifest)
+
+    On a windowed store the id is the BARE shard — the window label is not
+    part of it; pass the same ``window=`` to :func:`moczarr.open_leaf`.
+    Positionally identical lists: ``candidate_shards(...)[i]`` names the
+    leaf ``candidate_leaves(...)[i]`` locates, for equal arguments.
+    """
+    return [
+        morton_decimal(word)
+        for word, _ in _candidate_pairs(
+            store_root, manifest, aoi, window, when=when, store=store, concurrency=concurrency
+        )
+    ]
+
+
+def _candidate_pairs(
+    store_root: str,
+    manifest: dict,
+    aoi=None,
+    window: str | None = None,
+    *,
+    when=None,
+    store: Any = None,
+    concurrency: int | None = None,
+) -> list[tuple[int, str]]:
+    """``(packed word, store-relative leaf path)`` candidates, word-ascending.
+
+    The one implementation under :func:`candidate_leaves` (paths) and
+    :func:`candidate_shards` (ids) — the contract lives on
+    :func:`candidate_leaves`'s docstring.
+    """
     if aoi is not None:
         aoi = as_moc_words(aoi)
     when_words = as_toc_words(when) if when is not None else None
@@ -190,7 +261,10 @@ def candidate_leaves(
             words = np.unique(clip2order(int(manifest["shard_order"]), words))
         if when_words is not None and words.size:
             words = words[temporal_keep(words, envelope, when_words)]
-        return [leaf_path(int(w), window=window, path_grouping=grouping) for w in np.sort(words)]
+        return [
+            (int(w), leaf_path(int(w), window=window, path_grouping=grouping))
+            for w in np.sort(words)
+        ]
     # Walk fallback (no usable root MOC), and the windowed-discovery case.
     found: dict[str, int] = {}
     labels: set[str] = set()
@@ -221,7 +295,7 @@ def candidate_leaves(
     # No temporal pruning here by construction: reaching the walk means the
     # root envelope is absent or unusable, so there is no tier-1 map to
     # prune against and the candidate set stays an unpruned superset.
-    return sorted(found, key=lambda rel: found[rel])
+    return sorted(((w, rel) for rel, w in found.items()), key=lambda pair: pair[0])
 
 
 def _schema_leaf(

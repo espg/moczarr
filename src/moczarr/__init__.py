@@ -49,7 +49,7 @@ from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.hhdc import has_exact_occupancy, read_tensors
 from moczarr.intersect import iter_occupancy_and, occupancy_and
 from moczarr.join import join_coarse, parent_cells
-from moczarr.open import candidate_leaves, open_hive, open_leaf, open_store
+from moczarr.open import candidate_leaves, candidate_shards, open_hive, open_leaf, open_store
 from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.pyramid import (
     finest_source_at,
@@ -134,6 +134,7 @@ __all__ = [
     "box_and",
     "box_words",
     "candidate_leaves",
+    "candidate_shards",
     "check_node_invariant",
     "combined_hash",
     "counts_from_composition",
