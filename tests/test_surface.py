@@ -4,16 +4,20 @@ Issue #49 item 4 — ``open_ragged`` was importable only by module path
 (``moczarr.ragged.open_ragged``) while every sibling it is used alongside
 sat on the package root, so a notebook mixing the two spellings was forced
 by the library, not chosen. The roster test pins the invariant so the
-asymmetry cannot recur: a function that appears in a public workflow (the
-quickstart, the demo-notebook selection loop, the per-leaf readers) must be
-reachable as ``mz.<name>``, and every ``__all__`` name must resolve.
+asymmetry cannot recur: a function on the hand-kept ``WORKFLOW`` floor —
+the quickstart, the demo-notebook selection loop, the per-leaf readers —
+must be reachable as ``mz.<name>``, and every ``__all__`` name must resolve.
 """
 
 import moczarr as mz
 
 #: The public-workflow roster: what a reader following the documented flows
-#: (select -> open -> read; coverage ask; per-leaf ragged/HHDC reads) calls.
-#: Additions to those flows belong here in the same PR that documents them.
+#: (select -> open -> read; coverage ask; per-leaf ragged/HHDC reads; the
+#: coarse join) calls. It is a hand-curated FLOOR, not a derived list —
+#: nothing enumerates the flows mechanically, and the demo notebook that
+#: drives issue #49 lives in another repo — so it holds only the names a
+#: PR put here, and a name absent from it is unpinned rather than ruled
+#: out. Adding a workflow means adding its names in the same PR.
 WORKFLOW = [
     # selection: coverage ask + candidate roster (issues #39/#45/#49)
     "candidate_leaves",
@@ -40,6 +44,11 @@ WORKFLOW = [
     "occupancy_and",
     "read_stats",
     "walk_leaves",
+    # id arithmetic and the coarse join (docs/examples/quickstart.ipynb,
+    # and the zagg demo notebook's selection loop)
+    "join_coarse",
+    "morton_decimal",
+    "parent_cells",
 ]
 
 
