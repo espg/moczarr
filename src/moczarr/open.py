@@ -112,9 +112,10 @@ def candidate_leaves(
     ``moczarr.store.read_leaf_metas`` take. :func:`candidate_shards` is the
     same seam returning shard IDS — what :func:`moczarr.open_leaf`, and so
     the ragged/HHDC readers it hands a store to, take — through one shared
-    implementation (issue #49), so the two views can never disagree; a caller wanting ids asks it rather than re-parsing these
-    paths, whose grammar (the ``.zarr`` suffix, the ``path_grouping`` node
-    depth, the windowed ``{id}_{window}`` dialect) is the store's own.
+    implementation (issue #49), so the two views can never disagree; a
+    caller wanting ids asks it rather than re-parsing these paths, whose
+    grammar (the ``.zarr`` suffix, the ``path_grouping`` node depth, the
+    windowed ``{id}_{window}`` dialect) is the store's own.
 
     ``manifest`` is optional (issue #49): when omitted, this call fetches it
     — ONE extra metadata GET, the same one-GET-if-absent posture
