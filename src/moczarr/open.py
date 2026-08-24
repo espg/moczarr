@@ -54,6 +54,7 @@ from moczarr.exceptions import NoCoverageError
 from moczarr.fabricate import fabricate_cell_ids as _fabricate_cell_ids
 from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.store import (
+    _resolve_store,
     _stamp_from_meta,
     load_root_coverage,
     open_object_store,
@@ -120,8 +121,11 @@ def candidate_leaves(
     :func:`moczarr.open_leaf` takes for ``manifest=None`` — and raises
     ``ValueError`` when the root has none (a multi-product root gets the
     pointed §6.5 error naming its products). Pass it explicitly to skip the
-    GET — the right call in a loop over many AOIs against one store.
-    ``**store_kwargs`` pass through to
+    GET — the right call in a loop over many AOIs against one store. The
+    GET is the whole extra cost: a call resolves ONE object store up front
+    and threads it through every read it makes, so the transport count is
+    one per call whichever route runs and whether or not the manifest was
+    passed. ``**store_kwargs`` pass through to
     :func:`moczarr.store.open_object_store` (``anonymous=True``,
     ``region=...``, explicit keys, ...), the passthrough the sibling
     functions (:func:`moczarr.store.load_root_coverage`,
@@ -303,13 +307,23 @@ def _candidate_pairs(
     :func:`candidate_shards` (ids) — the contract lives on
     :func:`candidate_leaves`'s docstring.
     """
+    # ONE handle for every read this call makes, resolved here rather than
+    # per callee (issue #5's "thread one root-rooted handle"; fetching the
+    # manifest when omitted is what made it bite). Otherwise read_manifest,
+    # the envelope and the walk each resolve their own — 2-3 constructions
+    # per call, each re-running the ambient boto3 credential resolution, so
+    # one call could read its three objects under two identities across an
+    # SSO refresh. store= still wins, and store_kwargs are consumed HERE, so
+    # no downstream call can collide with a caller kwarg of its own name
+    # (walk_leaves' path_grouping) or diverge by route.
+    handle = _resolve_store(store_root, store, store_kwargs)
     if manifest is None:
-        manifest = read_manifest(store_root, store=store, **store_kwargs)
+        manifest = read_manifest(store_root, store=handle)
         if manifest is None:
             # A multi-product root has no root manifest by design (§6.5);
             # probe so the error is pointed, exactly as open_leaf's is —
             # these functions take no product=, so name the subtree root.
-            names = [p["name"] for p in list_products(store_root, store=store, **store_kwargs)]
+            names = [p["name"] for p in list_products(store_root, store=handle)]
             if names:
                 raise ValueError(
                     f"{store_root} is a multi-product store root (products: {names}); "
@@ -332,7 +346,7 @@ def _candidate_pairs(
                 f"window={window!r} on a {manifest['spec']} store: unwindowed stores "
                 f"have no window leaves (schedule: none)"
             )
-    envelope = load_root_coverage(store_root, store=store, **store_kwargs)
+    envelope = load_root_coverage(store_root, store=handle)
     if envelope is not None and not (windowed and window is None):
         words = ranges_words(envelope) if aoi is None else root_coverage_and(envelope, aoi)
         if aoi is not None and words.size:
@@ -352,7 +366,7 @@ def _candidate_pairs(
     found: dict[str, int] = {}
     labels: set[str] = set()
     for rel in walk_leaves(
-        store_root, store=store, concurrency=concurrency, path_grouping=grouping, **store_kwargs
+        store_root, store=handle, concurrency=concurrency, path_grouping=grouping
     ):
         named = _shard_leaf_name(rel)
         if named is None:
