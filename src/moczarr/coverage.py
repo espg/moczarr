@@ -539,7 +539,9 @@ def _root_form(envelope: dict | str, store: Any, store_kwargs: dict) -> dict | N
     not-a-hive-store ``ValueError``. Absence of COVERAGE is not absence of
     a STORE. A ``dict`` is already the envelope: hand it back unchanged,
     and refuse store arguments loudly — silently ignoring them would hide
-    a caller's real intent.
+    a caller's real intent. Anything else is a ``TypeError`` naming the
+    type that came in — a ``Path`` root is the likely slip, and it would
+    otherwise die two frames down inside :func:`ranges_words`.
     """
     if isinstance(envelope, str):
         from moczarr.store import load_root_coverage, read_manifest
@@ -548,6 +550,11 @@ def _root_form(envelope: dict | str, store: Any, store_kwargs: dict) -> dict | N
         if fetched is None and read_manifest(envelope, store=store, **store_kwargs) is None:
             raise ValueError(f"no morton_hive.json at {envelope} — not a hive store root")
         return fetched
+    if not isinstance(envelope, dict):
+        raise TypeError(
+            f"first argument is a store root (str) or a coverage envelope (dict), "
+            f"got {type(envelope).__name__}"
+        )
     if store is not None or store_kwargs:
         raise TypeError(
             "store= / **store_kwargs apply only to the root (str) form; "
