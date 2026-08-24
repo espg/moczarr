@@ -1226,6 +1226,10 @@ class TestLiveNotebookAcceptance:
         st = mz.open_object_store(self.ROOT, **self.S3)
         manifest = store.read_manifest(self.ROOT, store=st)
         rels = candidate_leaves(self.ROOT, manifest, aoi=q, store=st)
-        verbose = {rel.rsplit("/", 1)[-1].split(".")[0] for rel in rels}
+        # split_leaf_name, as intersect.py does: it drops the `.zarr` suffix
+        # AND any window label, which is candidate_shards' bare-id contract.
+        # The naive stem would report a mismatch that is really this test's
+        # own string surgery the day a window dialect lands in the store.
+        verbose = {convention.split_leaf_name(rel.rsplit("/", 1)[-1])[0] for rel in rels}
         assert ids == verbose
         assert ids  # non-vacuous: the Yosemite box is inside the CA store
