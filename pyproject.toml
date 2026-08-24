@@ -116,7 +116,7 @@ python_files = ["test_*.py"]
 [tool.ruff]
 line-length = 100
 target-version = "py312"
-lint.select = ["E", "F", "W", "I", "N"]
+lint.select = ["E", "F", "W", "I", "N", "RUF022"]
 lint.ignore = ["E501"]
 
 [tool.ruff.lint.isort]
