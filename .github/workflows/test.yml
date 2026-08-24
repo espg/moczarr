@@ -37,12 +37,11 @@ jobs:
     - name: Run tests with pytest
       run: uv run pytest --cov=moczarr --cov-report=xml --cov-report=term
 
-  # Non-blocking check that the committed-executed quickstart notebook still
-  # re-executes cleanly (phase 7b, issue #1). continue-on-error keeps notebook
-  # drift from gating PRs; tighten once the store spec settles.
+  # Blocking check that the committed-executed quickstart notebook still
+  # re-executes cleanly (phase 7b, issue #1; flipped blocking per espg ruling
+  # on PR #50, 2026-08-24 -- the notebook is hermetic, in-tree fixture only).
   notebook:
     runs-on: ubuntu-latest
-    continue-on-error: true
 
     steps:
     - uses: actions/checkout@v5
