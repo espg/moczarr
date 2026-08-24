@@ -92,13 +92,14 @@ def _shard_leaf_name(rel: str) -> tuple[str, str | None] | None:
 
 def candidate_leaves(
     store_root: str,
-    manifest: dict,
+    manifest: dict | None = None,
     aoi=None,
     window: str | None = None,
     *,
     when=None,
     store: Any = None,
     concurrency: int | None = None,
+    **store_kwargs: Any,
 ) -> list[str]:
     """Store-relative leaf paths to try, ascending in packed-word order.
 
@@ -113,6 +114,20 @@ def candidate_leaves(
     implementation (issue #49), so the two views can never disagree; a caller wanting ids asks it rather than re-parsing these
     paths, whose grammar (the ``.zarr`` suffix, the ``path_grouping`` node
     depth, the windowed ``{id}_{window}`` dialect) is the store's own.
+
+    ``manifest`` is optional (issue #49): when omitted, this call fetches it
+    — ONE extra metadata GET, the same one-GET-if-absent posture
+    :func:`moczarr.open_leaf` takes for ``manifest=None`` — and raises
+    ``ValueError`` when the root has none (a multi-product root gets the
+    pointed §6.5 error naming its products). Pass it explicitly to skip the
+    GET — the right call in a loop over many AOIs against one store.
+    ``**store_kwargs`` pass through to
+    :func:`moczarr.store.open_object_store` (``anonymous=True``,
+    ``region=...``, explicit keys, ...), the passthrough the sibling
+    functions (:func:`moczarr.store.load_root_coverage`,
+    :func:`moczarr.open_leaf`) already have; ``store=`` stays the way to
+    share ONE handle across many calls and wins when both are given, per
+    ``moczarr.store._resolve_store``.
 
     Contract, in three parts:
 
@@ -189,20 +204,28 @@ def candidate_leaves(
     return [
         rel
         for _, rel in _candidate_pairs(
-            store_root, manifest, aoi, window, when=when, store=store, concurrency=concurrency
+            store_root,
+            manifest,
+            aoi,
+            window,
+            when=when,
+            store=store,
+            concurrency=concurrency,
+            **store_kwargs,
         )
     ]
 
 
 def candidate_shards(
     store_root: str,
-    manifest: dict,
+    manifest: dict | None = None,
     aoi=None,
     window: str | None = None,
     *,
     when=None,
     store: Any = None,
     concurrency: int | None = None,
+    **store_kwargs: Any,
 ) -> list[str]:
     """Candidate shard IDS (morton decimal strings), ascending in packed-word order.
 
@@ -218,10 +241,13 @@ def candidate_shards(
     The id is the path's stem the library knew before it built the path, so
     select-then-open needs no string surgery and no knowledge of the path
     grammar (``.zarr`` suffix, ``path_grouping`` depth, the windowed
-    ``{id}_{window}`` dialect)::
+    ``{id}_{window}`` dialect). With the manifest fetched when omitted and
+    ``**store_kwargs`` passing through (issue #49; the posture and the
+    one-extra-GET cost are on :func:`candidate_leaves`'s docstring), the
+    whole selection is one call::
 
-        for shard in candidate_shards(root, manifest, aoi=q):
-            leaf = open_leaf(root, shard, manifest=manifest)
+        for shard in candidate_shards(root, aoi=q, anonymous=True):
+            leaf = open_leaf(root, shard, anonymous=True)
 
     On a windowed store the id is the BARE shard — the window label is not
     part of it; pass the same ``window=`` to :func:`moczarr.open_leaf`.
@@ -236,7 +262,14 @@ def candidate_shards(
     instead of issuing both calls.
     """
     pairs = _candidate_pairs(
-        store_root, manifest, aoi, window, when=when, store=store, concurrency=concurrency
+        store_root,
+        manifest,
+        aoi,
+        window,
+        when=when,
+        store=store,
+        concurrency=concurrency,
+        **store_kwargs,
     )
     if not pairs:
         return []
@@ -255,13 +288,14 @@ def candidate_shards(
 
 def _candidate_pairs(
     store_root: str,
-    manifest: dict,
+    manifest: dict | None = None,
     aoi=None,
     window: str | None = None,
     *,
     when=None,
     store: Any = None,
     concurrency: int | None = None,
+    **store_kwargs: Any,
 ) -> list[tuple[int, str]]:
     """``(packed word, store-relative leaf path)`` candidates, word-ascending.
 
@@ -269,6 +303,20 @@ def _candidate_pairs(
     :func:`candidate_shards` (ids) — the contract lives on
     :func:`candidate_leaves`'s docstring.
     """
+    if manifest is None:
+        manifest = read_manifest(store_root, store=store, **store_kwargs)
+        if manifest is None:
+            # A multi-product root has no root manifest by design (§6.5);
+            # probe so the error is pointed, exactly as open_leaf's is —
+            # these functions take no product=, so name the subtree root.
+            names = [p["name"] for p in list_products(store_root, store=store, **store_kwargs)]
+            if names:
+                raise ValueError(
+                    f"{store_root} is a multi-product store root (products: {names}); "
+                    f"point at one product's subtree root "
+                    f"({store_root.rstrip('/')}/{{name}}) instead (D19, mortie spec §6.5)"
+                )
+            raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
     if aoi is not None:
         aoi = as_moc_words(aoi)
     when_words = as_toc_words(when) if when is not None else None
@@ -284,7 +332,7 @@ def _candidate_pairs(
                 f"window={window!r} on a {manifest['spec']} store: unwindowed stores "
                 f"have no window leaves (schedule: none)"
             )
-    envelope = load_root_coverage(store_root, store=store)
+    envelope = load_root_coverage(store_root, store=store, **store_kwargs)
     if envelope is not None and not (windowed and window is None):
         words = ranges_words(envelope) if aoi is None else root_coverage_and(envelope, aoi)
         if aoi is not None and words.size:
@@ -304,7 +352,7 @@ def _candidate_pairs(
     found: dict[str, int] = {}
     labels: set[str] = set()
     for rel in walk_leaves(
-        store_root, store=store, concurrency=concurrency, path_grouping=grouping
+        store_root, store=store, concurrency=concurrency, path_grouping=grouping, **store_kwargs
     ):
         named = _shard_leaf_name(rel)
         if named is None:

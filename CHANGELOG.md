@@ -16,7 +16,14 @@
   the BARE shard — the window label is not part of it, so the same
   `window=` goes to `open_leaf`. A separate name rather than a flag because
   the return TYPE changes (mortie's `Moc.to_order` precedent,
-  espg/mortie#197). One behavior change rides along on `candidate_leaves`:
+  espg/mortie#197). Both candidate functions now also take `**store_kwargs`
+  (forwarded to `open_object_store` — `anonymous=True`, `region=...` — the
+  passthrough `load_root_coverage` and `open_leaf` already had; `store=`
+  stays the share-one-handle path and wins when both are given) and make
+  `manifest` optional, fetched in one extra metadata GET when omitted —
+  the same one-GET-if-absent posture as `open_leaf(manifest=None)` — so
+  the whole selection is one call: `candidate_shards(root, aoi=q,
+  anonymous=True)`. One behavior change rides along on `candidate_leaves`:
   the discovery walk no longer names an object whose stem is an order-29
   POINT id, matching the arithmetic route, which never could (§2/§6.6 —
   `convention.leaf_path` refuses point words).
