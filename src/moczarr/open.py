@@ -135,7 +135,15 @@ def candidate_leaves(
       says the leaf exists, not when its rows are). Objects that reuse the
       window-naming dialect
       at ancestor nodes (overview zarrs, spec §4.2) are not leaves and
-      neither route returns them.
+      neither route returns them, and neither names an order-29 POINT stem
+      (§2/§6.6: points never live in hive paths). One further asymmetry:
+      the walk can name a single shard TWICE, because a ``*.zarr`` child is
+      a leaf at whatever node holds it and its node depth is not checked
+      against the shard's order — so a store holding one shard's leaf at
+      two nodes walks as two leaves, which is two distinguishable paths
+      here and two EQUAL ids from :func:`candidate_shards`. The arithmetic
+      route names each word once and never does; the two entries' relative
+      order is the walk's own (the sort key is the word alone).
     - **Window selection.** ``window`` picks the time window of a
       ``morton-hive/2`` store, validated through the one
       ``convention.validate_window`` seam (which also refuses the reserved
