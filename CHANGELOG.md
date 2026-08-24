@@ -14,8 +14,16 @@
   docstring; `coverage_moc` keeps its no-absence posture and raises
   `ValueError` on a root publishing no usable envelope (the envelope is a
   regenerable cache — no empty cover is fabricated in its place). An
-  UNREACHABLE store raises the transport's own error for both, never an
-  absence answer: absence of coverage is not absence of a store.
+  UNREACHABLE store raises for both, never an absence answer: a local root
+  that is not a directory is moczarr's own `FileNotFoundError` from
+  `open_object_store`, a store-level failure signalling as anything other
+  than a 404 propagates untouched, and a 404-shaped root (missing bucket,
+  mistyped prefix — indistinguishable from an absent sidecar at the
+  transport) is settled by probing `morton_hive.json` on the absence path
+  only, one extra GET, a root carrying none raising the house `ValueError`
+  (*not a hive store root*). Absence of coverage is not absence of a store.
+  A first argument that is neither a `str` nor a `dict` (a `Path` root,
+  `None`) is a `TypeError` naming the type.
 
 - New public `candidate_shards(store_root, manifest=None, aoi=None,
   window=None, **store_kwargs)`
