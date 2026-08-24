@@ -25,7 +25,7 @@ negatives, indistinguishable from healthy sparse coverage.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import numpy as np
 
@@ -525,7 +525,31 @@ def temporal_keep(shard_words, envelope: dict, when_words) -> np.ndarray:
     return ~is_listed | overlaps[position]
 
 
-def coverage_moc(envelope: dict) -> "mortie.Moc":
+def _root_form(envelope: dict | str, store: Any, store_kwargs: dict) -> dict | None:
+    """Resolve the typed casts' first-argument overload (issue #49).
+
+    A ``str`` is a STORE ROOT: fetch its envelope — one metadata GET through
+    :func:`moczarr.store.load_root_coverage` (lazy import; ``store`` imports
+    this module) — and return the dict, or ``None`` exactly where that
+    function says the store publishes no usable envelope. A store-level
+    failure (unreachable root, bad credentials) raises out of the transport
+    untouched: absence of COVERAGE is not absence of a STORE. A ``dict`` is
+    already the envelope: hand it back unchanged, and refuse store arguments
+    loudly — silently ignoring them would hide a caller's real intent.
+    """
+    if isinstance(envelope, str):
+        from moczarr.store import load_root_coverage
+
+        return load_root_coverage(envelope, store=store, **store_kwargs)
+    if store is not None or store_kwargs:
+        raise TypeError(
+            "store= / **store_kwargs apply only to the root (str) form; "
+            "a dict envelope is already fetched"
+        )
+    return envelope
+
+
+def coverage_moc(envelope: dict | str, *, store: Any = None, **store_kwargs: Any) -> "mortie.Moc":
     """The root envelope's spatial coverage as a :class:`mortie.Moc` — or raise.
 
     Raises whatever :func:`ranges_words` raises, deliberately and
@@ -535,6 +559,20 @@ def coverage_moc(envelope: dict) -> "mortie.Moc":
     wants one asks :func:`parse_root_coverage` first. Corrupt CONTENT must
     never yield a plausible partial cover, which is the whole reason
     ``ranges_words`` validates every range before parsing any of them.
+
+    Root form (issue #49): a ``str`` first argument is the STORE ROOT, and
+    the envelope is fetched before the cast — ``coverage_moc(root,
+    anonymous=True)`` — one metadata GET through
+    :func:`moczarr.store.load_root_coverage`, ``store=`` and
+    ``**store_kwargs`` exactly as that function takes them. The no-absence
+    posture holds: a root whose envelope is missing or unusable raises
+    ``ValueError`` (there is no ``Moc`` to hand back, and the root envelope
+    is a regenerable CACHE — its absence says nothing about the store's
+    actual coverage, so no empty or degraded cover is fabricated in its
+    place). An UNREACHABLE store raises the transport's own error, never
+    that ``ValueError`` — absence of coverage is not absence of a store.
+    The ``dict`` form is unchanged; store arguments with a dict are a
+    ``TypeError``.
 
     The cast to the geometry world (issue #45): moczarr parses its own
     storage grammar — the ``"ranges"`` encoding of :func:`ranges_words` —
@@ -562,12 +600,37 @@ def coverage_moc(envelope: dict) -> "mortie.Moc":
     """
     from mortie import Moc
 
-    return Moc(ranges_words(envelope))
+    fetched = _root_form(envelope, store, store_kwargs)
+    if fetched is None:
+        raise ValueError(
+            f"no usable root coverage envelope at {envelope} — the store publishes "
+            f"none (missing sidecar, or an unknown spec/encoding); there is no Moc "
+            f"to hand back, and a fabricated empty cover would be a wrong answer"
+        )
+    return Moc(ranges_words(fetched))
 
 
-def coverage_toc(envelope: dict) -> "mortie.Toc | None":
+def coverage_toc(
+    envelope: dict | str, *, store: Any = None, **store_kwargs: Any
+) -> "mortie.Toc | None":
     """The envelope's §10 tier-1 temporal coverage as a :class:`mortie.Toc`,
     ``None`` when the store publishes none — or raise.
+
+    Root form (issue #49): a ``str`` first argument is the STORE ROOT, and
+    the envelope is fetched before the cast — ``coverage_toc(root,
+    anonymous=True)`` — one metadata GET through
+    :func:`moczarr.store.load_root_coverage`, ``store=`` and
+    ``**store_kwargs`` exactly as that function takes them. TWO distinct
+    absences then collapse into the one ``None``: a root with no usable
+    coverage sidecar at all (that function's ``None``), and a sidecar with
+    no usable temporal section (this function's own ``None`` arm, below).
+    Both already mean the same thing to a caller — this store publishes no
+    usable temporal coverage — so they share the answer deliberately; a
+    caller who must tell them apart fetches the envelope itself and passes
+    the dict. An UNREACHABLE store still RAISES the transport's own error,
+    never ``None`` — absence of coverage is not absence of a store. The
+    ``dict`` form is unchanged; store arguments with a dict are a
+    ``TypeError``.
 
     The two arms are not the same failure and the split is deliberate: an
     UNREADABLE section degrades to ``None`` (below), while CORRUPT CONTENT
@@ -630,7 +693,10 @@ def coverage_toc(envelope: dict) -> "mortie.Toc | None":
     """
     from mortie import Toc
 
-    if _usable_temporal(envelope) is None:
+    fetched = _root_form(envelope, store, store_kwargs)
+    if fetched is None:
+        return None  # the root form's first absence: no usable sidecar at all
+    if _usable_temporal(fetched) is None:
         return None
-    _shards, words = temporal_shard_words(envelope)
+    _shards, words = temporal_shard_words(fetched)
     return Toc(words) if words.size else None

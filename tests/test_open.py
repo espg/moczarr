@@ -8,6 +8,7 @@ goldens in the other test modules must move with it).
 """
 
 import json
+import os
 import shutil
 import warnings
 from pathlib import Path
@@ -1165,3 +1166,56 @@ class TestMocTocAcceptance:
             when=mortie.Toc("2019-05-14T02:00:00", "2019-05-14T03:00:00"),
         )
         assert rels == candidate_leaves(self.TEMPORAL, manifest)
+
+
+@pytest.mark.skipif(
+    not os.environ.get("MOCZARR_LIVE_TESTS"),
+    reason="live S3 acceptance (anonymous, metadata-only); set MOCZARR_LIVE_TESTS=1 to run",
+)
+class TestLiveNotebookAcceptance:
+    """Issue #49's ruled acceptance bar: zagg ``demo/07_minimal.ipynb``'s
+    coverage cell, verbatim, against the published CA store — and equal to
+    the pre-#49 verbose form (handle + manifest threaded, paths re-parsed).
+
+    Metadata-only by design: the manifest and root-sidecar GETs are
+    kilobytes; no shard payload is ever fetched. Env-gated because the
+    committed suite is offline-by-posture (in-tree fixtures only).
+    """
+
+    ROOT = "s3://us-west-2.opendata.source.coop/englacial/zagg/demo/atl03_tdigest_o9.zarr"
+    S3 = {"region": "us-west-2", "anonymous": True}
+    AOI = {
+        "features": [
+            {
+                "geometry": {
+                    "coordinates": [
+                        [
+                            [-120.0, 37.6],
+                            [-119.4, 37.6],
+                            [-119.4, 38.0],
+                            [-120.0, 38.0],
+                            [-120.0, 37.6],
+                        ]
+                    ]
+                }
+            }
+        ]
+    }
+
+    def test_notebook_spelling_matches_the_verbose_form(self):
+        import mortie
+
+        import moczarr as mz
+
+        q = mortie.moc(self.AOI)
+        # The notebook's spelling — no handle, no manifest, no re-parse.
+        cov = mz.coverage_moc(self.ROOT, **self.S3)
+        assert cov.contains(q)
+        ids = set(mz.candidate_shards(self.ROOT, aoi=q, **self.S3))
+        # Today's verbose form of the same question.
+        st = mz.open_object_store(self.ROOT, **self.S3)
+        manifest = store.read_manifest(self.ROOT, store=st)
+        rels = candidate_leaves(self.ROOT, manifest, aoi=q, store=st)
+        verbose = {rel.rsplit("/", 1)[-1].split(".")[0] for rel in rels}
+        assert ids == verbose
+        assert ids  # non-vacuous: the Yosemite box is inside the CA store

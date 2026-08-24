@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Root-taking `coverage_moc` / `coverage_toc`
+  ([#49](https://github.com/espg/moczarr/issues/49)): both typed casts now
+  overload on the first argument — a `str` STORE ROOT fetches the envelope
+  and casts (`coverage_moc(root, anonymous=True)`, one metadata GET through
+  `load_root_coverage`, with `store=`/`**store_kwargs` as that function
+  takes them); a `dict` envelope keeps today's behavior unchanged (store
+  arguments with a dict are a `TypeError`). `coverage_toc`'s root form
+  collapses its two absences — no usable root sidecar at all, and a sidecar
+  with no usable temporal section — into the one `None`, stated in the
+  docstring; `coverage_moc` keeps its no-absence posture and raises
+  `ValueError` on a root publishing no usable envelope (the envelope is a
+  regenerable cache — no empty cover is fabricated in its place). An
+  UNREACHABLE store raises the transport's own error for both, never an
+  absence answer: absence of coverage is not absence of a store.
+
 - New public `candidate_shards(store_root, manifest=None, aoi=None,
   window=None, **store_kwargs)`
   ([#49](https://github.com/espg/moczarr/issues/49)): `candidate_leaves`
