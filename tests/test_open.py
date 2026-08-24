@@ -823,8 +823,15 @@ class TestCandidateConvenience:
             return real(path)
 
         monkeypatch.setattr(mstore, "open_object_store", spy)
-        assert candidate_leaves(serc, probe="marker") == candidate_leaves(serc)
-        assert calls and all(c.get("probe") == "marker" for c in calls[: len(calls) // 2])
+        # Split the two calls' records rather than slicing one list in half:
+        # the halves only line up while both routes construct the same
+        # number of stores, and this also pins the negative — kwargs must
+        # not leak into the call that passed none.
+        with_kwargs = candidate_leaves(serc, probe="marker")
+        stamped, calls[:] = list(calls), []
+        assert with_kwargs == candidate_leaves(serc)
+        assert stamped and all(c.get("probe") == "marker" for c in stamped)
+        assert calls and all("probe" not in c for c in calls)
 
     def test_shared_store_wins_over_kwargs(self, serc, monkeypatch):
         # store= is the share-one-handle path: with a handle given, no
