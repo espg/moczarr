@@ -748,6 +748,46 @@ class TestCandidateConvenience:
             candidate_shards(self.MULTIROOT)
         assert candidate_shards(f"{self.MULTIROOT}/atl06")
 
+    def test_when_matches_the_verbose_form(self, temporal_store):
+        # The fetched manifest feeding the §10 tier-1 pruning branch, which
+        # every when= case elsewhere reaches with the manifest passed.
+        manifest = store.read_manifest(temporal_store)
+        assert candidate_shards(temporal_store, when=TEMPORAL_WINDOW) == candidate_shards(
+            temporal_store, manifest, when=TEMPORAL_WINDOW
+        )
+        assert candidate_leaves(temporal_store, when=TEMPORAL_WINDOW) == candidate_leaves(
+            temporal_store, manifest, when=TEMPORAL_WINDOW
+        )
+        # ... and it really prunes, so the equality is not two no-ops.
+        assert candidate_shards(temporal_store, when=TEMPORAL_WINDOW) == [
+            TEMPORAL_IN,
+            TEMPORAL_UNLISTED,
+        ]
+
+    def test_windowed_store_matches_the_verbose_form(self, tmp_path):
+        # The fetched manifest drives `windowed` and both guards it feeds:
+        # the envelope skip when window is None, and the walk-route "pass
+        # window=" raise. Neither was crossed with the manifest omitted.
+        copy = tmp_path / "serc"
+        shutil.copytree(FIXTURE, copy)
+        manifest = json.loads((copy / convention.MANIFEST_NAME).read_text())
+        manifest["spec"] = convention.HIVE_SPEC_V2
+        manifest["temporal"] = {"schedule": "yearly", "time_field": "delta_time"}
+        (copy / convention.MANIFEST_NAME).write_text(json.dumps(manifest))
+        rel = convention.leaf_path(SERC_SHARD)
+        (copy / rel).rename((copy / rel).parent / f"{SERC_SHARD}_2019.zarr")
+        fetched = store.read_manifest(str(copy))
+        assert (
+            candidate_shards(str(copy), aoi=[SERC_SHARD], window="2019")
+            == candidate_shards(str(copy), fetched, [SERC_SHARD], "2019")
+            == [SERC_SHARD]
+        )
+        assert candidate_leaves(str(copy), aoi=[SERC_SHARD], window="2019") == candidate_leaves(
+            str(copy), fetched, [SERC_SHARD], "2019"
+        )
+        with pytest.raises(ValueError, match="pass window="):
+            candidate_shards(str(copy))
+
     def test_walk_route_shares_the_one_handle_too(self, serc, monkeypatch):
         # The walk branch forwarded **store_kwargs into walk_leaves, which
         # takes its own path_grouping= — so path_grouping= was a TypeError
