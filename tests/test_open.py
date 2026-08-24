@@ -17,7 +17,15 @@ import pytest
 import xarray as xr
 from conftest import FakeMoc, FakeToc, build_many_leaf_store
 
-from moczarr import candidate_leaves, convention, coverage, open_hive, store
+from moczarr import (
+    candidate_leaves,
+    candidate_shards,
+    convention,
+    coverage,
+    open_hive,
+    open_leaf,
+    store,
+)
 
 FIXTURE = Path(__file__).parent / "data" / "serc_hive"
 #: SERC-area order-6 shard containing the site itself (see the generator).
@@ -536,6 +544,66 @@ class TestCandidateLeaves:
     def test_window_is_validated_and_refused_on_an_unwindowed_store(self, serc):
         with pytest.raises(ValueError, match="unwindowed stores"):
             candidate_leaves(serc, store.read_manifest(serc), None, "2019")
+
+
+class TestCandidateShards:
+    """``candidate_leaves``' id-returning sibling (issue #49).
+
+    One shared implementation is the design claim, so what is pinned here is
+    correspondence: for equal arguments the two lists are positionally
+    identical views of the same selection, and the ids are exactly what
+    ``open_leaf`` takes — no path re-parsing anywhere.
+    """
+
+    def _stems(self, rels):
+        return [convention.split_leaf_name(rel.rsplit("/", 1)[-1])[0] for rel in rels]
+
+    def test_ids_name_the_leaves_positionally(self, serc):
+        manifest = store.read_manifest(serc)
+        assert candidate_shards(serc, manifest) == self._stems(candidate_leaves(serc, manifest))
+        assert candidate_shards(serc, manifest, [SERC_SHARD]) == [SERC_SHARD]
+        # Sub-shard AOI member: shards are cut whole, ids at shard order.
+        assert candidate_shards(serc, manifest, [SERC_SHARD + "1"]) == [SERC_SHARD]
+
+    def test_ids_open_through_open_leaf(self, serc):
+        # The point of the sibling: select-then-open with no string surgery.
+        import zarr
+
+        manifest = store.read_manifest(serc)
+        for shard in candidate_shards(serc, manifest, [SERC_SHARD]):
+            group = zarr.open_group(open_leaf(serc, shard, manifest=manifest), mode="r")
+            assert convention.COMMIT_ATTR in group.attrs
+
+    def test_walk_fallback_corresponds_too(self, serc, tmp_path):
+        # D9 through the shared implementation: the walk route keeps the
+        # same positional id<->path correspondence as the arithmetic route.
+        copy = tmp_path / "serc"
+        shutil.copytree(FIXTURE, copy)
+        (copy / convention.ROOT_COVERAGE_NAME).unlink()
+        manifest = store.read_manifest(str(copy))
+        assert candidate_shards(str(copy), manifest) == self._stems(
+            candidate_leaves(str(copy), manifest)
+        )
+        assert set(candidate_shards(str(copy), manifest)) >= set(
+            candidate_shards(serc, store.read_manifest(serc))
+        )
+
+    def test_windowed_ids_are_bare_shards(self, tmp_path):
+        # A windowed leaf's id excludes the window label: open_leaf takes the
+        # same window= the selection did, so the id must stay the bare shard.
+        copy = tmp_path / "serc"
+        shutil.copytree(FIXTURE, copy)
+        manifest = json.loads((copy / convention.MANIFEST_NAME).read_text())
+        manifest["spec"] = convention.HIVE_SPEC_V2
+        manifest["temporal"] = {"schedule": "yearly", "time_field": "delta_time"}
+        (copy / convention.MANIFEST_NAME).write_text(json.dumps(manifest))
+        rel = convention.leaf_path(SERC_SHARD)
+        (copy / rel).rename((copy / rel).parent / f"{SERC_SHARD}_2019.zarr")
+        manifest = store.read_manifest(str(copy))
+        ids = candidate_shards(str(copy), manifest, [SERC_SHARD], "2019")
+        rels = candidate_leaves(str(copy), manifest, [SERC_SHARD], "2019")
+        assert ids == [SERC_SHARD]
+        assert rels == [convention.leaf_path(SERC_SHARD, window="2019")]
 
 
 class TestCandidateLeavesWhen:
