@@ -588,6 +588,31 @@ class TestCandidateShards:
             candidate_shards(serc, store.read_manifest(serc))
         )
 
+    def test_point_word_object_is_named_by_neither_view(self, tmp_path):
+        # §2/§6.6: points never live in hive paths, so an object whose stem
+        # is an order-29 POINT id is not a leaf. The arithmetic route cannot
+        # name one (leaf_path refuses the word), so a walk that named it
+        # would hand back an id open_leaf rejects — the walk/arithmetic
+        # divergence D9 forbids.
+        point_id = SERC_SHARD + "1" * 23 + "p"
+        assert convention.decimal_order(point_id[:-1]) == 29
+        with pytest.raises(ValueError, match="POINT"):
+            convention.leaf_path(point_id)
+        copy = tmp_path / "serc"
+        shutil.copytree(FIXTURE, copy)
+        (copy / convention.ROOT_COVERAGE_NAME).unlink()  # force the walk route
+        obj = (copy / convention.leaf_path(SERC_SHARD)).parent / f"{point_id}.zarr"
+        obj.mkdir()
+        (obj / "zarr.json").write_text(
+            json.dumps({"zarr_format": 3, "node_type": "group", "attributes": {}})
+        )
+        manifest = store.read_manifest(str(copy))
+        assert f"{point_id}.zarr" in {
+            rel.rsplit("/", 1)[-1] for rel in store.walk_leaves(str(copy))
+        }
+        assert point_id not in candidate_shards(str(copy), manifest)
+        assert not [rel for rel in candidate_leaves(str(copy), manifest) if point_id in rel]
+
     def test_windowed_ids_are_bare_shards(self, tmp_path):
         # A windowed leaf's id excludes the window label: open_leaf takes the
         # same window= the selection did, so the id must stay the bare shard.
