@@ -1173,9 +1173,19 @@ class TestMocTocAcceptance:
     reason="live S3 acceptance (anonymous, metadata-only); set MOCZARR_LIVE_TESTS=1 to run",
 )
 class TestLiveNotebookAcceptance:
-    """Issue #49's ruled acceptance bar: zagg ``demo/07_minimal.ipynb``'s
-    coverage cell, verbatim, against the published CA store — and equal to
+    """Issue #49's ruled acceptance bar, spelled as the plan comment rules it
+    (``issues/49#issuecomment-5397361701``): ``coverage_moc(root, **S3)`` then
+    ``candidate_shards(root, aoi=q, **S3)`` — no handle, no manifest, no
+    re-parse — against the published store, returning the same shard set as
     the pre-#49 verbose form (handle + manifest threaded, paths re-parsed).
+
+    It pins the SPELLING, not zagg ``demo/07_minimal.ipynb`` cell-for-cell:
+    the AOI here is a Yosemite box because ``atl03_tdigest_o9.zarr`` holds
+    the CALIFORNIA campaign today (the notebook's SERC/NEON polygon would
+    fail ``contains`` against it until those append), and the notebook's
+    cross-store intersection is out of scope until ``gedi_flux_o9.zarr``
+    publishes. So green here means the API spelling runs, not that the
+    notebook does.
 
     Metadata-only by design: the manifest and root-sidecar GETs are
     kilobytes; no shard payload is ever fetched. Env-gated because the
