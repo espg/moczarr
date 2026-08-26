@@ -70,7 +70,13 @@ import zarr
 from mortie import clip2order, orders_of, rank_to_xy, xy_to_rank
 from zarr.abc.store import Store
 
-from moczarr.convention import COMMIT_ATTR, morton_word, point_to_area29
+from moczarr.convention import (
+    COMMIT_ATTR,
+    is_point_word,
+    morton_decimal,
+    morton_word,
+    point_to_area29,
+)
 from moczarr.coverage import decode_bitmap, parse_leaf_coverage
 from moczarr.ragged import (
     _cells_order,
@@ -770,6 +776,40 @@ def has_exact_occupancy(store: Store) -> bool:
     return _coverage_occupancy(store) is not None
 
 
+def _read_chunk_id(morton_index: int | str) -> tuple[int, str]:
+    """``(word, decimal)`` of a read-chunk id, or a ValueError naming the caller.
+
+    The validation :func:`moczarr.convention.normalize_subtree` performs for
+    ``subtree=``, applied to :func:`cell_index`'s ``morton_index``: a bare
+    :func:`moczarr.convention.morton_word` passes any int straight through,
+    so a malformed one reached the span scan and came back reported as a
+    missing chunk — the store blamed for a caller's mistake. Validity is
+    checked before kind, so an id whose §1 prefix nibble is ``0`` (a decimal
+    id typed as an int, most of the time) is called what it is rather than
+    misread as a POINT word off its suffix band.
+    """
+    word = morton_word(morton_index) if isinstance(morton_index, str) else int(morton_index)
+    if not 0 <= word < 2**64:
+        raise ValueError(
+            f"morton_index {morton_index!r} is outside the uint64 range, not a packed "
+            f"morton word; parse a decimal id by passing it as a string instead"
+        )
+    try:
+        decimal = morton_decimal(word)
+    except ValueError as exc:
+        raise ValueError(
+            f"morton_index {morton_index!r} is not a valid packed morton word; parse "
+            f"a decimal id by passing it as a string instead (an int argument is read "
+            f"as a packed word)"
+        ) from exc
+    if is_point_word(word):
+        raise ValueError(
+            f"morton_index {morton_index!r} is an order-29 POINT word: a read-chunk id "
+            f"names an AREA subtree (spec §1/§4 — points have no descendants)"
+        )
+    return word, decimal
+
+
 def cell_index(
     store: Store,
     field: str,
@@ -792,7 +832,15 @@ def cell_index(
 
     ``morton_index`` is a READ-CHUNK id — the id :func:`moczarr.read_ragged`
     and the default (per-chunk, ``block_order=None``) :func:`read_tensors`
-    report — as a packed area word or a decimal string. A coarser
+    report — as a packed area word or a decimal string. Both currencies are
+    validated BEFORE the store is searched, the way
+    :func:`moczarr.convention.normalize_subtree` validates ``subtree=``: an
+    int outside the uint64 range, an int that is not a valid packed word,
+    and an order-29 POINT word each get their own error naming the CALLER's
+    mistake, rather than reaching the span scan and coming back blaming the
+    store. The one case no guard can catch — a decimal id typed as an int
+    that happens to have a legal prefix nibble — is why the not-found
+    message renders BOTH currencies of what it parsed. A coarser
     ``block_order`` block id names no single chunk and raises. Only the
     array's STORED spans are searched
     (:func:`moczarr.ragged.stored_chunk_spans`, the same objects the sweep
@@ -802,8 +850,10 @@ def cell_index(
     Raises
     ------
     ValueError
-        If ``row``/``col`` are outside the chunk's ``(side, side)`` block, or
-        no stored chunk carries ``morton_index``.
+        If ``morton_index`` is not a well-formed AREA read-chunk id in
+        either currency, if ``row``/``col`` are outside the chunk's
+        ``(side, side)`` block, or if no stored chunk carries
+        ``morton_index``.
     """
     arr, _element = open_ragged(store, field, zarr_format=zarr_format)
     morton = _morton_words(store, field, zarr_format)
@@ -812,7 +862,7 @@ def cell_index(
     if not (0 <= int(row) < side and 0 <= int(col) < side):
         raise ValueError(f"({row}, {col}) is outside {field!r}'s ({side}, {side}) read-chunk block")
     rank = int(rowcol_to_rank(int(row), int(col), depth))
-    target = morton_word(morton_index)
+    target, decimal = _read_chunk_id(morton_index)
     for span_start, span_stop in stored_chunk_spans(arr):
         span_words = morton[span_start:span_stop]
         for offset in range(0, span_stop - span_start, cells_per_chunk):
@@ -822,7 +872,9 @@ def cell_index(
                 continue
             return start + rank
     raise ValueError(
-        f"no stored read chunk of {field!r} carries morton id {target} — "
-        f"cell_index resolves the READ-CHUNK ids the sweep readers report "
-        f"(a coarser block_order block id names no single chunk)"
+        f"no stored read chunk of {field!r} carries morton id {decimal} (word "
+        f"{target}) — cell_index resolves the READ-CHUNK ids the sweep readers "
+        f"report (a coarser block_order block id names no single chunk; and an "
+        f"int argument is read as a PACKED word, so a decimal id passed as an "
+        f"int resolves to the unrelated id shown here)"
     )

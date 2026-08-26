@@ -496,6 +496,34 @@ class TestCellIndex:
         with pytest.raises(ValueError, match="no stored read chunk"):
             cell_index(_store(), SIGNAL, "433143", 0, 0)
 
+    @pytest.mark.parametrize(
+        "bad, match",
+        [
+            (-5, "outside the uint64 range"),
+            (2**70, "outside the uint64 range"),
+            (0, "not a valid packed morton word"),
+            (433144, "not a valid packed morton word"),  # a decimal id typed as an int
+        ],
+    )
+    def test_a_malformed_id_names_the_caller_not_the_store(self, bad, match):
+        # The widening accepts ints; a bare morton_word pass-through let a
+        # malformed one reach the span scan and come back as "no stored read
+        # chunk" — the store blamed for the caller's mistake.
+        with pytest.raises(ValueError, match=match):
+            cell_index(_store(), SIGNAL, bad, 0, 0)
+
+    def test_a_point_word_is_refused_as_a_chunk_id(self):
+        point = int(area29_to_point(morton_word("5" + "1234" * 7 + "3")))
+        with pytest.raises(ValueError, match="POINT word"):
+            cell_index(_store(), SIGNAL, point, 0, 0)
+
+    def test_the_not_found_message_renders_both_currencies(self):
+        # The one mis-parse no guard can catch: a decimal id typed as an int
+        # whose §1 prefix nibble is legal, so it IS a well-formed word — just
+        # not the caller's. Showing the decimal makes that visible.
+        with pytest.raises(ValueError, match=r"morton id 42343432 \(word 5111111111111111111\)"):
+            cell_index(_store(), SIGNAL, 5111111111111111111, 0, 0)
+
     @pytest.mark.parametrize("rowcol", [(2, 0), (0, 2), (-1, 0), (0, -1)])
     def test_row_col_outside_the_block_raises(self, rowcol):
         with pytest.raises(ValueError, match=r"outside .* \(2, 2\) read-chunk block"):
