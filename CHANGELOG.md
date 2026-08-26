@@ -47,8 +47,14 @@
   `morton` per span — never the whole axis, and no digest bytes), and a
   coarser `block_order` block id, which names no single chunk, raises.
   `morton_index` takes either currency, a packed area word or a decimal
-  string. A probe-gated parity leg runs it side by side with the zagg
-  function it was ported from.
+  string, and both are validated before the store is searched — the way
+  `normalize_subtree` validates `subtree=` — so an int outside the uint64
+  range, an int that is not a valid packed word, and an order-29 POINT word
+  each name the CALLER's mistake instead of coming back as a missing chunk.
+  The one mis-parse no guard can catch, a decimal id typed as an int whose
+  §1 prefix nibble happens to be legal, is why the not-found message renders
+  both currencies of what it parsed. A probe-gated parity leg runs it side
+  by side with the zagg function it was ported from.
 
 - `open_ragged`, `read_commits` and `read_leaf_metas` are now on the package
   root ([#49](https://github.com/espg/moczarr/issues/49)): each was
