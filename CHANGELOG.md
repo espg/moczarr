@@ -22,7 +22,12 @@
   depth. Vectorized over the ≤29 LEVELS, never over the words: a located
   companion is millions of words per leaf, where a per-word `morton_decimal`
   loop is not an option. `block_order` finer than any word's own order
-  raises rather than truncating. Pinned against the `morton_decimal` digit
+  raises rather than truncating, and so does the `0` FILL word at every
+  `block_order` — a companion's `morton` coordinate is fill-padded over its
+  unwritten rows, `0` is not a word (the §1 prefix nibble is base cell + 1,
+  so prefix `0` is unreachable), and at `block_order == 0` a pass-through
+  would report it as a legitimate order-0, rank-0 word. Pinned against the
+  `morton_decimal` digit
   oracle (digit at level `L`, minus 1, is that level's rank) across every
   order 0..29, and against the fixture's cells axis — a cell word ranked at
   the shard order reproduces its cells-axis position, which is the tie back
