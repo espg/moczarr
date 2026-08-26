@@ -487,6 +487,42 @@ class TestCellIndex:
             cell_index(_store(), SIGNAL, "433141", *rowcol)
 
 
+class TestCellIndexReadPosture:
+    """``cell_index``'s read posture, pinned the way ``read_tensors``' is.
+
+    Neither half of the docstring's claim shows up in the ANSWER, so both
+    need their own pin: **no digest bytes** — a ``CountingStore`` GET count,
+    the same instrument as :class:`TestGetPosture` — and **only the array's
+    STORED spans**, never the whole axis. The strata fixture cannot show the
+    second (its cells axis is one shard object, so stored spans and whole
+    axis are the same interval); ``test_ragged``'s flat store can, because
+    its inner chunks 1-2 have no object while the dense ``morton``
+    coordinate still names them — a whole-axis scan answers ``4``/``8`` for
+    those two chunk ids instead of refusing them.
+    """
+
+    def test_reads_no_digest_bytes(self):
+        from test_ragged import CountingStore
+
+        store = CountingStore(LEAF)
+        store.gets.clear()
+        assert cell_index(store, SIGNAL, "433141", 1, 0) == 2
+        assert [g for g in store.gets if f"{SIGNAL}/c/" in g[0]] == []
+        assert len([g for g in store.gets if f"{GROUP}/morton/c/" in g[0]]) == 1
+
+    def test_an_unstored_span_is_never_searched(self, tmp_path):
+        from test_ragged import SHARD, TAILS, build_store
+
+        root, _expected = build_store(tmp_path, sharded=False)
+        store = LocalStore(root)
+        chunk_ids = [SHARD + TAILS[i][0] for i in (0, 4, 8, 12)]
+        assert cell_index(store, "g/field", chunk_ids[0], 0, 0) == 0
+        assert cell_index(store, "g/field", chunk_ids[3], 1, 1) == 15
+        for absent in chunk_ids[1:3]:
+            with pytest.raises(ValueError, match="no stored read chunk"):
+                cell_index(store, "g/field", absent, 0, 0)
+
+
 @pytest.mark.skipif(HAS_ZAGG, reason="runs only in a core (no-zagg) environment")
 class TestMissingExtraHint:
     def test_read_tensors_names_the_extra(self):
