@@ -158,10 +158,15 @@ def block_rank(words, block_order: int) -> tuple[np.ndarray, np.ndarray]:
     block has to recover each word's nested rank *within that block* itself.
     On the tensor path a cell's rank IS its position on the cells axis and
     no word is ever decoded — this is the same quantity for the path where
-    it is not handed to you. Pairs with :func:`rank_to_rowcol`::
+    it is not handed to you. Pairs with :func:`rank_to_rowcol`, one
+    vectorized call per depth (a real companion is mixed-order, so a single
+    call on ``order[0]`` would raise *rank must lie in [0, 4**d)* on every
+    word of a different order)::
 
         rank, order = block_rank(located_words, block_order)
-        row, col = rank_to_rowcol(rank, int(order[0]) - block_order)
+        for depth in np.unique(order - block_order):
+            sel = order - block_order == depth
+            row, col = rank_to_rowcol(rank[sel], int(depth))
 
     Point words normalize first (:func:`moczarr.convention.point_to_area29`
     — the §1 suffix re-base ``48 + t28*4 + t29`` ->
