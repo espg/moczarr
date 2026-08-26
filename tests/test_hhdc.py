@@ -17,6 +17,11 @@ Parity is pinned two ways against the committed SERC strata fixture
   this leg is effectively always-on wherever the extra installs. The gates
   stay surface probes rather than version compares, because the surface,
   not the version string, is what the port depends on.
+- **``cell_index`` parity** (needs zagg's ``cell_index``, the reference
+  implementation issue #52 ported): the two resolve every populated cell of
+  the fixture to the same axis index, and refuse a coarser block id the same
+  way. Probe-gated for the same reason as the subtree leg — the function
+  post-dates the ``>=0.40`` floor.
 - **Subtree parity** (additionally needs zagg's ``subtree=`` read surface,
   englacial/zagg#351 — first released in **zagg 0.42.0**): the same
   side-by-side comparison for span-restricted reads, plus the warn/raise
@@ -37,6 +42,7 @@ exercises it.
 import importlib.util
 import json
 import math
+import random
 import shutil
 from pathlib import Path
 
@@ -45,18 +51,29 @@ import pytest
 from numcodecs import Zstd
 from zarr.storage import LocalStore
 
-from moczarr.convention import COMMIT_ATTR, COVERAGE_SIDECAR
+from moczarr.convention import (
+    COMMIT_ATTR,
+    COVERAGE_SIDECAR,
+    area29_to_point,
+    decimal_base,
+    decimal_rank,
+    is_point_word,
+    morton_decimal,
+    morton_word,
+)
 from moczarr.hhdc import (
     _block_mask,
     _chunk_word,
     _load_occupancy,
     _tensor_side,
+    block_rank,
+    cell_index,
     has_exact_occupancy,
     rank_to_rowcol,
     read_tensors,
     rowcol_to_rank,
 )
-from moczarr.ragged import _morton_words, open_ragged
+from moczarr.ragged import _morton_words, iter_populated_chunks, open_ragged, read_cell, read_ragged
 
 DATA = Path(__file__).parent / "data"
 GOLDENS = DATA / "strata_goldens"
@@ -68,6 +85,11 @@ NOISE = f"{GROUP}/h_tdigest_noise"
 BLOCK_ORDER = int(EXPECTED["goldens"]["params"]["block_order"])
 #: Cells-axis depth of the fixture leaf (16 cells = one order-4 shard subtree).
 LEAF_DEPTH = 2
+#: The fixture's three nested orders: shard (the cells axis' root), read
+#: chunk (4 cells), and cell.
+SHARD_ORDER = int(EXPECTED["shard_order"])
+CHUNK_ORDER = int(EXPECTED["chunk_order"])
+CELL_ORDER = int(EXPECTED["cell_order"])
 #: The zagg commit whose ``readers/tdigest_tensor.py`` the ported reader logic
 #: in :mod:`moczarr.hhdc` mirrors: the englacial/zagg#336 fold. It carries no
 #: tag; zagg **0.40.0** is the first release carrying ``has_exact_occupancy``
@@ -223,6 +245,246 @@ class TestOccupancyPredicate:
 
     def test_stripped_stamp_degrades(self, tmp_path):
         assert has_exact_occupancy(_stripped_leaf(tmp_path)) is False
+
+
+def _digit_oracle(word, block_order):
+    """``(rank, order)`` of one word from :func:`moczarr.morton_decimal`.
+
+    The independent oracle the zagg notebook's hand-rolled decode was
+    finally pinned against, and the one that caught its bug: the decimal
+    id's digit at level ``L``, minus 1, IS that level's rank, so the
+    block-local rank is the base-4 value of the digits below the block —
+    which is exactly what :func:`moczarr.convention.decimal_rank` (frozen,
+    golden-tested in ``test_convention.py``) computes over a synthesized
+    tail. Deliberately string arithmetic: it shares no bit with the kernel
+    under test.
+    """
+    decimal = morton_decimal(int(word)).removesuffix("p")  # POINT -> its area twin's digits
+    base = decimal_base(decimal)
+    tail = decimal[len(base) :]
+    return decimal_rank(base + tail[block_order:]), len(tail)
+
+
+def _sample_ids(seed=52):
+    """A deterministic spread of decimal ids over every order 0..29."""
+    rng = random.Random(seed)
+    ids = []
+    for order in range(30):
+        for _ in range(3):
+            sign = rng.choice(["", "-"])
+            tail = "".join(rng.choice("1234") for _ in range(order))
+            ids.append(sign + rng.choice("123456") + tail)
+    return ids
+
+
+def _located_words(field=SIGNAL):
+    """The fixture's located companion words for its first populated cell.
+
+    Real words written by zagg's production writer (spec §9): mostly
+    order-29 POINTs, with coarser AREA fallbacks mixed in — the array
+    shape ``block_rank`` exists for.
+    """
+    _cell, _digest, locations = next(iter(read_ragged(_store(), field, locations=True)))
+    return np.asarray(locations, dtype=np.uint64)
+
+
+class TestPackedWordGeometry:
+    """The spec §1 packed-word layout ``block_rank`` decodes, re-verified.
+
+    ``[4-bit prefix | 54-bit body | 6-bit suffix]``: the body carries one
+    2-bit digit per level for levels 1..27 (most significant first, so
+    level ``L`` sits at bit ``6 + 2*(27 - L)``); levels 28 and 29 have no
+    body room and ride the suffix's parent-first preorder band
+    ``28 + t28*5 + (t29 + 1)``.
+    """
+
+    @pytest.mark.parametrize("level", [1, 2, 13, 26, 27])
+    def test_body_levels_carry_two_bits_at_the_documented_place(self, level):
+        for digit in range(4):
+            tail = "1" * (level - 1) + str(digit + 1) + "1" * (27 - level)
+            word = morton_word("1" + tail)
+            assert word & 0x3F == 27  # an order-27 id: the suffix IS the order
+            assert (word >> (6 + 2 * (27 - level))) & 0x3 == digit
+
+    def test_orders_28_and_29_ride_the_suffix_preorder_band(self):
+        for t28 in range(4):
+            stem = "1" + "1" * 27 + str(t28 + 1)
+            assert morton_word(stem) & 0x3F == 28 + t28 * 5
+            for t29 in range(4):
+                word = morton_word(stem + str(t29 + 1))
+                assert word & 0x3F == 28 + t28 * 5 + t29 + 1
+                # ... and the POINT twin re-bases the same body to 48 + t28*4 + t29.
+                assert area29_to_point(word) & 0x3F == 48 + t28 * 4 + t29
+
+
+class TestBlockRank:
+    """``block_rank`` against the ``morton_decimal`` digit oracle."""
+
+    @pytest.mark.parametrize("block_order", [0, 1, 4, 6, 27, 28, 29])
+    def test_matches_the_digit_oracle_for_every_order(self, block_order):
+        ids = [i for i in _sample_ids() if _digit_oracle(morton_word(i), 0)[1] >= block_order]
+        words = np.array([morton_word(i) for i in ids], dtype=np.uint64)
+        assert words.size  # non-vacuous at every parametrized block order
+        rank, order = block_rank(words, block_order)
+        expected = [_digit_oracle(w, block_order) for w in words]
+        np.testing.assert_array_equal(rank, [r for r, _o in expected])
+        np.testing.assert_array_equal(order, [o for _r, o in expected])
+        assert bool(np.all(rank < 4 ** (order - block_order)))
+
+    def test_mixed_orders_in_one_array(self):
+        # A leaf mixes order-29 located words with coarser cell words; GEDI
+        # cell words are order 18. Per-word order is what lets a caller group
+        # by depth and make one rank_to_rowcol call per group.
+        ids = [EXPECTED["shard"] + "2" * (order - SHARD_ORDER) for order in (6, 18, 29)]
+        words = np.array([morton_word(i) for i in ids], dtype=np.uint64)
+        rank, order = block_rank(words, SHARD_ORDER)
+        np.testing.assert_array_equal(order, [6, 18, 29])
+        np.testing.assert_array_equal(rank, [_digit_oracle(w, SHARD_ORDER)[0] for w in words])
+        for depth in np.unique(order - SHARD_ORDER):
+            group = order - SHARD_ORDER == depth
+            rows, cols = rank_to_rowcol(rank[group], int(depth))
+            np.testing.assert_array_equal(rowcol_to_rank(rows, cols, int(depth)), rank[group])
+
+    def test_point_words_normalize_to_their_area_twin(self):
+        area = morton_word("5" + "1234" * 7 + "3")  # order 29
+        point = area29_to_point(area)
+        assert is_point_word(point)
+        both = block_rank(np.array([area, point], dtype=np.uint64), 6)
+        assert int(both[0][0]) == int(both[0][1]) == _digit_oracle(area, 6)[0]
+        np.testing.assert_array_equal(both[1], [29, 29])
+
+    def test_located_point_words_decode_in_band(self):
+        """The zagg ``demo/07_minimal.ipynb`` bug, pinned.
+
+        Most of the fixture's located companion is real order-29 POINT
+        words. Read WITHOUT :func:`moczarr.convention.point_to_area29`
+        their level-28 digit comes out of the point band
+        (``(suffix - 28) // 5`` is 4..7, never 0..3), and the notebook's
+        ``rank_to_rowcol(..., 1)`` at the deepest level raised ``rank must
+        lie in [0, 4)``.
+        """
+        words = _located_words()
+        points = words[np.asarray(is_point_word(words))]
+        assert points.size
+        raw_suffix = (points & np.uint64(0x3F)).astype(np.int64)
+        assert bool(np.all((raw_suffix - 28) // 5 > 3))  # the un-normalized read
+        rank, order = block_rank(points, 28)
+        np.testing.assert_array_equal(order, np.full(points.shape, 29))
+        rows, cols = rank_to_rowcol(rank, 1)
+        assert bool(np.all(rows < 2)) and bool(np.all(cols < 2))
+        np.testing.assert_array_equal(rank, [_digit_oracle(w, 28)[0] for w in points])
+
+    def test_a_real_located_companion_is_mixed_kind_and_mixed_order(self):
+        # Not a constructed case: the fixture's own companion carries
+        # order-29 points alongside coarser AREA fallbacks (its cell word,
+        # and order-22 words), all in one array — which is why block_rank
+        # returns the per-word order instead of assuming one.
+        words = _located_words()
+        rank, order = block_rank(words, CELL_ORDER)
+        assert set(int(o) for o in order) == {6, 22, 29}
+        np.testing.assert_array_equal(rank, [_digit_oracle(w, CELL_ORDER)[0] for w in words])
+        for depth in np.unique(order - CELL_ORDER):
+            group = order - CELL_ORDER == depth
+            rows, cols = rank_to_rowcol(rank[group], int(depth))
+            np.testing.assert_array_equal(rowcol_to_rank(rows, cols, int(depth)), rank[group])
+
+    def test_located_words_rank_inside_the_cell_that_stores_them(self):
+        # The composed claim a located reader makes: an observation's
+        # shard-local rank starts with its CELL's shard-local rank — at
+        # every order the companion mixes.
+        cell = int(EXPECTED["cells"][0]["morton"])
+        words = _located_words()
+        rank, order = block_rank(words, SHARD_ORDER)
+        cell_rank, _o = block_rank(np.asarray([cell], dtype=np.uint64), SHARD_ORDER)
+        prefix = rank >> (2 * (order - CELL_ORDER)).astype(np.uint64)
+        np.testing.assert_array_equal(prefix, np.full(words.shape, int(cell_rank[0])))
+        assert int(cell_rank[0]) == EXPECTED["cells"][0]["index"]
+
+    def test_cell_words_reproduce_their_cells_axis_position(self):
+        """The tie to the tensor path: on a nested-ordered cells axis a
+        cell's rank within the axis' shard subtree IS its axis index, which
+        is why ``read_tensors`` never decodes a word."""
+        _arr, words = _cells_axis(_store())
+        written = words != 0
+        rank, order = block_rank(words[written], SHARD_ORDER)
+        np.testing.assert_array_equal(rank, np.flatnonzero(written))
+        np.testing.assert_array_equal(order, np.full(rank.shape, CELL_ORDER))
+        # ... and one order finer, the chunk-local rank the sweep reports.
+        chunk_rank, _o = block_rank(words[written], CHUNK_ORDER)
+        np.testing.assert_array_equal(chunk_rank, np.flatnonzero(written) % 4)
+
+    def test_block_order_finer_than_a_word_raises(self):
+        words = np.array([morton_word("43314"), morton_word("4331411")], dtype=np.uint64)
+        with pytest.raises(ValueError, match="finer than 1 of the 2 word"):
+            block_rank(words, 6)
+
+    def test_negative_block_order_raises(self):
+        with pytest.raises(ValueError, match="negative"):
+            block_rank(np.array([morton_word("43314")], dtype=np.uint64), -1)
+
+    def test_shapes_and_dtypes(self):
+        rank, order = block_rank(np.uint64(morton_word("4331411")), 4)
+        assert rank.shape == () and order.shape == ()  # scalar in -> 0-d out
+        assert rank.dtype == np.uint64 and order.dtype == np.int64
+        rank, order = block_rank(np.empty(0, dtype=np.uint64), 9)
+        assert rank.shape == (0,) and order.shape == (0,)
+        rank, order = block_rank(np.zeros((2, 3), dtype=np.uint64) + morton_word("4331411"), 4)
+        assert rank.shape == order.shape == (2, 3)
+
+
+class TestCellIndex:
+    """``cell_index``: chunk-local ``(row, col)`` -> the ``read_cell`` key."""
+
+    def test_resolves_every_populated_cell_to_its_axis_index(self):
+        store = _store()
+        arr, words = _cells_axis(store)
+        side, depth = _tensor_side(arr, SIGNAL)
+        for start, populated in iter_populated_chunks(arr):
+            chunk = _chunk_word(words[start : start + side * side], SIGNAL, start)
+            for rank, _raw in populated:
+                row, col = rank_to_rowcol(rank, depth)
+                index = cell_index(store, SIGNAL, chunk, int(row), int(col))
+                assert index == start + rank
+                assert len(read_cell(store, SIGNAL, index))  # the digest is really there
+
+    def test_the_bare_rank_would_read_the_wrong_cell(self):
+        # The failure the function exists to prevent: rank 3 of chunk
+        # 433144 is cell 15, but read_cell(3) is in range and silent.
+        store = _store()
+        assert cell_index(store, SIGNAL, "433144", 1, 1) == 15
+        assert int(rowcol_to_rank(1, 1, 1)) == 3
+
+    def test_accepts_both_id_currencies(self):
+        store = _store()
+        assert cell_index(store, SIGNAL, "433141", 1, 0) == cell_index(
+            store, SIGNAL, morton_word("433141"), 1, 0
+        )
+
+    def test_composes_with_block_rank(self):
+        # The two new primitives end to end: word -> chunk-local rank ->
+        # (row, col) -> the global cells-axis index the word came from.
+        store = _store()
+        for cell in EXPECTED["cells"]:
+            word = np.asarray([int(cell["morton"])], dtype=np.uint64)
+            rank, order = block_rank(word, CHUNK_ORDER)
+            row, col = rank_to_rowcol(rank, int(order[0]) - CHUNK_ORDER)
+            chunk = morton_decimal(int(cell["morton"]))[:-1]  # cell order -> chunk order
+            assert cell_index(store, SIGNAL, chunk, int(row[0]), int(col[0])) == cell["index"]
+
+    def test_coarser_block_id_raises(self):
+        # The order-4 shard word names the whole axis, not one read chunk.
+        with pytest.raises(ValueError, match="no stored read chunk"):
+            cell_index(_store(), SIGNAL, EXPECTED["shard"], 0, 0)
+
+    def test_unwritten_chunk_id_raises(self):
+        # 433143 is the fixture's empty read chunk: well-formed, nothing stored.
+        with pytest.raises(ValueError, match="no stored read chunk"):
+            cell_index(_store(), SIGNAL, "433143", 0, 0)
+
+    @pytest.mark.parametrize("rowcol", [(2, 0), (0, 2), (-1, 0), (0, -1)])
+    def test_row_col_outside_the_block_raises(self, rowcol):
+        with pytest.raises(ValueError, match=r"outside .* \(2, 2\) read-chunk block"):
+            cell_index(_store(), SIGNAL, "433141", *rowcol)
 
 
 @pytest.mark.skipif(HAS_ZAGG, reason="runs only in a core (no-zagg) environment")
@@ -840,3 +1102,43 @@ class TestSubtreeLiveParity:
             # subtree's: block_order=3 is out of range for the '4331' word.
             with pytest.raises(ValueError, match="must be between 4 and the chunk order 5"):
                 list(reader(_store(), SIGNAL, subtree=EXPECTED["shard"][:-1], block_order=3))
+
+
+def _zagg_cell_index_reader():
+    """zagg's reader IF it carries ``cell_index`` (the issue #52 reference)."""
+    reference = _zagg_reader()
+    return reference if reference is not None and hasattr(reference, "cell_index") else None
+
+
+@pytest.mark.skipif(
+    _zagg_cell_index_reader() is None,
+    reason="needs zagg's cell_index, the reference implementation ported in issue #52",
+)
+class TestCellIndexParity:
+    """``cell_index`` side by side with the zagg function it was ported from.
+
+    Probe-gated like the ``subtree=`` leg: ``cell_index`` post-dates the
+    extra's declared ``zagg>=0.40`` floor, so the offline
+    :class:`TestCellIndex` class stays the enforcement wherever this skips.
+    """
+
+    def test_every_populated_cell_agrees(self):
+        reference = _zagg_cell_index_reader()
+        store = _store()
+        arr, words = _cells_axis(store)
+        side, depth = _tensor_side(arr, SIGNAL)
+        for start, populated in iter_populated_chunks(arr):
+            chunk = _chunk_word(words[start : start + side * side], SIGNAL, start)
+            for rank, _raw in populated:
+                row, col = (int(v) for v in rank_to_rowcol(rank, depth))
+                assert cell_index(store, SIGNAL, chunk, row, col) == reference.cell_index(
+                    store, SIGNAL, chunk, row, col
+                )
+
+    def test_the_coarser_block_id_refusal_agrees(self):
+        reference = _zagg_cell_index_reader()
+        shard = morton_word(EXPECTED["shard"])
+        with pytest.raises(ValueError, match="no stored read chunk"):
+            cell_index(_store(), SIGNAL, shard, 0, 0)
+        with pytest.raises(ValueError, match="no stored read chunk"):
+            reference.cell_index(_store(), SIGNAL, shard, 0, 0)

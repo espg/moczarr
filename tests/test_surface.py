@@ -35,6 +35,7 @@ WORKFLOW = [
     "open_object_store",
     "open_store",
     # per-leaf readers the leaf handle feeds
+    "cell_index",
     "open_ragged",
     "read_cell",
     "read_ragged",

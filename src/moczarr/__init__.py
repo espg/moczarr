@@ -46,7 +46,7 @@ from moczarr.coverage import (
 )
 from moczarr.exceptions import ConservativeCoverageWarning, NoCoverageError
 from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
-from moczarr.hhdc import has_exact_occupancy, read_tensors
+from moczarr.hhdc import cell_index, has_exact_occupancy, read_tensors
 from moczarr.intersect import iter_occupancy_and, occupancy_and
 from moczarr.join import join_coarse, parent_cells
 from moczarr.open import candidate_leaves, candidate_shards, open_hive, open_leaf, open_store
@@ -138,6 +138,7 @@ __all__ = [
     "box_words",
     "candidate_leaves",
     "candidate_shards",
+    "cell_index",
     "check_node_invariant",
     "combined_hash",
     "counts_from_composition",

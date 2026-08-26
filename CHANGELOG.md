@@ -2,6 +2,49 @@
 
 ## Unreleased
 
+- New `moczarr.hhdc.block_rank(words, block_order)`
+  ([#52](https://github.com/espg/moczarr/issues/52)): the block-local nested
+  rank of each packed morton word, plus each word's own order — the decode a
+  **located companion** needs and the library did not offer. On the tensor
+  path a cell's rank IS its position on the cells axis, so `read_tensors`
+  never decodes a word; a located companion (spec §9) carries one word per
+  observation and has no cells axis to index, so a reader placing those
+  observations inside a block had to recover the rank itself. zagg's
+  `demo/07_minimal.ipynb` hand-rolled that decode and got it wrong twice —
+  it skipped `point_to_area29`, so the order-29 POINT words' level-28/29
+  digits came out of the §1 point band (`(suffix - 28) // 5` is 4..7, never
+  0..3) and `rank_to_rowcol` raised *rank must lie in [0, 4)*. `block_rank`
+  normalizes points to their order-29 area twin first, handles mixed orders
+  in one array (a real located companion carries order-29 points alongside
+  coarser area fallbacks — the committed fixture mixes orders 6, 22 and 29
+  in one companion), and returns the per-word order so a caller can group by
+  `order - block_order` and make one vectorized `rank_to_rowcol` call per
+  depth. Vectorized over the ≤29 LEVELS, never over the words: a located
+  companion is millions of words per leaf, where a per-word `morton_decimal`
+  loop is not an option. `block_order` finer than any word's own order
+  raises rather than truncating. Pinned against the `morton_decimal` digit
+  oracle (digit at level `L`, minus 1, is that level's rank) across every
+  order 0..29, and against the fixture's cells axis — a cell word ranked at
+  the shard order reproduces its cells-axis position, which is the tie back
+  to the tensor path.
+
+- New root-level `moczarr.cell_index(store, field, morton_index, row, col)`
+  ([#52](https://github.com/espg/moczarr/issues/52)): the global cells-axis
+  index of a chunk-local `(row, col)` — the `read_cell` key. Every sweep
+  reader reports a chunk-local position while `read_cell` addresses the
+  array's GLOBAL cells axis, and feeding a bare rank to `read_cell` silently
+  reads the wrong cell (it is always in range, so nothing complains). Ported
+  from `zagg.readers.tdigest_tensor.cell_index`, which the waveform viewer in
+  zagg's `demo/06_paired.ipynb` reaches across a package boundary for; it
+  sits next to `read_cell` now. Pure addressing, with the reference's read
+  posture kept: the chunk start is resolved from the sibling `morton`
+  coordinate, only the array's STORED spans are searched (one small slice of
+  `morton` per span — never the whole axis, and no digest bytes), and a
+  coarser `block_order` block id, which names no single chunk, raises.
+  `morton_index` takes either currency, a packed area word or a decimal
+  string. A probe-gated parity leg runs it side by side with the zagg
+  function it was ported from.
+
 - `open_ragged`, `read_commits` and `read_leaf_metas` are now on the package
   root ([#49](https://github.com/espg/moczarr/issues/49)): each was
   importable only by module path (`moczarr.ragged.open_ragged`,
