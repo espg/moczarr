@@ -67,10 +67,10 @@ from typing import Literal
 
 import numpy as np
 import zarr
-from mortie import clip2order, rank_to_xy, xy_to_rank
+from mortie import clip2order, orders_of, rank_to_xy, xy_to_rank
 from zarr.abc.store import Store
 
-from moczarr.convention import COMMIT_ATTR
+from moczarr.convention import COMMIT_ATTR, morton_word, point_to_area29
 from moczarr.coverage import decode_bitmap, parse_leaf_coverage
 from moczarr.ragged import (
     _cells_order,
@@ -80,9 +80,12 @@ from moczarr.ragged import (
     decode_cell,
     iter_populated_chunks,
     open_ragged,
+    stored_chunk_spans,
 )
 
 __all__ = [
+    "block_rank",
+    "cell_index",
     "chunk_z_range",
     "has_exact_occupancy",
     "rank_to_rowcol",
@@ -128,6 +131,111 @@ def rowcol_to_rank(row, col, depth: int):
     (scalars or arrays; values must be ``< 2**depth``).
     """
     return xy_to_rank(col, row, depth)
+
+
+# --------------------------------------------------------------------------- #
+# word addressing (mortie spec §1 packed-word geometry)
+# --------------------------------------------------------------------------- #
+
+#: Spec §1 packed-word geometry: ``[4-bit prefix | 54-bit body | 6-bit suffix]``.
+#: The body carries one 2-bit digit per level for levels 1..27, most
+#: significant first; levels 28 and 29 have no body room and ride the
+#: suffix's parent-first preorder band instead (see :func:`block_rank`).
+_SUFFIX_BITS = 6
+_BODY_LEVELS = 27
+_PREORDER_MIN = 28
+_MAX_ORDER = 29
+_DIGIT_MASK = np.uint64(0x3)
+_SUFFIX_MASK = np.uint64(0x3F)
+
+
+def block_rank(words, block_order: int) -> tuple[np.ndarray, np.ndarray]:
+    """Block-local nested rank of each word, and each word's own order.
+
+    The decode a **located companion** needs (spec §9): the companion
+    carries one morton word per observation and has no cells axis to index,
+    so a reader placing those observations inside an order-``block_order``
+    block has to recover each word's nested rank *within that block* itself.
+    On the tensor path a cell's rank IS its position on the cells axis and
+    no word is ever decoded — this is the same quantity for the path where
+    it is not handed to you. Pairs with :func:`rank_to_rowcol`::
+
+        rank, order = block_rank(located_words, block_order)
+        row, col = rank_to_rowcol(rank, int(order[0]) - block_order)
+
+    Point words normalize first (:func:`moczarr.convention.point_to_area29`
+    — the §1 suffix re-base ``48 + t28*4 + t29`` ->
+    ``28 + t28*5 + (t29 + 1)``), so a located companion's order-29 POINT
+    words decode through the same area arithmetic as every other word;
+    skipping that step reads the level-28/29 digits out of their bands.
+    Mixed orders in one array are supported — a leaf mixes order-29 located
+    words with coarser cell words — which is why the per-word order is
+    returned: group by ``order - block_order`` and make one vectorized
+    :func:`rank_to_rowcol` call per depth.
+
+    Vectorized over the whole array: the decode loops over the ≤29 LEVELS,
+    never over the words (a located companion is millions of words per
+    leaf, so a per-word :func:`moczarr.morton_decimal` loop is not an
+    option). The digit extraction is the spec §1 geometry — levels 1..27
+    read 2 bits out of the body, level 28 is ``(suffix - 28) // 5`` and
+    level 29 is ``(suffix - 28) % 5 - 1`` — and the block-local rank is
+    ``sum(digit_L * 4**(order - L))`` over the levels below the block.
+
+    Parameters
+    ----------
+    words : array-like
+        Packed ``uint64`` morton words (AREA or POINT, any mix of orders).
+    block_order : int
+        HEALPix order of the enclosing block — the subtree the returned rank
+        is local to. ``0`` ranks a word within its whole base cell.
+
+    Returns
+    -------
+    (rank, order) : (ndarray, ndarray)
+        ``rank`` is ``uint64``, in ``[0, 4**(order - block_order))``;
+        ``order`` is ``int64``, the word's OWN encoded order (29 for point
+        words — their encoded order, not a clip). Both keep the input's
+        shape, so a scalar word in yields 0-d arrays out.
+
+    Raises
+    ------
+    ValueError
+        When ``block_order`` is negative, or is finer than any word's own
+        order — that word lies at or above the block and has no position
+        inside it, so the rank would have to be truncated rather than
+        computed.
+    """
+    packed = np.asarray(point_to_area29(np.asarray(words, dtype=np.uint64)), dtype=np.uint64)
+    block = int(block_order)
+    if block < 0:
+        raise ValueError(f"block_order {block_order} is negative (a block order is 0..29)")
+    order = np.asarray(orders_of(packed), dtype=np.int64).reshape(packed.shape)
+    if np.any(order < block):
+        shallow = order[order < block]
+        raise ValueError(
+            f"block_order {block} is finer than {shallow.size} of the {order.size} "
+            f"word(s) given (shallowest order {int(shallow.min())}): such a word lies "
+            f"at or above the block, so it has no position INSIDE it and its rank "
+            f"cannot be computed (only truncated)"
+        )
+    suffix = (packed & _SUFFIX_MASK).astype(np.int64)
+    rank = np.zeros(packed.shape, dtype=np.uint64)
+    for level in range(block + 1, _MAX_ORDER + 1):
+        active = order >= level
+        if not active.any():
+            break  # orders are fixed and levels ascend: nothing deeper is active
+        if level <= _BODY_LEVELS:
+            shift = np.uint64(_SUFFIX_BITS + 2 * (_BODY_LEVELS - level))
+            digit = ((packed >> shift) & _DIGIT_MASK).astype(np.int64)
+        elif level == _BODY_LEVELS + 1:
+            digit = (suffix - _PREORDER_MIN) // 5
+        else:
+            digit = (suffix - _PREORDER_MIN) % 5 - 1
+        # Inactive words contribute nothing; their place/digit would be
+        # meaningless (a negative shift, or the preorder band's -1 filler).
+        place = np.where(active, 2 * (order - level), 0).astype(np.uint64)
+        rank += np.where(active, digit, 0).astype(np.uint64) << place
+    return rank, order
 
 
 # --------------------------------------------------------------------------- #
@@ -636,3 +744,61 @@ def has_exact_occupancy(store: Store) -> bool:
     it cannot report a regime the reader does not produce.
     """
     return _coverage_occupancy(store) is not None
+
+
+def cell_index(
+    store: Store,
+    field: str,
+    morton_index: int | str,
+    row: int,
+    col: int,
+    *,
+    zarr_format: Literal[2, 3] = 3,
+) -> int:
+    """Global cells-axis index of a reported ``(row, col)`` — the :func:`read_cell` key.
+
+    The sweep readers report a CHUNK-LOCAL position, while
+    :func:`moczarr.read_cell` addresses the array's GLOBAL cells axis:
+    :func:`rowcol_to_rank` inverts the deinterleave back to a rank ``0..4**depth
+    - 1`` *within the chunk*, and the chunk's own start offset is the missing
+    term — so feeding a bare rank to :func:`moczarr.read_cell` silently reads
+    the wrong cell (it is always in range, so nothing complains). This resolves
+    the offset from the sibling ``morton`` coordinate and returns ``chunk_start
+    + rowcol_to_rank(row, col, depth)``.
+
+    ``morton_index`` is a READ-CHUNK id — the id :func:`moczarr.read_ragged`
+    and the default (per-chunk, ``block_order=None``) :func:`read_tensors`
+    report — as a packed area word or a decimal string. A coarser
+    ``block_order`` block id names no single chunk and raises. Only the
+    array's STORED spans are searched
+    (:func:`moczarr.ragged.stored_chunk_spans`, the same objects the sweep
+    readers visit), one small slice of the ``morton`` coordinate per span —
+    never the whole axis, and no digest bytes.
+
+    Raises
+    ------
+    ValueError
+        If ``row``/``col`` are outside the chunk's ``(side, side)`` block, or
+        no stored chunk carries ``morton_index``.
+    """
+    arr, _element = open_ragged(store, field, zarr_format=zarr_format)
+    morton = _morton_words(store, field, zarr_format)
+    side, depth = _tensor_side(arr, field)
+    cells_per_chunk = side * side
+    if not (0 <= int(row) < side and 0 <= int(col) < side):
+        raise ValueError(f"({row}, {col}) is outside {field!r}'s ({side}, {side}) read-chunk block")
+    rank = int(rowcol_to_rank(int(row), int(col), depth))
+    target = morton_word(morton_index)
+    for span_start, span_stop in stored_chunk_spans(arr):
+        span_words = morton[span_start:span_stop]
+        for offset in range(0, span_stop - span_start, cells_per_chunk):
+            words = span_words[offset : offset + cells_per_chunk]
+            start = span_start + offset
+            if not np.any(words) or _chunk_word(words, field, start) != target:
+                continue
+            return start + rank
+    raise ValueError(
+        f"no stored read chunk of {field!r} carries morton id {target} — "
+        f"cell_index resolves the READ-CHUNK ids the sweep readers report "
+        f"(a coarser block_order block id names no single chunk)"
+    )
