@@ -345,6 +345,21 @@ class TestBlockRank:
             rows, cols = rank_to_rowcol(rank[group], int(depth))
             np.testing.assert_array_equal(rowcol_to_rank(rows, cols, int(depth)), rank[group])
 
+    @pytest.mark.parametrize("block_order", [0, 6, 29])
+    def test_the_fill_word_is_refused_at_every_block_order(self, block_order):
+        # A fill-padded 'morton' coordinate is the array a located reader is
+        # most likely to hand over; 0 is not a word (prefix 0 is unreachable).
+        word = morton_word(EXPECTED["shard"] + "2" * (29 - SHARD_ORDER))
+        words = np.array([word, 0], dtype=np.uint64)
+        with pytest.raises(ValueError, match="0 FILL word"):
+            block_rank(words, block_order)
+
+    def test_the_fill_word_is_not_reported_as_rank_zero(self):
+        # The sentinel's worst case: at block_order 0 a pass-through would
+        # answer (0, 0) — a legitimate-looking order-0, rank-0 word.
+        with pytest.raises(ValueError, match="0 FILL word"):
+            block_rank(np.array([0], dtype=np.uint64), 0)
+
     def test_point_words_normalize_to_their_area_twin(self):
         area = morton_word("5" + "1234" * 7 + "3")  # order 29
         point = area29_to_point(area)

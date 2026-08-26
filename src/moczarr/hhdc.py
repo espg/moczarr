@@ -185,6 +185,13 @@ def block_rank(words, block_order: int) -> tuple[np.ndarray, np.ndarray]:
     ----------
     words : array-like
         Packed ``uint64`` morton words (AREA or POINT, any mix of orders).
+        The ``0`` FILL word is REFUSED at every ``block_order``, not passed
+        through: it is not a word (the §1 prefix nibble is base cell + 1, so
+        prefix ``0`` is unreachable), and at ``block_order == 0`` it would
+        otherwise rank as a legitimate ``(0, 0)`` — a sentinel
+        indistinguishable from data. A caller handing over a fill-padded
+        ``morton`` coordinate masks it first, as :func:`_cells_order` and
+        :func:`_chunk_word` do.
     block_order : int
         HEALPix order of the enclosing block — the subtree the returned rank
         is local to. ``0`` ranks a word within its whole base cell.
@@ -200,8 +207,9 @@ def block_rank(words, block_order: int) -> tuple[np.ndarray, np.ndarray]:
     Raises
     ------
     ValueError
-        When ``block_order`` is negative, or is finer than any word's own
-        order — that word lies at or above the block and has no position
+        When ``block_order`` is negative; when any word is the ``0`` FILL
+        word (see above); or when ``block_order`` is finer than any word's
+        own order — that word lies at or above the block and has no position
         inside it, so the rank would have to be truncated rather than
         computed.
     """
@@ -209,6 +217,17 @@ def block_rank(words, block_order: int) -> tuple[np.ndarray, np.ndarray]:
     block = int(block_order)
     if block < 0:
         raise ValueError(f"block_order {block_order} is negative (a block order is 0..29)")
+    # Before the order check, so the fill word is diagnosed as the fill word
+    # rather than as a shallow word the block is finer than.
+    fill = int(np.count_nonzero(packed == np.uint64(0)))
+    if fill:
+        raise ValueError(
+            f"{fill} of the {packed.size} word(s) given is the 0 FILL word, not a morton "
+            f"word: the §1 prefix nibble encodes base cell + 1, so 0 names no cell "
+            f"(mortie's own morton_decimal refuses it). A companion's 'morton' coordinate "
+            f"is fill-padded over its unwritten rows — mask them out (words[words != 0]) "
+            f"before ranking"
+        )
     order = np.asarray(orders_of(packed), dtype=np.int64).reshape(packed.shape)
     if np.any(order < block):
         shallow = order[order < block]
