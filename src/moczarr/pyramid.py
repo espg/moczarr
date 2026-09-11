@@ -85,8 +85,12 @@ OVERVIEW_SPEC = "zagg-overview/1"
 #: The §4.4 stage-written revision (issue #384 zagg-side): same keys, with
 #: ``cell_order`` the level entry's own ``cells`` member and the fold pair
 #: replaced by ``regime``/``merges_from_raw``/``source_children`` (+
-#: ``run_id``). Accepted by :func:`_object_entry` alongside ``/1``; the
-#: ``cell_order`` cross-check is the safety either way.
+#: ``run_id``). Accepted by :func:`_object_entry` alongside ``/1``, but only
+#: at a level the CALLER named: a ``/2`` artifact's resolution is its ladder
+#: entry's ``cells`` member, which the ``/1`` constant-depth formula
+#: ``c - (s - k)`` does not derive, so under
+#: :func:`open_overview_order`'s ``cell_order=None`` default an off-order
+#: ``/2`` block degrades by omission rather than indicting the store.
 OVERVIEW_SPEC_V2 = "zagg-overview/2"
 #: Root-group attrs key classifying a zarr (D11: per object, never inferred
 #: from tree position; source zarrs carry no role — absence means source).
@@ -566,7 +570,14 @@ def _skip(decimal: str, reason: str) -> None:
     )
 
 
-def _object_entry(attrs: dict, decimal: str, window: str | None, target_order: int) -> dict | None:
+def _object_entry(
+    attrs: dict,
+    decimal: str,
+    window: str | None,
+    target_order: int,
+    *,
+    derived_order: bool = False,
+) -> dict | None:
     """One stamped object's per-object entry, or ``None`` to drop the object.
 
     ``role`` absence means source; ``role: "overview"`` requires an
@@ -588,6 +599,17 @@ def _object_entry(attrs: dict, decimal: str, window: str | None, target_order: i
       mis-ranked under this node's §4.4 coordinate, which is a wrong answer
       rather than a missing one, and an off-order fold indicts the sweep
       rather than one object.
+
+    ``derived_order`` says the caller did NOT name the level —
+    :func:`open_overview_order` computed ``target_order`` from the ``/1``
+    constant-depth formula ``c - (s - k)``. A :data:`OVERVIEW_SPEC_V2`
+    artifact's resolution is its ladder entry's ``cells`` member, which that
+    formula derives only when ``d == c - s``, so a mismatch there indicts the
+    *derivation*, not the store: the object degrades by omission (warn and
+    skip, the pre-``/2``-admission posture — a conformant ``/2`` store must
+    not make the ``/1`` entry point raise). The raise stands whenever the
+    caller named the level with ``cell_order=``, on both revisions, and for
+    ``/1`` blocks always: there the constant-depth order IS the contract.
     """
     role = attrs.get(ROLE_ATTR)
     entry: dict[str, Any] = {"node": decimal, "window": window, "role": role or "source"}
@@ -619,6 +641,17 @@ def _object_entry(attrs: dict, decimal: str, window: str | None, target_order: i
         _skip(decimal, f"has a {OVERVIEW_ATTR!r} block with no 'cell_order' (zagg spec §4.3)")
         return None
     if int(block["cell_order"]) != target_order:
+        if derived_order and block.get("spec") == OVERVIEW_SPEC_V2:
+            _skip(
+                decimal,
+                f"stores cells at order {block['cell_order']}, not the order "
+                f"{target_order} this call derived from the /1 constant-depth rule: a "
+                f"{OVERVIEW_SPEC_V2!r} artifact's resolution is its §4.5 ladder entry's "
+                f"'cells' member, so name the level with cell_order= (open by "
+                f"resolution with moczarr.level.open_level, which threads the declared "
+                f"ladder)",
+            )
+            return None
         raise ValueError(
             f"overview at node {decimal} stores cells at order {block['cell_order']}, "
             f"not this node's order {target_order} — off-order objects would mis-rank rows"
@@ -656,9 +689,18 @@ def open_overview_order(
     the contract, so the caller passes it rather than this function
     re-deriving a ladder) — and must sit strictly between ``k`` and the
     manifest cell order, exactly as §4.5 bounds a level member. The
-    artifact's own attrs cross-check it either way: a stamped object whose
-    ``zagg_overview.cell_order`` disagrees raises (off-order rows would
-    mis-rank under the level's coordinate). Candidate
+    artifact's own attrs cross-check the level the CALLER named: a stamped
+    object whose ``zagg_overview.cell_order`` disagrees with an explicit
+    ``cell_order=`` raises on either attrs revision (off-order rows would
+    mis-rank under the level's coordinate), and so does a ``/1`` object
+    under the constant-depth default. Under that default a
+    :data:`OVERVIEW_SPEC_V2` object at another resolution is *skipped* with
+    a warning instead (:func:`_object_entry`): its level is the §4.5 ladder
+    entry's, not ``c - (s - k)``, so the mismatch indicts this call's
+    derivation rather than the store — a conformant ``/2`` store degrades to
+    the ``None`` return here exactly as it did before ``/2`` blocks were
+    classifiable, and opens by resolution through
+    :func:`moczarr.level.open_level`. Candidate
     objects are named arithmetically — the root MOC's source shards coarsened
     to the order-``k`` prefix, one ``{window}.zarr`` (or ``all.zarr``) per
     ancestor node — and each is admitted by its commit stamp (unstamped
@@ -821,7 +863,13 @@ def open_overview_order(
         # them. The AOI governs rows only, exactly as it does for the tree
         # shape (issue #4). This also makes the §4.3 checks AOI-independent.
         attrs = meta.get("attributes") if isinstance(meta, dict) else None
-        entry = _object_entry(attrs or {}, dec, window if windowed else None, target_order)
+        entry = _object_entry(
+            attrs or {},
+            dec,
+            window if windowed else None,
+            target_order,
+            derived_order=cell_order is None,
+        )
         if entry is None:
             continue  # malformed cache object, warned and dropped (§4.1)
         entries.append(entry)

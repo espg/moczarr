@@ -547,6 +547,36 @@ class TestV2AncestorArm:
         with pytest.raises(ValueError, match="mis-rank"):
             open_level(swept, 4)
 
+    def test_v1_default_path_degrades_on_a_conformant_v2_store(self, swept):
+        # The pre-existing /1 entry point, called with no cell_order= on a
+        # store whose ancestor artifact is perfectly conformant /2: the
+        # constant-depth formula c-(s-k) names order 5 here while the ladder
+        # entry says 4, and the artifact's level is the LADDER's. That
+        # mismatch indicts the derivation, not the store, so the object is
+        # skipped and the order degrades by omission (§4.1) — never the
+        # "off-order objects would mis-rank rows" raise, which would make a
+        # conformant store take the /1 reader down.
+        from moczarr.pyramid import open_overview_order
+
+        manifest = read_manifest(swept)
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always")
+            assert open_overview_order(swept, manifest, 3) is None
+        messages = [str(w.message) for w in caught]
+        assert any("zagg-overview/2" in m and "cell_order=" in m for m in messages)
+        assert any("no stamped overview object" in m for m in messages)
+
+    def test_explicit_cell_order_still_raises_off_order(self, swept):
+        # The other half of the same seam: when the CALLER names the level,
+        # an artifact declaring another resolution is interpretable-but-wrong
+        # on both attrs revisions and raises (the /1 half is pinned by
+        # test_pyramid.py::test_off_order_overview_raises).
+        from moczarr.pyramid import open_overview_order
+
+        manifest = read_manifest(swept)
+        with pytest.raises(ValueError, match="mis-rank"):
+            open_overview_order(swept, manifest, 3, cell_order=5)
+
     def test_unswept_rung_degrades_to_none(self):
         # Declared-but-unmaterialized is a legal recorded state: the rung
         # at cells 3 (node 2) has no artifact on the unswept fixture.
