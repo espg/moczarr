@@ -34,6 +34,7 @@ nav:
   - API reference:
       - open: api/open.md
       - pyramid: api/pyramid.md
+      - level: api/level.md
       - column: api/column.md
       - products: api/products.md
       - stats: api/stats.md

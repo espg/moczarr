@@ -23,6 +23,7 @@ import xarray as xr
 from moczarr import (
     open_column_order,
     open_hive,
+    open_level,
     pyramid_levels,
     read_manifest,
     read_ragged,
@@ -281,3 +282,98 @@ class TestOpenColumnOrder:
         assert {name: v.dtype for name, v in both.data_vars.items()} == {
             name: v.dtype for name, v in full.data_vars.items()
         }
+
+
+class TestOpenLevel:
+    """The resolution-addressed dispatcher: one cell order, one Dataset."""
+
+    ATL06 = str(OVERVIEW / "atl06")
+
+    def test_native_level_is_open_hive_plus_roster(self):
+        from moczarr import LEVEL_ATTR
+
+        ds = open_level(self.ATL06, 8)
+        native = open_hive(self.ATL06)
+        assert dict(ds.sizes) == dict(native.sizes)
+        assert set(ds.data_vars) == set(native.data_vars)
+        assert ds.attrs[LEVEL_ATTR]["artifact"] == "source"
+        assert ds.attrs[LEVEL_ATTR]["cell_order"] == 8
+        # The per-object roster rides the native level too (role absence
+        # means source, surfaced per object — D11).
+        assert ds.attrs[OBJECTS_ATTR]
+        assert all(entry["role"] == "source" for entry in ds.attrs[OBJECTS_ATTR])
+
+    def test_v1_overview_level(self):
+        from moczarr import LEVEL_ATTR
+
+        ds = open_level(self.ATL06, 6)
+        assert ds.attrs["morton_hive"]["cell_order"] == 6
+        rec = ds.attrs[LEVEL_ATTR]
+        assert rec == {
+            "cell_order": 6,
+            "order": 4,
+            "artifact": "overview",
+            "spec": "zagg-pyramid/1",
+            "fields": rec["fields"],
+            "fold_source": rec["fold_source"],
+        }
+        # The declared all-fields map is the zero-open §4.4 answer: the
+        # none-class entries record the absence the variable set shows.
+        assert rec["fields"]["h_mean"]["class"] == "none"
+        assert "h_mean" not in ds.data_vars
+        assert {e["role"] for e in ds.attrs[OBJECTS_ATTR]} == {"overview"}
+
+    def test_v2_column_level(self):
+        from moczarr import LEVEL_ATTR
+
+        ds = open_level(TEMPORAL, 5)
+        rec = ds.attrs[LEVEL_ATTR]
+        assert rec["artifact"] == "column"
+        assert rec["spec"] == "zagg-pyramid/2"
+        assert rec["fold_source"] == "cascade"
+        assert dict(ds.sizes) == {"cells": 4}
+
+    def test_declared_off_store_has_its_native_level(self):
+        from moczarr import LEVEL_ATTR
+
+        root = str(Path(__file__).parent / "data" / "serc_hive")
+        ds = open_level(root, 8)
+        rec = ds.attrs[LEVEL_ATTR]
+        assert rec["artifact"] == "source"
+        assert rec["spec"] is None and rec["fields"] is None and rec["fold_source"] is None
+
+    def test_unknown_level_raises_with_the_table(self):
+        with pytest.raises(ValueError, match=r"levels are \[8, 6, 4\]"):
+            open_level(self.ATL06, 7)
+
+    def test_shard_order_names_the_partial_tier_hint(self):
+        # cell_order == shard_order on a /2 store is the §4.6 node-order
+        # partial tier, not a level, whenever no ladder rung lands there —
+        # the error points at open_column_order. (On the fixtures d == 1
+        # puts a rung AT the shard order, so the case needs a declaration
+        # with a partial ladder: legal — the recorded list is verbatim.)
+        manifest = read_manifest(TEMPORAL)
+        manifest["pyramid"]["overviews"] = [{"node": 4, "cells": [5]}]
+        with pytest.raises(ValueError, match="open_column_order"):
+            open_level(TEMPORAL, 4, manifest=manifest)
+
+    def test_multi_product_root(self):
+        root = str(OVERVIEW)
+        ds = open_level(root, 6, product="atl06")
+        assert ds.attrs["morton_hive"]["cell_order"] == 6
+        with pytest.raises(ValueError, match="multi-product store root"):
+            open_level(root, 6)
+
+    def test_windowed_product_scopes_by_window(self):
+        root = str(OVERVIEW / "atl06_windows")
+        ds = open_level(root, 6, window="2019")
+        assert ds.attrs["morton_hive"]["cell_order"] == 6
+        with pytest.raises(ValueError, match="pass window="):
+            open_level(root, 6)
+
+    def test_aoi_passes_through(self):
+        full = open_level(self.ATL06, 6)
+        word = np.uint64(full["morton"].values[0])
+        cut = open_level(self.ATL06, 6, aoi=np.array([word], dtype=np.uint64))
+        assert dict(cut.sizes) == {"cells": 1}
+        assert int(cut["morton"].values[0]) == int(word)

@@ -66,6 +66,9 @@ from moczarr.pyramid import ROLE_ATTR, _skip, pyramid_declaration
 from moczarr.ranges import MortonRanges
 from moczarr.store import _stamp_from_meta, load_root_coverage, read_leaf_metas
 
+#: Dataset-attrs key carrying one level's record (:func:`open_level`).
+LEVEL_ATTR = "zagg_level"
+
 
 def pyramid_levels(manifest: dict) -> dict[int, dict]:
     """``{cell order: level record}`` — every addressable resolution, finest first.
@@ -451,7 +454,176 @@ def open_column_order(
     return result
 
 
+def open_level(
+    store_root: str,
+    cell_order: int,
+    *,
+    product: str | None = None,
+    manifest: dict | None = None,
+    aoi=None,
+    window: str | None = None,
+    anonymous: bool = False,
+    fabricate_cell_ids: bool | str = "auto",
+    index_kind: str = "moc",
+    concurrency: int | None = 32,
+    xr_kwargs: dict[str, Any] | None = None,
+    store: Any = None,
+    **store_kwargs: Any,
+):
+    """Open ONE resolution level of a pyramid store as one Dataset, or ``None``.
+
+    The #37 entry point: ``cell_order`` addresses a level of
+    :func:`pyramid_levels`' table — resolution is the reader-facing axis,
+    and which artifact kind materializes it is this function's dispatch,
+    not the caller's:
+
+    - the **native** order opens through :func:`moczarr.open.open_hive`
+      (the same lazy Dataset, plus the per-object roster under
+      ``attrs["zagg_objects"]``);
+    - an **overview** order opens through
+      :func:`moczarr.pyramid.open_overview_order` (ancestor artifacts,
+      ``/1`` constant-depth and ``/2`` ladder rungs alike);
+    - a **column** order opens through :func:`open_column_order` (the §4.6
+      leaf tier of a ``/2`` declaration).
+
+    Every arm returns the ONE shape this module's docstring specifies, and
+    every arm inherits its opener's degrade postures verbatim: ``None``
+    with a warning when a declared level has no stamped artifact (or the
+    root MOC is unusable), the issue-#4 schema-correct empty dataset under
+    an AOI that misses the coverage, and the shared ``window=`` seam. An
+    undeclared ``cell_order`` raises, listing the store's levels — the
+    §4.6 node-order member (``cell_order == shard_order``) is a recorded
+    partial tier rather than a level, reachable explicitly through
+    :func:`open_column_order`.
+
+    On top of the arm's own attrs the result carries :data:`LEVEL_ATTR`
+    (``zagg_level``) — the level's record from the table plus the
+    declaration-side context a per-level consumer needs without re-reading
+    the manifest::
+
+        {"cell_order": 5, "order": 4, "artifact": "column",
+         "spec": "zagg-pyramid/2",
+         "fields": {...},          # the §4.5 all-fields map, classes included
+         "fold_source": "cascade"}
+
+    ``fields`` is the DECLARED all-fields view (a ``none``-class entry
+    records an absence — the zero-open §4.4 answer); per-artifact truth
+    (what a given object actually folded, its regime and generation, any
+    stamped ``demotions``) stays in the ``zagg_objects`` roster, per
+    object, never summarized. ``spec``/``fields``/``fold_source`` are
+    ``None`` on a declared-off store, whose one level is the native order.
+
+    ``product`` re-roots on a D19 multi-product subtree; ``manifest``
+    threads an already-read manifest (of the subtree actually opened);
+    everything else follows :func:`moczarr.open.open_hive`'s posture.
+    Deliberately no ``decode=``: new pyramid surfaces are native moczarr
+    only (the englacial/zagg#550 ruling) — the returned Dataset is plain
+    xarray plus the core lazy index.
+    """
+    from moczarr.pyramid import OBJECTS_ATTR, open_overview_order
+    from moczarr.store import _resolve_store, read_manifest
+
+    if anonymous:
+        store_kwargs.setdefault("anonymous", True)
+    if product is not None:
+        from moczarr.products import validate_product_name
+
+        validate_product_name(product)
+        store_root = f"{store_root.rstrip('/')}/{product}"
+    handle = _resolve_store(store_root, store, store_kwargs)
+    if manifest is None:
+        manifest = read_manifest(store_root, store=handle)
+        if manifest is None:
+            if product is None:
+                from moczarr.products import list_products
+
+                names = [p["name"] for p in list_products(store_root, store=handle)]
+                if names:
+                    raise ValueError(
+                        f"{store_root} is a multi-product store root (products: {names}); "
+                        f"pass product=... to open one (D19, mortie spec §6.5)"
+                    )
+            raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
+    else:
+        from moczarr.convention import parse_manifest
+
+        manifest = parse_manifest(manifest)
+    levels = pyramid_levels(manifest)
+    decl = pyramid_declaration(manifest)
+    record = levels.get(int(cell_order))
+    if record is None:
+        from moczarr.pyramid import PYRAMID_SPEC_V2
+
+        hint = (
+            " (the §4.6 node-order partial tier is not a level; open it explicitly "
+            "with open_column_order)"
+            if decl is not None
+            and decl["spec"] == PYRAMID_SPEC_V2
+            and int(cell_order) == int(manifest["shard_order"])
+            else ""
+        )
+        raise ValueError(
+            f"cell order {cell_order} is not a level of {store_root}: this store's "
+            f"levels are {list(levels)} (finest first; see pyramid_levels){hint}"
+        )
+    if record["artifact"] == "source":
+        from moczarr.open import open_hive
+
+        objects: list[dict] = []
+        ds = open_hive(
+            store_root,
+            aoi=aoi,
+            window=window,
+            fabricate_cell_ids=fabricate_cell_ids,
+            index_kind=index_kind,
+            concurrency=concurrency,
+            xr_kwargs=xr_kwargs,
+            _objects_out=objects,
+            **store_kwargs,
+        )
+        ds.attrs[OBJECTS_ATTR] = objects
+    else:
+        envelope = load_root_coverage(store_root, store=handle)
+        common = dict(
+            aoi=aoi,
+            window=window,
+            fabricate_cell_ids=fabricate_cell_ids,
+            index_kind=index_kind,
+            concurrency=concurrency,
+            xr_kwargs=xr_kwargs,
+            store=handle,
+            _envelope=envelope,
+        )
+        if record["artifact"] == "column":
+            ds = open_column_order(store_root, manifest, record["cell_order"], **common)
+        else:
+            from moczarr.pyramid import PYRAMID_SPEC_V2
+
+            if decl is not None and decl["spec"] == PYRAMID_SPEC_V2:
+                # Phase 3 wires the /2 ladder-rung group naming
+                # (open_overview_order's cell_order=); until then the /2
+                # ancestor arm is refused rather than mis-addressed under
+                # the /1 constant-depth formula.
+                raise ValueError(
+                    f"cell order {cell_order} is a {PYRAMID_SPEC_V2} ladder rung at "
+                    f"node {record['order']}: the /2 ancestor-artifact arm lands in "
+                    f"phase 3 of issue #37"
+                )
+            ds = open_overview_order(store_root, manifest, record["order"], **common)
+    if ds is None:
+        return None
+    ds.attrs[LEVEL_ATTR] = {
+        **record,
+        "spec": decl["spec"] if decl else None,
+        "fields": decl["fields"] if decl else None,
+        "fold_source": decl["fold_source"] if decl else None,
+    }
+    return ds
+
+
 __all__ = [
+    "LEVEL_ATTR",
     "open_column_order",
+    "open_level",
     "pyramid_levels",
 ]

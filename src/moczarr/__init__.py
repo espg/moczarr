@@ -59,7 +59,7 @@ from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.hhdc import cell_index, has_exact_occupancy, read_tensors
 from moczarr.intersect import iter_occupancy_and, occupancy_and
 from moczarr.join import join_coarse, parent_cells
-from moczarr.level import open_column_order, pyramid_levels
+from moczarr.level import LEVEL_ATTR, open_column_order, open_level, pyramid_levels
 from moczarr.open import candidate_leaves, candidate_shards, open_hive, open_leaf, open_store
 from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.pyramid import (
@@ -136,6 +136,7 @@ __all__ = [
     "HIVE_SPEC",
     "HIVE_SPEC_V2",
     "HIVE_SPEC_V3",
+    "LEVEL_ATTR",
     "MANIFEST_NAME",
     "MORTON_CONVENTION_ENTRY",
     "MORTON_CONVENTION_UUID",
@@ -187,6 +188,7 @@ __all__ = [
     "open_column_order",
     "open_hive",
     "open_leaf",
+    "open_level",
     "open_object_store",
     "open_overview_order",
     "open_ragged",
