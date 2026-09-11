@@ -449,8 +449,30 @@ shape**:
 Both grammars are first-class: a `/1` store's levels are its native order
 plus the constant-depth overview orders (the live public stores' shape),
 and a `/2` store adds the column-carried leaf resolutions and the fixed
-every-order ladder. The multi-order assembly — a DataTree over these
-levels — is [issue #36b](https://github.com/espg/moczarr/issues/36)'s,
-built on this per-level block; `open_level` deliberately exposes no
-`decode=` (new pyramid surfaces are native moczarr only — the
-englacial/zagg#550 ruling).
+every-order ladder. `open_level` deliberately exposes no `decode=` (new
+pyramid surfaces are native moczarr only — the englacial/zagg#550 ruling).
+
+### The multi-order assembly: `open_pyramid`
+
+> **Status: implemented**
+> ([issue #36](https://github.com/espg/moczarr/issues/36), the #36b slice —
+> the DataTree over `pyramid_levels`, built on the #37 per-level block).
+
+`open_pyramid(store_root)` assembles the whole ladder as one
+`xarray.DataTree`: an **empty root** carrying the declaration —
+`morton_hive` (the manifest summary, plus `semantic_hash` when recorded),
+`zagg_pyramid` (the normalized `pyramid_declaration` record from the
+NORMATIVE `pyramid` block), and the manifest's §4.9 `multiscales`
+discovery mirror **verbatim** when one is recorded (never consulted, never
+re-derived — the `pyramid` block wins by §4.9's own precedence rule) — and
+one child group per materialized resolution, finest first, named by the
+integer cell order it stores, each holding exactly the `open_level`
+Dataset for that resolution. Declared-but-unmaterialized levels are
+omitted with their opener's warning (declaring is free, sweeping is the
+operational decision); `aoi=` scopes rows per level, never the tree's
+shape; `levels=` bounds the assembly on a wide ladder (a `/2` store
+declares every order down to 0). A declared-off store is the valid
+one-level degenerate form. The seamless mixed-order composite stays a
+*computed* view, never a node, and zoom-out ergonomics (a default coarse
+level for a first render) stay
+[issue #21](https://github.com/espg/moczarr/issues/21)'s.

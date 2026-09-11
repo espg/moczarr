@@ -2,6 +2,20 @@
 
 ## Unreleased
 
+- The multi-order assembly
+  ([#36](https://github.com/espg/moczarr/issues/36), the #36b slice):
+  `open_pyramid(store_root)` opens a pyramid store's whole resolution ladder
+  as one `xarray.DataTree` — an empty root carrying the declaration
+  (`morton_hive`, the normalized `zagg_pyramid` record, and the manifest's
+  §4.9 `multiscales` discovery mirror verbatim when recorded) and one child
+  group per materialized resolution, finest first, each holding exactly the
+  `open_level` Dataset for that cell order, on either declaration grammar.
+  Unmaterialized levels are omitted with their opener's warning, `aoi=`
+  scopes rows never the tree's shape, `levels=` bounds the assembly on a
+  wide ladder, and a declared-off store is the valid one-level degenerate
+  form. One manifest GET and one shared root-MOC read serve the whole
+  ladder (`open_level` gained the private `_envelope=` threading).
+
 - The multi-resolution reader surface
   ([#36](https://github.com/espg/moczarr/issues/36) /
   [#37](https://github.com/espg/moczarr/issues/37)): a pyramid store reads as
