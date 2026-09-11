@@ -98,6 +98,41 @@ class TestIds:
         assert not convention.is_base_component("morton_hive.json")
 
 
+def test_every_mortie_name_this_package_imports_exists():
+    """Pin the whole mortie import surface, not just the names a test walks.
+
+    issue #59: every mortie import in this package except ``hhdc.py``'s is
+    lazy and inside a function body, so a retired name stays invisible until
+    some test happens to execute that branch — which is how
+    ``decimals_to_words``/``children_of`` reached a Binder build. Parsing
+    (rather than executing) every module catches a lazy import the same as a
+    module-level one. Run against the pre-migration tree (18b66dd^) it fails
+    naming exactly the two retired names — ``mortie.decimals_to_words`` in
+    ``coverage.py`` and ``mortie.children_of`` in ``intersect.py`` — i.e. it
+    would have caught issue #59 before the Binder build did.
+    """
+    import ast
+    import importlib
+    import pathlib
+
+    import moczarr
+
+    src = pathlib.Path(moczarr.__file__).parent
+    missing = {}
+    for path in sorted(src.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.level:
+                continue
+            if node.module != "mortie" and not (node.module or "").startswith("mortie."):
+                continue
+            module = importlib.import_module(node.module)
+            for alias in node.names:
+                if not hasattr(module, alias.name):
+                    missing[f"{node.module}.{alias.name}"] = f"{path.name}:{node.lineno}"
+    assert not missing, f"retired/renamed mortie names still imported: {missing}"
+
+
 class TestLeafPath:
     def test_golden_path(self):
         assert convention.leaf_path(SHARD) == "-5/1/1/2/3/3/3/-5112333.zarr"
