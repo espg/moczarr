@@ -34,8 +34,12 @@ dependencies = [
     # review time. Earlier floors this supersedes: 0.9.3 for the spec §8
     # ``rank_to_xy``/``xy_to_rank`` deinterleave kernels (espg/mortie#150)
     # the HHDC tensor layout is built on (issue #19), and 0.9.1 for the
-    # mixed-order geo kernels (mortie#116/#122).
-    "mortie>=0.9.10",
+    # mixed-order geo kernels (mortie#116/#122). Floor 1.0.0 (issue #59):
+    # mortie 1.0 retired the plural batch names (espg/mortie#187) --
+    # ``decimals_to_words`` is the array form of ``decimal_to_word`` and
+    # ``children_of`` is ``generate_morton_children`` -- with no aliases, so
+    # this package's spellings only exist from 1.0.0 on.
+    "mortie>=1.0.0",
     # mortie's MortonIndexArray (.decimal_repr()/.hive_path()) imports pandas;
     # a direct runtime dep the reader calls into, not just transitive via xarray.
     "pandas",
