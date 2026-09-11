@@ -212,6 +212,47 @@ class TestMultiLeafColumnLevel:
             f"{SIBLING}{d}" for d in "1234"
         ]
 
+    def test_roster_is_query_scoped_here(self, two_leaves):
+        # The named exception open_column_order documents: unlike
+        # open_overview_order's pre-AOI structural roster, this one shrinks
+        # with the query, and a disjoint AOI reports no columns at all on a
+        # store that carries two. Structural questions go to walk_columns /
+        # read_column_record / read_pyramid instead.
+        manifest = read_manifest(two_leaves)
+        full = open_column_order(two_leaves, manifest, 5)
+        assert len(full.attrs[OBJECTS_ATTR]) == 2
+        one = open_column_order(
+            two_leaves, manifest, 5, aoi=np.array([morton_word(SIBLING)], dtype=np.uint64)
+        )
+        assert [e["node"] for e in one.attrs[OBJECTS_ATTR]] == [SIBLING]
+        with pytest.warns(UserWarning, match="intersects no column coverage"):
+            none = open_column_order(
+                two_leaves, manifest, 5, aoi=np.array([morton_word("21213")], dtype=np.uint64)
+            )
+        assert none.attrs[OBJECTS_ATTR] == []
+
+    def test_wrong_identity_raise_is_query_scoped_here(self, tmp_path):
+        # The other half of the same exception: §4.6 classification only
+        # reaches the leaves the query reaches. A wrong-identity column
+        # raises on the unscoped open and on an AOI that selects it, and is
+        # invisible to an AOI that selects only its conformant sibling.
+        root = tmp_path / "hive"
+        shutil.copytree(TEMPORAL, root)
+        _write_sibling_column(
+            root, doctor=lambda attrs: attrs["zagg_column"].__setitem__("node", "11211")
+        )
+        manifest = read_manifest(str(root))
+        with pytest.raises(ValueError, match="wrong node"):
+            open_column_order(str(root), manifest, 5)
+        with pytest.raises(ValueError, match="wrong node"):
+            open_column_order(
+                str(root), manifest, 5, aoi=np.array([morton_word(SIBLING)], dtype=np.uint64)
+            )
+        clean = open_column_order(
+            str(root), manifest, 5, aoi=np.array([morton_word("11213")], dtype=np.uint64)
+        )
+        assert dict(clean.sizes) == {"cells": 4}
+
     def test_aoi_selecting_one_leaf_cuts_the_other_whole(self, two_leaves):
         manifest = read_manifest(two_leaves)
         aoi = np.array([morton_word(SIBLING)], dtype=np.uint64)

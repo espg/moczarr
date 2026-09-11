@@ -28,7 +28,10 @@ in-memory shape, one :class:`xarray.Dataset` per cell order:
   object's own provenance block verbatim — ``zagg_overview`` for overview
   artifacts, ``zagg_column`` for columns — so fold regime,
   ``merges_from_raw``, ``source_children``, and stamped ``demotions``
-  records all ride along without re-keying).
+  records all ride along without re-keying). The roster is STRUCTURAL —
+  recorded for every stamped object before any AOI filtering — on the
+  source and overview arms; on the §4.6 column arm it is QUERY-SCOPED, a
+  named exception :func:`open_column_order` documents.
 
 The three artifact kinds keep their existing openers — ``open_hive`` for
 the native order, :func:`moczarr.pyramid.open_overview_order` for ancestor
@@ -222,12 +225,34 @@ def open_column_order(
     severities, and each admitted column's ``zagg_column`` block rides
     verbatim in ``attrs["zagg_objects"]``.
 
+    **The roster here is QUERY-SCOPED — a named exception.**
+    :func:`moczarr.pyramid.open_overview_order` records ``zagg_objects``
+    for every stamped object BEFORE any AOI filtering, so its roster (and
+    its §4.3 classification) answers structural questions about the store;
+    this surface does not. Because ``aoi`` cuts the CANDIDATE leaves (see
+    below), both the roster and the §4.6 wrong-identity raise are functions
+    of the query: an AOI that misses a leaf never reads that leaf's stamp,
+    so a disjoint AOI yields ``zagg_objects == []`` on a store that carries
+    columns, and a column declaring another node's identity raises only when
+    the query reaches it (``aoi=None``, an AOI selecting it, or the
+    unrestricted fallback probe below). That is deliberate — the exception
+    buys the cost posture in the next paragraph — but it means structural
+    questions ("does this store carry columns at all?", "is every column
+    conformant?") belong to the unconditional surfaces:
+    :func:`moczarr.store.walk_columns`,
+    :func:`moczarr.column.read_column_record`, and
+    :func:`moczarr.pyramid.read_pyramid`, never to an AOI-scoped level's
+    roster. The three-way behavior is pinned in ``tests/test_level.py``.
+
     ``aoi`` restricts the CANDIDATE leaves arithmetically (root MOC ∩ AOI,
     the same shard-level cut :func:`moczarr.open.candidate_leaves` makes —
-    columns are leaf-sibling artifacts, one per shard, so the unscoped
-    probe cost would be the leaf tier's own) and then rows exactly, per
-    group. An AOI that excludes every column-carried cell returns the
-    issue-#4 schema-correct empty dataset with a ``UserWarning``; ``None``
+    columns are leaf-sibling artifacts, one per shard, so an unscoped probe
+    would pay the leaf tier's own stamp GETs on every open: 2,918 on ATL03,
+    against the 4^(s-k)-fold fewer ancestor nodes that let
+    ``open_overview_order`` keep its candidates unscoped for free) and then
+    rows exactly, per group. An AOI that excludes every column-carried cell
+    returns the issue-#4 schema-correct empty dataset with a
+    ``UserWarning``; ``None``
     is returned — with a warning — only when NO stamped column anywhere
     carries this group (not yet written, or a declaration that never
     carried it), or when the root ``coverage.moc`` is unusable (candidates
