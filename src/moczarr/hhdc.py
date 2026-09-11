@@ -707,9 +707,11 @@ def read_tensors(
         pinned, so ``fit`` degenerates to a truncation guard: a block whose
         trimmed range escapes the window ``"raise"``\\ s rather than clipping
         silently, ``"degrade_resolution"`` doubles the bin width from the
-        pinned origin until the range fits (visible as a yielded gain above
-        the supplied ``dz`` — a degraded block is back off the shared axis,
-        so a co-registered consumer compares the gains it gets back), and
+        pinned origin until the range fits (a degraded block is back off the
+        shared axis; supplying the window makes that COMPARABLE — the
+        consumer checks the yielded gain against the ``dz`` it passed, which
+        on the derive path there is no baseline to check against — but the
+        comparison is still the caller's to make; no flag records it), and
         ``"collapse_bins"`` is refused (it reshapes blocks independently,
         un-sharing the axis the window pins).
     z_window : (float, float), optional

@@ -20,8 +20,11 @@
   paths measure): that range gates it —
   `fit="raise"` refuses a block whose range escapes the window,
   `fit="degrade_resolution"` keeps its meaning against the pinned origin
-  (doubles `dz`, holding `z0` and `n_bins`, until the range fits — visible,
-  since that block's yielded gain then differs from the supplied `dz`), a
+  (doubles `dz`, holding `z0` and `n_bins`, until the range fits — which
+  the supplied window makes *comparable*: the yielded gain then differs
+  from the `dz` the caller passed, a baseline the derive path never had.
+  The comparison is still the caller's to make; #54's secondary ask, a
+  degrade the caller sees without comparing, stays open), a
   trimmed floor BELOW `z0` refuses under both modes (bins extend upward
   from the origin; no widening reaches under it), and `fit="collapse_bins"`
   is refused up front (per-block reshaping un-shares the axis the window
