@@ -276,7 +276,7 @@ def parse_ragged_attrs(attrs: Mapping | None, *, field: str = "<array>") -> Ragg
     marker is retired by design — :func:`open_ragged` does that by dtype.
     """
     block = attrs.get(RAGGED_ATTR) if isinstance(attrs, Mapping) else None
-    if not isinstance(block, Mapping):
+    if not isinstance(attrs, Mapping) or not isinstance(block, Mapping):
         raise ValueError(
             f"{field!r} carries no ragged element declaration "
             f'(attrs["{RAGGED_ATTR}"]); it is not a {RAGGED_SPEC!r} array — refusing '
