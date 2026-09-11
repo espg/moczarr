@@ -64,6 +64,7 @@ from moczarr.level import (
     level_demotions,
     open_column_order,
     open_level,
+    open_pyramid,
     pyramid_levels,
 )
 from moczarr.open import candidate_leaves, candidate_shards, open_hive, open_leaf, open_store
@@ -202,6 +203,7 @@ __all__ = [
     "open_level",
     "open_object_store",
     "open_overview_order",
+    "open_pyramid",
     "open_ragged",
     "open_store",
     "overview_cell_orders",

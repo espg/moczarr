@@ -39,8 +39,10 @@ artifacts — and this module adds the missing third
 (:func:`open_column_order`: one Dataset per column-carried resolution,
 assembled across the covered leaves' §4.6 columns) plus the resolution
 table (:func:`pyramid_levels`) that says which opener owns which cell
-order. The multi-order assembly (a DataTree over these levels) is
-espg/moczarr#36b, built ON this per-level block — deliberately not here.
+order. On top of the per-level block sits the espg/moczarr#36b multi-order
+ASSEMBLY, :func:`open_pyramid`: one ``xarray.DataTree`` whose groups are
+the store's resolution levels — each group the per-level Dataset — with
+the normalized declaration record on the root.
 
 Native surfaces only (the englacial/zagg#550 ruling): nothing in this
 module touches ``moczarr.dggs`` or xdggs, and the new entry points expose
@@ -500,6 +502,50 @@ def open_column_order(
     return result
 
 
+def _resolve_target(
+    store_root: str,
+    product: str | None,
+    manifest: dict | None,
+    store: Any,
+    store_kwargs: dict[str, Any],
+) -> tuple[str, Any, dict]:
+    """``(store_root, obstore handle, manifest)`` for one product subtree.
+
+    The shared front door of the resolution-addressed entry points
+    (:func:`open_level`, :func:`open_pyramid`): D19 ``product=`` re-rooting,
+    one handle (threaded or constructed), and one manifest (threaded and
+    re-parsed, or read through the handle) — with the pointed multi-product
+    error when a root manifest is missing because the root is a directory
+    of stores rather than a store.
+    """
+    from moczarr.store import _resolve_store, read_manifest
+
+    if product is not None:
+        from moczarr.products import validate_product_name
+
+        validate_product_name(product)
+        store_root = f"{store_root.rstrip('/')}/{product}"
+    handle = _resolve_store(store_root, store, store_kwargs)
+    if manifest is None:
+        manifest = read_manifest(store_root, store=handle)
+        if manifest is None:
+            if product is None:
+                from moczarr.products import list_products
+
+                names = [p["name"] for p in list_products(store_root, store=handle)]
+                if names:
+                    raise ValueError(
+                        f"{store_root} is a multi-product store root (products: {names}); "
+                        f"pass product=... to open one (D19, mortie spec §6.5)"
+                    )
+            raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
+    else:
+        from moczarr.convention import parse_manifest
+
+        manifest = parse_manifest(manifest)
+    return store_root, handle, manifest
+
+
 def open_level(
     store_root: str,
     cell_order: int,
@@ -514,6 +560,7 @@ def open_level(
     concurrency: int | None = 32,
     xr_kwargs: dict[str, Any] | None = None,
     store: Any = None,
+    _envelope: dict | None = None,
     **store_kwargs: Any,
 ):
     """Open ONE resolution level of a pyramid store as one Dataset, or ``None``.
@@ -564,40 +611,22 @@ def open_level(
     ``store`` one already-constructed obstore handle — both reach EVERY
     arm, the native one included (issue #5: one store construction and one
     manifest GET per open, whichever artifact kind owns the level, so
-    threading a handle across a product's levels behaves uniformly);
+    threading a handle across a product's levels behaves uniformly); the
+    private ``_envelope`` likewise shares one already-read root MOC across
+    a product's non-source levels (how :func:`open_pyramid` calls this —
+    the sidecar tier must not grow with the number of levels);
     everything else follows :func:`moczarr.open.open_hive`'s posture.
     Deliberately no ``decode=``: new pyramid surfaces are native moczarr
     only (the englacial/zagg#550 ruling) — the returned Dataset is plain
     xarray plus the core lazy index.
     """
     from moczarr.pyramid import OBJECTS_ATTR, open_overview_order
-    from moczarr.store import _resolve_store, read_manifest
 
     if anonymous:
         store_kwargs.setdefault("anonymous", True)
-    if product is not None:
-        from moczarr.products import validate_product_name
-
-        validate_product_name(product)
-        store_root = f"{store_root.rstrip('/')}/{product}"
-    handle = _resolve_store(store_root, store, store_kwargs)
-    if manifest is None:
-        manifest = read_manifest(store_root, store=handle)
-        if manifest is None:
-            if product is None:
-                from moczarr.products import list_products
-
-                names = [p["name"] for p in list_products(store_root, store=handle)]
-                if names:
-                    raise ValueError(
-                        f"{store_root} is a multi-product store root (products: {names}); "
-                        f"pass product=... to open one (D19, mortie spec §6.5)"
-                    )
-            raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
-    else:
-        from moczarr.convention import parse_manifest
-
-        manifest = parse_manifest(manifest)
+    store_root, handle, manifest = _resolve_target(
+        store_root, product, manifest, store, store_kwargs
+    )
     levels = pyramid_levels(manifest)
     decl = pyramid_declaration(manifest)
     record = levels.get(int(cell_order))
@@ -642,7 +671,9 @@ def open_level(
         )
         ds.attrs[OBJECTS_ATTR] = objects
     else:
-        envelope = load_root_coverage(store_root, store=handle)
+        envelope = _envelope
+        if envelope is None:
+            envelope = load_root_coverage(store_root, store=handle)
         common = dict(
             aoi=aoi,
             window=window,
@@ -671,6 +702,138 @@ def open_level(
         "fold_source": decl["fold_source"] if decl else None,
     }
     return ds
+
+
+def open_pyramid(
+    store_root: str,
+    *,
+    product: str | None = None,
+    manifest: dict | None = None,
+    levels=None,
+    aoi=None,
+    window: str | None = None,
+    anonymous: bool = False,
+    fabricate_cell_ids: bool | str = "auto",
+    index_kind: str = "moc",
+    concurrency: int | None = 32,
+    xr_kwargs: dict[str, Any] | None = None,
+    store: Any = None,
+    **store_kwargs: Any,
+):
+    """Open a pyramid store's whole resolution ladder as one ``xarray.DataTree``.
+
+    The espg/moczarr#36b multi-order assembly over :func:`pyramid_levels`:
+    one child group per addressable resolution, finest first, each named by
+    the integer cell order it stores and holding exactly the Dataset
+    :func:`open_level` returns for that resolution (the #37 shape — the
+    ``cells`` axis, the lazy ``morton`` coordinate, ragged digests encoded,
+    ``zagg_level``/``zagg_objects`` attrs) — whichever artifact kind
+    materializes it (source leaves, §4.6 column groups, §4.1/§4.4 overview
+    artifacts), on either declaration grammar (``/1`` constant-depth and
+    the ``/2`` fixed ladder alike). The tree layer adds no reads of its
+    own beyond one manifest GET and one root-MOC read shared across the
+    levels (issue #5), and "lazy" stays each level's own laziness.
+
+    The **root node is empty** — no variables, no coordinates — and carries
+    the declaration:
+
+    - ``morton_hive`` — the manifest summary (``spec``, the native
+      ``cell_order``, ``shard_order``, ``dataset``), plus ``semantic_hash``
+      when the manifest records one;
+    - ``zagg_pyramid`` — the normalized :func:`moczarr.pyramid.
+      pyramid_declaration` record, decoded from the NORMATIVE ``pyramid``
+      block (absent on a declared-off store, whose tree is the valid
+      one-level degenerate form: the native order and nothing else);
+    - ``multiscales`` — the manifest's §4.9 ``zagg-multiscales/1``
+      discovery mirror **verbatim**, when the manifest carries one. It is
+      surfaced as recorded, never re-derived and never consulted: the
+      levels come from the ``pyramid`` block, which wins any disagreement
+      by §4.9's own precedence rule.
+
+    A declared level with no stamped artifact is OMITTED from the tree with
+    its opener's warning (declared-but-unmaterialized is a legal recorded
+    state — declaring is free, sweeping is the operational decision), and
+    an ``aoi`` scopes ROWS per level, never the tree's shape: an
+    out-of-coverage AOI empties each materialized level schema-correct
+    (issue #4). The seamless mixed-order composite stays a *computed* view,
+    never a node, and zoom-out ergonomics (a default coarse level for a
+    first render) stay espg/moczarr#21's.
+
+    ``levels`` restricts the assembly to a subset of the declared cell
+    orders (a bounded-cost open on a wide ladder — a ``/2`` store declares
+    every order down to 0); an order outside :func:`pyramid_levels`' table
+    raises, listing the store's levels. ``product`` re-roots on a D19
+    multi-product subtree, ``manifest``/``store`` thread an already-read
+    manifest and an already-constructed handle, and ``window`` follows each
+    arm's D23 seam (required on a windowed store, refused on an unwindowed
+    one, the reserved all-time token refused everywhere). Deliberately no
+    ``decode=``: pyramid surfaces are native moczarr only (the
+    englacial/zagg#550 ruling).
+    """
+    import xarray as xr
+
+    if anonymous:
+        store_kwargs.setdefault("anonymous", True)
+    store_root, handle, manifest = _resolve_target(
+        store_root, product, manifest, store, store_kwargs
+    )
+    table = pyramid_levels(manifest)
+    decl = pyramid_declaration(manifest)
+    if levels is not None:
+        wanted = [int(r) for r in levels]
+        if not wanted:
+            raise ValueError(
+                f"levels=[] selects nothing at {store_root} — omit levels= to open "
+                f"every declared level"
+            )
+        bad = sorted(set(wanted) - set(table))
+        if bad:
+            raise ValueError(
+                f"cell orders {bad} are not levels of {store_root}: this store's "
+                f"levels are {list(table)} (finest first; see pyramid_levels)"
+            )
+        table = {r: table[r] for r in table if r in set(wanted)}
+    envelope = None
+    if any(rec["artifact"] != "source" for rec in table.values()):
+        # ONE root-MOC read for the whole ladder (issue #5): the non-source
+        # arms name their candidates from it. None means "not usable" and the
+        # per-level opens then warn exactly as they do standalone.
+        envelope = load_root_coverage(store_root, store=handle)
+    nodes: dict[str, Any] = {}
+    for r in table:
+        ds = open_level(
+            store_root,
+            r,
+            manifest=manifest,
+            aoi=aoi,
+            window=window,
+            fabricate_cell_ids=fabricate_cell_ids,
+            index_kind=index_kind,
+            concurrency=concurrency,
+            xr_kwargs=xr_kwargs,
+            store=handle,
+            _envelope=envelope,
+            **store_kwargs,
+        )
+        if ds is None:
+            continue  # unmaterialized level — the arm warned; the group is omitted
+        nodes[str(r)] = ds
+    root_attrs: dict[str, Any] = {
+        "morton_hive": {
+            "spec": manifest["spec"],
+            "cell_order": int(manifest["cell_order"]),
+            "shard_order": int(manifest["shard_order"]),
+            "dataset": manifest.get("dataset"),
+        }
+    }
+    if manifest.get("semantic_hash"):
+        root_attrs["semantic_hash"] = manifest["semantic_hash"]
+    if decl is not None:
+        root_attrs["zagg_pyramid"] = decl
+    if manifest.get("multiscales") is not None:
+        root_attrs["multiscales"] = manifest["multiscales"]
+    root = xr.Dataset(attrs=root_attrs)
+    return xr.DataTree.from_dict({"/": root, **nodes})
 
 
 def level_demotions(ds) -> list[dict]:
@@ -722,5 +885,6 @@ __all__ = [
     "level_demotions",
     "open_column_order",
     "open_level",
+    "open_pyramid",
     "pyramid_levels",
 ]
