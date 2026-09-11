@@ -39,6 +39,7 @@ from __future__ import annotations
 from typing import Any
 
 from moczarr.convention import (
+    ALL_TOKEN,
     HIVE_SPEC_V2,
     column_path,
     decimal_order,
@@ -182,7 +183,11 @@ def read_column_record(
     object that does not classify as a column raises: ``role`` must be
     ``"column"``, the :data:`COLUMN_ATTR` block must be present with
     ``spec`` :data:`COLUMN_SPEC` (strict-check, fail loudly — the
-    conformance rule; this call names ONE object and cannot half-trust it).
+    conformance rule; this call names ONE object and cannot half-trust it),
+    and its ``node``/``order``/``window`` must be the ones asked for — a
+    column declaring another leaf's identity is the "interpretable but
+    wrong" class (:func:`moczarr.pyramid._object_entry`'s posture for an
+    off-order overview), since its groups would be read as this shard's.
 
     The record is the §4.6 block verbatim — ``fields`` (the materialized
     fields with their composability classes: the zero-open way to see the
@@ -228,6 +233,30 @@ def read_column_record(
         raise ValueError(
             f"column at {rel} declares spec {block.get('spec')!r}; this reader "
             f"implements {COLUMN_SPEC!r} only (strict-check, fail loudly)"
+        )
+    # The block's own identity keys, checked against what was ASKED for.
+    # §4.6 makes `node` the leaf's morton decimal, `order` its shard order,
+    # and `window` the §4.2 key the basename round-trips with — all three
+    # are already in hand, and a column that disagrees is the "interpretable
+    # but wrong" class `_object_entry` raises on for overviews: this record
+    # is the existence + field/group answer `open_column`'s
+    # `"{order}/{field}"` reads are driven from, so a stale or misplaced
+    # column (a copied prefix, a rename, a retrofit that moved a leaf) would
+    # otherwise hand back ANOTHER node's cells under this shard's identity —
+    # a wrong answer rather than a missing one.
+    want_node = morton_decimal(shard)
+    want_order = decimal_order(want_node)
+    want_window = ALL_TOKEN if window is None else window
+    if block.get("node") != want_node or block.get("order") != want_order:
+        raise ValueError(
+            f"column at {rel} declares node {block.get('node')!r}/order "
+            f"{block.get('order')!r}, not this leaf's {want_node!r}/{want_order} — "
+            f"its groups would be read under the wrong node (zagg spec §4.6)"
+        )
+    if block.get("window") != want_window:
+        raise ValueError(
+            f"column at {rel} declares window {block.get('window')!r}, not "
+            f"{want_window!r}: §4.6 makes the basename and this key round-trip"
         )
     return block
 
