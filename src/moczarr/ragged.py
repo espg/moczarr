@@ -257,7 +257,12 @@ class RaggedElement:
         observation counts and ``sum(weights)`` is the cell's exact
         observation count (§2.1); under ``"flux"`` weights are calibrated
         flux and ``sum(weights)`` estimates detected photoelectrons —
-        recovering an observation count from it is undefined.
+        recovering an observation count from it is undefined. Meaningful on
+        a DIGEST PAYLOAD array only: §2.0 scopes the declaration there ("the
+        declaration rides the payload array only"), and a companion sibling
+        (§8.3/§9) carries neither the key nor a weight column — so the
+        ``"counts"`` this field defaults to on one is the absent-key
+        default, not a claim about its words.
     """
 
     dtype: np.dtype
