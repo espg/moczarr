@@ -771,8 +771,10 @@ def open_pyramid(
     the declaration:
 
     - ``morton_hive`` — the manifest summary (``spec``, the native
-      ``cell_order``, ``shard_order``, ``dataset``), plus ``semantic_hash``
-      when the manifest records one;
+      ``cell_order``, ``shard_order``, ``dataset``);
+    - ``semantic_hash`` — a SIBLING attr beside ``morton_hive``, never a
+      member of it, present only when the manifest records one (the
+      ``open_store`` product-node spelling, so the two agree);
     - ``zagg_pyramid`` — the normalized :func:`moczarr.pyramid.
       pyramid_declaration` record, decoded from the NORMATIVE ``pyramid``
       block (absent on a declared-off store, whose tree is the valid
