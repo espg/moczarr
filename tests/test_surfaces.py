@@ -5,8 +5,10 @@ Two acceptance laws under test. (1) Evaluation parity: every value in a
 on that cell's stored digest — per cell, per quantile, on the shared spec
 fixtures — with the standing digest traps covered by hand-built bytes (the
 empty cell, the single-centroid digest, the 0/1 endpoints, and the
-unsorted-concatenation guard: centroids re-sorted by mean before the
-interp-based kernel). (2) The ladder contract (gridlook#10 Phase 3):
+unsorted-concatenation guard: centroids ordered by ``(mean, weight)``
+before the interp-based kernel, the second key canonicalizing the ties the
+merge's order-independence turns on). (2) The ladder contract
+(gridlook#10 Phase 3):
 declared orders, materialized orders (declared ≠ materialized is the
 live-store failure mode), and per-order resolution, typed.
 

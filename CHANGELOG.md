@@ -11,9 +11,13 @@
   exact fields riding along un-evaluated via `carry=` (or alone via
   `field=None`), and strata stores answering per-stratum or merged-total
   surfaces by argument (the merge is the lossless concatenate-and-sort
-  t-digest union — deterministic, no re-compression). Evaluation is zagg's
+  t-digest union — no re-compression, and order-independent: naming the
+  strata the other way round is the same surface). Evaluation is zagg's
   `quantile_from_tdigest` per cell through the `moczarr[zagg]` extra, with
-  centroids re-sorted by mean first (the unsorted-concatenation trap).
+  centroids ordered by `(mean, weight)` first — by mean for the
+  unsorted-concatenation trap, by weight within a mean because the kernel's
+  cumulative-weight walk reads tied centroids in the order it is handed
+  them.
   `read_ladder` types the picker contract (espg/gridlook#10 Phase 3):
   declared orders, materialized orders (overview presence via
   `read_pyramid`, column presence from the §4.6 columns' own `groups`

@@ -19,7 +19,9 @@ Two surfaces:
   per cell before evaluation (one deterministic concatenate-and-sort — the
   lossless t-digest union, no re-compression), so a
   ``h_tdigest_signal``/``h_tdigest_noise`` store answers per-stratum or
-  merged-total surfaces by argument.
+  merged-total surfaces by argument — and by argument ONLY: the sort key
+  is ``(mean, weight)``, so naming the strata the other way round is the
+  same surface even when they share a centroid mean.
 - :func:`read_ladder` — the picker contract: one typed record per level of
   :func:`moczarr.level.pyramid_levels`' table, extended with the per-order
   ground resolution (``mortie.order2res``) and a probed ``materialized``
@@ -30,9 +32,11 @@ Two surfaces:
 The t-digest algebra is IMPORTED from zagg through the established
 ``moczarr[zagg]`` extra seam (:func:`moczarr.hhdc._tdigest_algebra`; issue
 #19 — vendoring is parity drift by construction), and evaluation honours
-the standing trap: centroids are re-sorted by mean whenever an input (a
-merged concatenation especially) is not already sorted, because the
-interp-based kernel assumes mean order. Native surfaces only (the
+the standing trap: every digest — merged concatenation or single stored
+cell — is ordered by ``(mean, weight)`` before the kernel sees it, because
+the interp-based kernel assumes mean order AND its cumulative-weight walk
+is sensitive to the order of centroids that share a mean. Native surfaces
+only (the
 englacial/zagg#550 ruling): no ``moczarr.dggs``, no xdggs, no ``decode=``.
 """
 
@@ -220,7 +224,8 @@ def quantile_surface(
     ``field`` is one digest variable name, a sequence of them (the strata
     arm: the cells' centroid sets are merged by the lossless
     concatenate-and-sort union before evaluation — the merged TOTAL of
-    ``("h_tdigest_signal", "h_tdigest_noise")``; per-stratum surfaces are
+    ``("h_tdigest_signal", "h_tdigest_noise")``, identical to the flipped
+    pair's, ties included; per-stratum surfaces are
     one call per field), or ``None`` with a non-empty ``carry`` (the
     dense-only arm: no evaluation, no ``quantile`` dimension). The default
     merged name is the fields' common prefix (``h_tdigest``); ``name=``
