@@ -18,12 +18,14 @@
   because `convention.morton_word` `int()`s its result, `coverage.as_moc_words`
   casts every AOI to `uint64` before any mortie call, and `numpy>=2.0` was
   already the floor.
-  **Known limitation:** the optional `[zagg]` extra is broken until zagg ships
-  its own mortie 1.0 migration (englacial/zagg#559) — released zagg (0.52.0)
-  still does `from mortie import decimals_to_words` in `grids/morton.py`,
-  which cannot resolve against the `mortie>=1.0.0` this release requires, so
-  `moczarr.hhdc`'s t-digest path raises `ImportError` on `moczarr[zagg]`
-  installs.
+  The optional `[zagg]` extra moves to **`zagg>=0.53.0`** in step: every
+  earlier zagg still does `from mortie import decimals_to_words` in
+  `grids/morton.py`, which cannot resolve against the `mortie>=1.0.0` this
+  release requires, so `moczarr.hhdc`'s t-digest path would raise
+  `ImportError` on a `moczarr[zagg]` install. 0.53.0 is the first zagg on
+  mortie 1.0 (englacial/zagg#559); until it is on PyPI the extra fails at
+  resolve time rather than at import, by design. Both floors together are
+  the reason this ships as a minor bump.
 
 - New `moczarr.hhdc.block_rank(words, block_order)`
   ([#52](https://github.com/espg/moczarr/issues/52)): the block-local nested
