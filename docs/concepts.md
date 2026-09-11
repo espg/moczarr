@@ -219,9 +219,10 @@ a sibling node, riding the multiscale-DataTree conventions. A product
 whose manifest declares no overview family keeps today's flat form,
 unchanged. A `zagg-pyramid/2` product (the fixed ladder) grows the same
 level from `pyramid_levels`' resolution table — the §4.6 column-carried
-leaf resolutions included — each child the `open_level` Dataset for its
-cell order, with the normalized declaration record under the product
-node's `zagg_pyramid` attr; `decode=True` is refused there (native
+leaf resolutions included — its children named `o{cell_order}` (`o5`; the
+espg-ruled reader-side group grammar, shared with `open_pyramid`), each
+the `open_level` Dataset for its cell order, with the normalized
+declaration record under the product node's `zagg_pyramid` attr; `decode=True` is refused there (native
 surfaces only, the englacial/zagg#550 ruling). Windowed products inherit window naming (D23): `window=` scopes
 each order node to that window's `{window}.zarr` overviews, so one call
 still opens a store mixing windowed and unwindowed products.
@@ -482,8 +483,11 @@ pyramid surfaces are native moczarr only — the englacial/zagg#550 ruling).
 NORMATIVE `pyramid` block), and the manifest's §4.9 `multiscales`
 discovery mirror **verbatim** when one is recorded (never consulted, never
 re-derived — the `pyramid` block wins by §4.9's own precedence rule) — and
-one child group per materialized resolution, finest first, named by the
-integer cell order it stores, each holding exactly the `open_level`
+one child group per materialized resolution, finest first, named
+`o{cell_order}` (`o5` for the level storing order-5 cells — attribute
+access works, `tree.o5.ds`, and the name is an unambiguous string; the
+`oN` spelling is reader-side tree vocabulary only, store-side wire paths
+stay numeric, `19/...` on disk), each holding exactly the `open_level`
 Dataset for that resolution. Declared-but-unmaterialized levels are
 omitted with their opener's warning (declaring is free, sweeping is the
 operational decision); `aoi=` scopes rows per level, never the tree's

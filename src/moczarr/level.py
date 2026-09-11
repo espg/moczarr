@@ -752,14 +752,19 @@ def open_pyramid(
     """Open a pyramid store's whole resolution ladder as one ``xarray.DataTree``.
 
     The espg/moczarr#36b multi-order assembly over :func:`pyramid_levels`:
-    one child group per addressable resolution, finest first, each named by
-    the integer cell order it stores and holding exactly the Dataset
+    one child group per addressable resolution, finest first, each named
+    ``o{cell_order}`` (``o5`` for the level storing order-5 cells — the
+    espg-ruled group grammar: attribute-style access works, ``tree.o5.ds``,
+    and the name is an unambiguous string rather than a type-mangled
+    number) and holding exactly the Dataset
     :func:`open_level` returns for that resolution (the #37 shape — the
     ``cells`` axis, the lazy ``morton`` coordinate, ragged digests encoded,
     ``zagg_level``/``zagg_objects`` attrs) — whichever artifact kind
     materializes it (source leaves, §4.6 column groups, §4.1/§4.4 overview
     artifacts), on either declaration grammar (``/1`` constant-depth and
-    the ``/2`` fixed ladder alike). The tree layer adds no reads of its
+    the ``/2`` fixed ladder alike). The ``oN`` spelling is READER-SIDE tree
+    vocabulary only: store-side wire paths stay numeric (an order-19 group
+    on disk is ``19/...``, unchanged). The tree layer adds no reads of its
     own: the sidecar tier is CONSTANT in the number of levels (issue #5) —
     one manifest GET, and one root-MOC read threaded across every
     non-source level, beside the one :func:`moczarr.open.open_hive` takes
@@ -896,7 +901,7 @@ def open_pyramid(
         )
         if ds is None:
             continue  # unmaterialized level — the arm warned; the group is omitted
-        nodes[str(r)] = ds
+        nodes[f"o{r}"] = ds
     root_attrs: dict[str, Any] = {
         "morton_hive": {
             "spec": manifest["spec"],

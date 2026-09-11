@@ -8,7 +8,9 @@
   as one `xarray.DataTree` — an empty root carrying the declaration
   (`morton_hive`, the normalized `zagg_pyramid` record, and the manifest's
   §4.9 `multiscales` discovery mirror verbatim when recorded) and one child
-  group per materialized resolution, finest first, each holding exactly the
+  group per materialized resolution, finest first, named `o{cell_order}`
+  (`o5` — dot access works; reader-side vocabulary only, wire paths stay
+  numeric), each holding exactly the
   `open_level` Dataset for that cell order, on either declaration grammar.
   Unmaterialized levels are omitted with their opener's warning, `aoi=`
   scopes rows never the tree's shape, `levels=` bounds the assembly on a
