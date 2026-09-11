@@ -439,9 +439,12 @@ shape**:
   store-addressed `read_ragged`);
 - `attrs["morton_hive"]` (the level summary), `attrs["zagg_objects"]` (the
   per-artifact roster with each object's `zagg_overview` / `zagg_column`
-  provenance block verbatim — fold regime, generation, stamped
-  `demotions`), and `attrs["zagg_level"]` (the level record plus the
-  declared field classes and fold regime).
+  provenance block verbatim — fold regime, generation, and any stamped
+  `demotions` records: a **pre-spec** key tracking the open
+  englacial/zagg#557, which `level_demotions` flattens from the
+  sweep-written `zagg_overview` blocks without validating it and without
+  claiming a spec for it), and `attrs["zagg_level"]` (the level record plus
+  the declared field classes and fold regime).
 
 Both grammars are first-class: a `/1` store's levels are its native order
 plus the constant-depth overview orders (the live public stores' shape),

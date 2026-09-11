@@ -785,6 +785,10 @@ class TestV2AncestorArm:
             assert open_level(TEMPORAL, 3) is None
 
     def test_demotions_ride_and_flatten(self, tmp_path):
+        # `demotions` is PRE-SPEC (englacial/zagg#557, open + waiting): the
+        # record below is hand-written to that PR's shape, so this pins
+        # moczarr's flattening only, never the grammar. When #557 lands a
+        # spec section and a fixture, re-pin on writer bytes.
         from moczarr import level_demotions
 
         root = tmp_path / "hive"
@@ -810,3 +814,23 @@ class TestV2AncestorArm:
 
         assert level_demotions(open_level(swept, 4)) == []
         assert level_demotions(open_level(swept, 5)) == []
+
+    def test_column_blocks_are_not_a_demotions_source(self, tmp_path):
+        # The key is read from the sweep-written zagg_overview block ONLY.
+        # A §4.6 leaf column is written by the leaf worker, which runs no
+        # fold, so it has no producer for `demotions` (#557's instrumented
+        # sites are all sweep-side) — a planted one still rides verbatim in
+        # the roster, but level_demotions invents no surface for it.
+        from moczarr import level_demotions
+
+        root = tmp_path / "hive"
+        shutil.copytree(TEMPORAL, root)
+        path = root / COLUMN_REL / "zarr.json"
+        meta = json.loads(path.read_text())
+        planted = [{"field": "composition", "class": "packed", "reason": "divisor-missing"}]
+        meta["attributes"]["zagg_column"]["demotions"] = planted
+        path.write_text(json.dumps(meta))
+        ds = open_level(str(root), 5)
+        (entry,) = ds.attrs[OBJECTS_ATTR]
+        assert entry["zagg_column"]["demotions"] == planted
+        assert level_demotions(ds) == []

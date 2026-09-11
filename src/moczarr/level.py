@@ -655,27 +655,42 @@ def open_level(
 def level_demotions(ds) -> list[dict]:
     """Every stamped ``demotions`` record of one level, node-attributed.
 
-    zagg's packed-class guard rail records each demotion it fires in the
-    affected artifact's ``zagg_overview`` attrs (englacial/zagg#518 — one
-    record per ``(field, reason)``, e.g. ``{"field": "composition",
-    "class": "packed", "reason": "divisor-missing", ...}``), and those
-    blocks ride VERBATIM in this model's ``zagg_objects`` roster. This
-    flattens them across the level's artifacts, each record extended with
-    the carrying object's ``node`` and ``window`` — the zero-decode way to
-    ask "was anything demoted at this level?". Records are surfaced as
-    stamped, never validated: the key's absence everywhere is the clean
-    answer ``[]`` (a pre-#518 writer's attrs are byte-identical to a clean
-    store's, so absence is never evidence the rail stayed quiet), and
-    unknown record keys pass through untouched. Takes an
-    :func:`open_level` / :func:`moczarr.pyramid.open_overview_order` /
-    :func:`open_column_order` result — or a DataTree node wrapping one.
+    **Pre-spec, forward-tolerant, surfaced verbatim.** The ``demotions``
+    key is NOT in the normative store contract: zagg's byte-level grammar
+    is ``docs/specification.md`` plus the conformance fixtures (zagg#340),
+    and this key lives only in the open, ``waiting`` PR englacial/zagg#557
+    (the packed-class guard rail, zagg#518 — one record per
+    ``(field, reason)``, e.g. ``{"field": "composition", "class":
+    "packed", "reason": "divisor-missing", ...}``). So this function makes
+    NO claim about the record shape and validates nothing: it reads the
+    key where the PR says the sweep writes it — the affected overview
+    artifact's ``zagg_overview`` attrs, which ride VERBATIM in this model's
+    ``zagg_objects`` roster — flattens the records across the level's
+    artifacts, and extends each with the carrying object's ``node`` and
+    ``window``. Unknown record keys pass through untouched, and absence
+    everywhere is the clean answer ``[]`` (a pre-#518 writer's attrs are
+    byte-identical to a clean store's, so absence is never evidence the
+    rail stayed quiet). If #557's shape moves before it lands, this
+    docstring and ``tests/test_level.py``'s hand-written record are the
+    two places to update; when it lands with a spec section and a fixture,
+    the test re-pins on writer bytes.
+
+    Read from ``zagg_overview`` ONLY. §4.6 leaf columns are written by the
+    leaf worker, which runs no fold, and #557's instrumented sites are all
+    sweep-side, so a ``zagg_column`` block has no producer for this key —
+    reading one would be speculation dressed as a surface.
+
+    Takes an :func:`open_level` /
+    :func:`moczarr.pyramid.open_overview_order` /
+    :func:`open_column_order` result — or a DataTree node wrapping one; a
+    column level's answer is ``[]`` by construction.
     """
     node = ds.ds if hasattr(ds, "ds") else ds
     from moczarr.pyramid import OBJECTS_ATTR, OVERVIEW_ATTR
 
     out = []
     for entry in node.attrs.get(OBJECTS_ATTR) or []:
-        block = entry.get(OVERVIEW_ATTR) or entry.get(COLUMN_ATTR) or {}
+        block = entry.get(OVERVIEW_ATTR) or {}
         for record in block.get("demotions") or []:
             out.append({"node": entry.get("node"), "window": entry.get("window"), **record})
     return out
