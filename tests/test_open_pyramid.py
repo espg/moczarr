@@ -216,3 +216,56 @@ class TestAssemblyV1:
         assert tree.attrs["morton_hive"]["dataset"] == {"short_name": "THREADED"}
         for child in tree.children.values():
             assert child.ds.attrs["morton_hive"]["dataset"] == {"short_name": "THREADED"}
+
+
+class TestOpenStoreV2:
+    """open_store's /2 order nodes (issue #36b scope (2))."""
+
+    def test_bare_v2_store_grows_level_children(self, swept):
+        from moczarr import open_store
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            tree = open_store(swept)
+        assert list(tree.children) == ["spec_fixture"]
+        product = tree["spec_fixture"]
+        # The product node is an empty intermediate carrying the identity
+        # attrs plus the normalized declaration; the children are the
+        # MATERIALIZED resolution levels, finest first.
+        assert not product.to_dataset().data_vars
+        assert product.ds.attrs["zagg_pyramid"]["spec"] == "zagg-pyramid/2"
+        assert product.ds.attrs["morton_hive"]["cell_order"] == 6
+        assert "semantic_hash" in product.ds.attrs
+        assert list(product.children) == ["6", "5", "4"]
+
+    def test_children_are_the_open_level_datasets(self, swept):
+        from moczarr import open_store
+
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", UserWarning)
+            tree = open_store(swept)
+            for r in (6, 5, 4):
+                want = open_level(swept, r)
+                xr.testing.assert_identical(tree["spec_fixture"][str(r)].to_dataset(), want)
+
+    def test_decode_refused_on_a_v2_product(self, swept):
+        from moczarr import open_store
+
+        with pytest.raises(ValueError, match="zagg#550"):
+            open_store(swept, decode=True)
+
+    def test_unknown_pyramid_revision_fails_loudly(self, swept, tmp_path):
+        # A future /3 block must not read as declared-off (§4.5's conformance
+        # rule) — open_store now runs the same strict check open_level does.
+        import json
+
+        from moczarr import open_store
+
+        root = tmp_path / "hive3"
+        shutil.copytree(swept, root)
+        manifest_path = root / "morton_hive.json"
+        manifest = json.loads(manifest_path.read_text())
+        manifest["pyramid"]["spec"] = "zagg-pyramid/3"
+        manifest_path.write_text(json.dumps(manifest))
+        with pytest.raises(ValueError, match="zagg-pyramid/3"):
+            open_store(str(root))
