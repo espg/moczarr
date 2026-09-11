@@ -372,8 +372,15 @@ def read_pyramid(
     ``window`` follows the overview dialect (D23): a windowed
     (``morton-hive/2``) store's artifacts are per window, so probing one
     requires ``window=...``; an unwindowed store refuses the argument (its
-    ancestor artifacts are ``all.zarr``). Enforced only when probing —
-    ``probe=False`` asks nothing window-shaped. ``orders`` restricts the
+    ancestor artifacts are ``all.zarr``). Only that *requirement* is
+    probe-scoped — it is about naming objects, and ``probe=False`` names
+    none. **Refusals are unconditional**: a label this store has no windows
+    for, and the reserved all-time token (``"all"``, §4.2 — three behaviors
+    for one token is the espg/moczarr#30 trap :func:`validate_window` exists
+    to close), raise at every ``probe``, exactly as
+    :func:`open_overview_order` runs the same seam above its windowed
+    branch. A ``window=`` this call cannot honour is never silently
+    ignored. ``orders`` restricts the
     probe to a subset of the declared ancestor orders (a bounded-cost check
     on a wide ladder). ``product`` re-roots on a D19 multi-product subtree,
     and ``store``/``anonymous``/``store_kwargs`` follow
@@ -401,21 +408,30 @@ def read_pyramid(
     declaration = pyramid_declaration(manifest)
     if declaration is None:
         return None
-    if not probe:
-        return {"declaration": declaration, "presence": None}
     windowed = manifest["spec"] == HIVE_SPEC_V2
+    # ABOVE the `probe=False` return, for the reason `open_overview_order`
+    # keeps its own `validate_window` above the windowed branch: a `window=`
+    # argument this call cannot honour is refused UNCONDITIONALLY, so one
+    # store gives one answer about what a window means there. Leaving these
+    # under `probe` made the reserved all-time token (#30's trap) and a
+    # label on an unwindowed store pass silently whenever probing was off —
+    # same argument, same store, two behaviours keyed on an unrelated flag.
     if window is not None:
         validate_window(window, where=store_root)
+    if not windowed and window is not None:
+        raise ValueError(
+            f"window={window!r} on a {manifest['spec']} store: unwindowed stores "
+            f"have no window leaves (schedule: none)"
+        )
+    if not probe:
+        return {"declaration": declaration, "presence": None}
+    # Genuinely probe-scoped: this one is about NAMING objects, and
+    # `probe=False` names none.
     if windowed and window is None:
         raise ValueError(
             f"{store_root} is a windowed ({HIVE_SPEC_V2}) store; its pyramid artifacts "
             f"are per-window (D23 naming) — pass window=... to probe presence, or "
             f"probe=False for the declaration alone"
-        )
-    if not windowed and window is not None:
-        raise ValueError(
-            f"window={window!r} on a {manifest['spec']} store: unwindowed stores "
-            f"have no window leaves (schedule: none)"
         )
     probe_orders = declaration["orders"] if orders is None else [int(k) for k in orders]
     bad = [k for k in probe_orders if k not in declaration["orders"]]
