@@ -148,6 +148,25 @@ def _cell_digest(columns: list[np.ndarray], elements: list, j: int) -> np.ndarra
     return digest
 
 
+def _json_fill(fill: float) -> float | str:
+    """``fill`` as a STRICT-JSON attrs value: a number, or the token's name.
+
+    A non-finite fill (the ``np.nan`` default, above all) recorded as a bare
+    float writes the literal ``NaN`` into the variable's ``zarr.json`` —
+    which ``json`` accepts (``allow_nan=True``) and ``JSON.parse`` does not,
+    taking the WHOLE metadata object down with it (shape, dtype and chunk
+    grid included) in the browser this module exists to feed. The house
+    spelling is the quoted name — zarr's own ``"fill_value": "NaN"`` and the
+    manifest's fill entries — so non-finite fills are recorded that way.
+    """
+    value = float(fill)
+    if np.isfinite(value):
+        return value
+    if np.isnan(value):
+        return "NaN"
+    return "Infinity" if value > 0 else "-Infinity"
+
+
 def _surface_name(fields: tuple[str, ...], name: str | None) -> str:
     """The output variable name: explicit, the field, or the merged prefix."""
     if name is not None:
@@ -192,7 +211,10 @@ def quantile_surface(
       ``field``: a bare string is ONE name, never its characters);
     - the level's ``morton_hive`` / ``zagg_level`` / ``zagg_objects`` attrs
       carried forward, plus :data:`SURFACE_ATTR` on the evaluated variable
-      recording ``fields``/``quantiles``/``fill``.
+      recording ``fields``/``quantiles``/``fill`` — the last as a number,
+      or as the quoted token name (``"NaN"``/``"Infinity"``/
+      ``"-Infinity"``) when it is not finite, so the written ``zarr.json``
+      stays strict JSON for a browser reader (:func:`_json_fill`).
 
     ``field`` is one digest variable name, a sequence of them (the strata
     arm: the cells' centroid sets are merged by the lossless
@@ -267,7 +289,7 @@ def quantile_surface(
                 SURFACE_ATTR: {
                     "fields": list(fields),
                     "quantiles": qs.tolist(),
-                    "fill": float(fill),
+                    "fill": _json_fill(fill),
                 }
             },
         )

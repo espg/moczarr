@@ -18,6 +18,7 @@ spec fixtures (``spec/temporal`` — the one with a root ``coverage.moc``;
 the read+evaluate timing the issue's performance posture asks for.
 """
 
+import json
 import os
 import time
 from pathlib import Path
@@ -124,6 +125,17 @@ class TestQuantileSurface:
         assert list(back["quantile"].values) == list(DEFAULT_QUANTILES)
         sel = back["h_tdigest"].sel(quantile=0.5)
         np.testing.assert_array_equal(sel.values, [1.0, 2.0])
+        # …and the metadata it wrote is STRICT JSON. The default fill is NaN,
+        # which Python's json emits as a bare `NaN` literal (allow_nan) and
+        # `JSON.parse` refuses — taking the array's shape/dtype/chunk grid
+        # down with it in the viewer this module feeds.
+        raw = (tmp_path / "surf.zarr" / "h_tdigest" / "zarr.json").read_text()
+
+        def _bare(token):
+            raise AssertionError(f"non-JSON literal {token!r} in the written zarr.json")
+
+        meta = json.loads(raw, parse_constant=_bare)
+        assert meta["attributes"][SURFACE_ATTR]["fill"] == "NaN"
 
     def test_empty_cell_reads_fill(self):
         # Both empty spellings (b"" via None here, and a zero-length list).
@@ -259,6 +271,14 @@ class TestQuantileSurface:
         surf = quantile_surface(_level([[[1.0, 1.0]]]), "h_tdigest", [0.5], fill=-1.0)
         block = surf["h_tdigest"].attrs[SURFACE_ATTR]
         assert block == {"fields": ["h_tdigest"], "quantiles": [0.5], "fill": -1.0}
+        # A non-finite fill is recorded by NAME, the house spelling (zarr's
+        # own "fill_value": "NaN", the manifest's fill entries) — a bare
+        # float would be an unparseable JSON literal on the way out.
+        for fill, spelling in ((np.nan, "NaN"), (np.inf, "Infinity"), (-np.inf, "-Infinity")):
+            block = quantile_surface(_level([[[1.0, 1.0]]]), "h_tdigest", [0.5], fill=fill)[
+                "h_tdigest"
+            ].attrs[SURFACE_ATTR]
+            assert block["fill"] == spelling
 
     def test_refusals_are_pointed(self):
         counts = np.array([1], dtype=np.int32)
