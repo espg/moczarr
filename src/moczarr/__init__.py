@@ -1,5 +1,12 @@
 """moczarr: sparse-DGGS xarray reader for morton-hive zarr stores."""
 
+from moczarr.column import (
+    COLUMN_ATTR,
+    COLUMN_SPEC,
+    column_orders,
+    open_column,
+    read_column_record,
+)
 from moczarr.composition import (
     COMPOSITION_LANES,
     COMPOSITION_SPEC,
@@ -117,6 +124,8 @@ except ImportError:  # pragma: no cover - version file is generated at build tim
     __version__ = "0.0.0+unknown"
 
 __all__ = [
+    "COLUMN_ATTR",
+    "COLUMN_SPEC",
     "COMMIT_ATTR",
     "COMPOSITION_LANES",
     "COMPOSITION_SPEC",
@@ -147,6 +156,7 @@ __all__ = [
     "cell_index",
     "check_node_invariant",
     "column_name",
+    "column_orders",
     "column_path",
     "combined_hash",
     "counts_from_composition",
@@ -172,6 +182,7 @@ __all__ = [
     "named_lanes",
     "node_objects",
     "occupancy_and",
+    "open_column",
     "open_hive",
     "open_leaf",
     "open_object_store",
@@ -195,6 +206,7 @@ __all__ = [
     "ranges_contain",
     "ranges_words",
     "read_cell",
+    "read_column_record",
     "read_commit",
     "read_commits",
     "read_coverage_bitmap",

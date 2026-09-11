@@ -10,12 +10,14 @@ zagg-writer bytes, each carrying one leaf plus its §4.6 column, declared
 """
 
 import json
+import os
 import shutil
 from pathlib import Path
 
 import pytest
 
 from moczarr import convention, store
+from moczarr.column import column_orders, open_column, read_column_record
 from moczarr.convention import column_name, column_path, is_column_basename, leaf_path
 
 SPEC = Path(__file__).parent / "data" / "spec"
@@ -106,3 +108,217 @@ class TestWalkColumns:
             COLUMN_REL,
         ]
         assert list(store.walk_leaves(str(root))) == [LEAF_REL]
+
+
+class TestReadColumnRecord:
+    MINIMAL = str(SPEC / "minimal")
+
+    def test_minimal_record_binds(self):
+        rec = read_column_record(self.MINIMAL, "11213")
+        assert rec["spec"] == "zagg-column/1"
+        assert rec["node"] == "11213"
+        assert rec["order"] == 4
+        assert rec["window"] == "all"
+        assert sorted(rec["fields"]) == ["count", "h_tdigest"]
+        assert rec["fields"]["h_tdigest"]["class"] == "approximate"
+        # groups is the on-disk provenance map; column_orders spells it as
+        # integers, finest first (the cells_with_data_order group leads).
+        assert column_orders(rec) == (5, 4)
+        assert rec["cells_with_data_order"] == 5
+        assert all(g["regime"] == "leaf-column" for g in rec["groups"].values())
+
+    def test_field_split_is_zero_open(self):
+        # The §4.5 class split, read from the column alone — the published
+        # ATL03 store's count-only vs four-field split (zagg#547) is this
+        # same one-GET question. kitchen_sink declares every digest field
+        # none-class, so its column materializes count only.
+        count_only = read_column_record(str(SPEC / "kitchen_sink"), "11213")
+        assert sorted(count_only["fields"]) == ["count"]
+        multi = read_column_record(str(SPEC / "temporal"), "11213")
+        assert sorted(multi["fields"]) == ["count", "h_tdigest"]
+
+    def test_absent_column_reads_none(self):
+        # §4.6: readers never require a column — absence is never an error.
+        assert read_column_record(self.MINIMAL, "11212") is None
+
+    def test_unstamped_column_is_debris(self, tmp_path):
+        root = tmp_path / "hive"
+        shutil.copytree(SPEC / "minimal", root)
+        path = root / COLUMN_REL / "zarr.json"
+        meta = json.loads(path.read_text())
+        del meta["attributes"]["morton_hive_commit"]
+        path.write_text(json.dumps(meta))
+        assert read_column_record(str(root), "11213") is None
+
+    @pytest.mark.parametrize(
+        ("doctor", "match"),
+        [
+            (lambda a: a.__setitem__("role", "overview"), "not 'column'"),
+            (lambda a: a.pop("zagg_column"), "lacks the 'zagg_column'"),
+            (
+                lambda a: a["zagg_column"].__setitem__("spec", "zagg-column/2"),
+                "zagg-column/2",
+            ),
+        ],
+    )
+    def test_stamped_nonconformant_column_raises(self, tmp_path, doctor, match):
+        # Contrast the absent/unstamped cases: this call names ONE object,
+        # and a stamped object at the column basename that does not classify
+        # as a /1 column cannot be half-trusted (the conformance rule).
+        root = tmp_path / "hive"
+        shutil.copytree(SPEC / "minimal", root)
+        path = root / COLUMN_REL / "zarr.json"
+        meta = json.loads(path.read_text())
+        doctor(meta["attributes"])
+        path.write_text(json.dumps(meta))
+        with pytest.raises(ValueError, match=match):
+            read_column_record(str(root), "11213")
+
+    def test_window_seam(self):
+        # The same seam every window= entry point shares: an unwindowed
+        # store refuses a label (and the reserved token), a windowed store
+        # requires one — its columns are {window}.pyramid.zarr.
+        with pytest.raises(ValueError, match="unwindowed stores"):
+            read_column_record(self.MINIMAL, "11213", window="2019")
+        with pytest.raises(ValueError, match="reserved all-time token"):
+            read_column_record(self.MINIMAL, "11213", window="all")
+        windowed = str(Path(__file__).parent / "data" / "overview_hive" / "atl06_windows")
+        with pytest.raises(ValueError, match="pass window="):
+            read_column_record(windowed, "4331244")
+        # A windowed store without columns: absence, never an error.
+        assert read_column_record(windowed, "4331244", window="2019") is None
+
+    def test_cell_id_names_no_column(self):
+        with pytest.raises(ValueError, match="order-5"):
+            read_column_record(self.MINIMAL, "112131")
+
+
+class TestColumnReads:
+    """The normal ragged/dense read path, pointed at column groups."""
+
+    MINIMAL = str(SPEC / "minimal")
+
+    def test_dense_field_reads_and_folds(self):
+        # count is exact-class (sum law): the node-order member (group 4)
+        # and the declared resolution (group 5) both fold from the leaf's
+        # resident cells, so all three totals agree — the §4.6 from-leaves
+        # parity contract, checked through plain zarr opens.
+        import zarr
+
+        from moczarr import open_leaf
+
+        col = open_column(self.MINIMAL, "11213")
+        c5 = zarr.open_array(col, path="5/count", mode="r", zarr_format=3)[:]
+        c4 = zarr.open_array(col, path="4/count", mode="r", zarr_format=3)[:]
+        leaf = open_leaf(self.MINIMAL, "11213")
+        c6 = zarr.open_array(leaf, path="6/count", mode="r", zarr_format=3)[:]
+        assert c5.shape == (4,) and c4.shape == (1,)  # 4^(r - node) cells
+        assert int(c5.sum()) == int(c4.sum()) == int(c6.sum()) > 0
+
+    def test_group_morton_coordinates_are_node_descendants(self):
+        import zarr
+
+        col = open_column(self.MINIMAL, "11213")
+        words5 = zarr.open_array(col, path="5/morton", mode="r", zarr_format=3)[:]
+        assert [convention.morton_decimal(int(w))[:5] for w in words5] == ["11213"] * 4
+        assert sorted(words5) == list(words5)  # ascending, §4.4 coordinate
+        words4 = zarr.open_array(col, path="4/morton", mode="r", zarr_format=3)[:]
+        assert [int(w) for w in words4] == [convention.morton_word("11213")]
+
+    def test_ragged_digest_reads_through_read_ragged(self):
+        # The SAME per-leaf ragged reader, pointed at a column group path —
+        # no column-specific decode layer.
+        from moczarr import read_ragged
+
+        rows = list(read_ragged(open_column(self.MINIMAL, "11213"), "5/h_tdigest"))
+        assert len(rows) == 3  # the stamp's cells_with_data, group 5
+        for word, values in rows:
+            assert convention.morton_decimal(int(word)).startswith("11213")
+            assert values.ndim == 2 and values.shape[1] == 2  # (n, *inner_shape)
+
+    def test_companion_channels_ride_along(self):
+        # A column group carries every sibling its field's §4.5 entry
+        # declares (locations AND times on the temporal fixture), exactly
+        # as a leaf does — same reader, same flags.
+        from moczarr import read_ragged
+
+        col = open_column(str(SPEC / "temporal"), "11213")
+        rows = list(read_ragged(col, "5/h_tdigest", locations=True, times=True))
+        assert rows
+        for _word, values, locs, times in rows:
+            assert len(locs) == len(values) == len(times)
+
+
+@pytest.mark.skipif(
+    os.environ.get("MOCZARR_LIVE_TESTS", "").lower() not in {"1", "true", "yes"},
+    reason="live S3 acceptance (anonymous, metadata + one tiny group); set MOCZARR_LIVE_TESTS=1",
+)
+class TestLiveAtl03Pyramid:
+    """Issue #36 against the published ATL03 store (anonymous, cheap).
+
+    Pins today's audited state (englacial/zagg#547, 2026-09-10): the
+    v1-era spacing-2 [7,5,3,1] declaration, and the column split — ~204
+    0.52-era four-field columns against ~2,713 count-only ones. Both halves
+    move when the #547 runbook lands (dense /2 re-declaration; PR #524
+    column backfill), so this test documents the shards it pins and will
+    need the new facts then. Env-gated: the committed suite stays offline.
+    """
+
+    ROOT = "s3://us-west-2.opendata.source.coop/englacial/zagg/demo/atl03_tdigest_o9.zarr"
+    S3 = {"region": "us-west-2", "anonymous": True}
+    #: Audited examples of each column kind (probed 2026-09-10).
+    COUNT_ONLY = "3213244424"
+    FOUR_FIELD = "3133332144"
+
+    def test_declaration_parse_and_presence_shape(self):
+        from moczarr import read_pyramid
+
+        # orders=[1] bounds the probe at the store's 6 order-1 ancestor
+        # nodes — presence shape only, not a zero pin: the #547 sweep will
+        # legitimately move stamped from 0.
+        rp = read_pyramid(self.ROOT, orders=[1], **self.S3)
+        decl = rp["declaration"]
+        assert decl["spec"] == "zagg-pyramid/1"
+        assert decl["orders"] == [7, 5, 3, 1]
+        assert decl["spacing"] == 2
+        assert decl["fold_source"] == "cascade"
+        assert decl["cell_orders"][7] == [17]
+        assert {f: e["class"] for f, e in decl["fields"].items()} == {
+            "count": "exact",
+            "h_tdigest_signal": "approximate",
+            "h_tdigest_noise": "approximate",
+            "composition": "packed",
+        }
+        (probe,) = rp["presence"].values()
+        assert probe["nodes"] > 0 and 0 <= probe["stamped"] <= probe["nodes"]
+
+    def test_column_split_and_groups(self):
+        from moczarr import read_manifest
+
+        manifest = read_manifest(self.ROOT, **self.S3)  # once, then threaded
+        for shard, want in (
+            (self.COUNT_ONLY, ["count"]),
+            (
+                self.FOUR_FIELD,
+                ["composition", "count", "h_tdigest_noise", "h_tdigest_signal"],
+            ),
+        ):
+            rec = read_column_record(self.ROOT, shard, manifest=manifest, **self.S3)
+            assert sorted(rec["fields"]) == want
+            assert column_orders(rec) == (13, 12, 11, 10, 9)
+
+    def test_column_group_reads_through_the_normal_path(self):
+        import zarr
+
+        from moczarr import read_ragged
+
+        col = open_column(self.ROOT, self.FOUR_FIELD, **self.S3)
+        # The node-order member: one cell, the leaf's whole-footprint
+        # aggregate — the cheapest real read on the store.
+        count9 = zarr.open_array(col, path="9/count", mode="r", zarr_format=3)[:]
+        assert count9.shape == (1,) and int(count9[0]) > 0
+        rows = list(read_ragged(col, "9/h_tdigest_signal"))
+        assert len(rows) == 1
+        word, values = rows[0]
+        assert convention.morton_decimal(int(word)) == self.FOUR_FIELD
+        assert values.shape[1] == 2
