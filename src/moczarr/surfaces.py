@@ -187,7 +187,9 @@ def quantile_surface(
     - ``fill`` (default NaN) where a cell holds no digest (an absent/empty
       vlen cell, or every stratum empty);
     - ``carry`` names dense (exact-class) variables copied verbatim onto
-      the ``cells`` axis — a count choropleth needs no evaluation;
+      the ``cells`` axis — a count choropleth needs no evaluation. One
+      name, a sequence of them, or any iterable (consumed once, like
+      ``field``: a bare string is ONE name, never its characters);
     - the level's ``morton_hive`` / ``zagg_level`` / ``zagg_objects`` attrs
       carried forward, plus :data:`SURFACE_ATTR` on the evaluated variable
       recording ``fields``/``quantiles``/``fill``.
@@ -214,6 +216,10 @@ def quantile_surface(
         fields = tuple(field)
         if not fields:
             raise ValueError("field=[] names no digest field; pass a name, a sequence, or None")
+    # Normalized ONCE, beside field's: a bare string is one name (not its
+    # characters), and a one-shot iterable must survive both the probe below
+    # and the carry loop at the bottom.
+    carry = (carry,) if isinstance(carry, str) else tuple(carry)
     if not fields and not carry:
         raise ValueError(
             "field=None materializes no digests, so carry= must name at least one "
@@ -221,7 +227,7 @@ def quantile_surface(
         )
 
     dim = "cells"
-    probe = fields[0] if fields else tuple(carry)[0]
+    probe = fields[0] if fields else carry[0]
     if probe in ds:
         dims = ds[probe].dims
         if len(dims) != 1:

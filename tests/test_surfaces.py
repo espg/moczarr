@@ -240,6 +240,21 @@ class TestQuantileSurface:
         with pytest.raises(ValueError, match="carry= must name at least one"):
             quantile_surface(ds, None)
 
+    def test_carry_takes_a_bare_string_and_a_one_shot_iterable(self):
+        # carry= is normalized exactly like field=: a bare string is ONE
+        # name (not its characters), and a generator must survive both the
+        # dense-arm probe and the carry loop — consuming it once dropped
+        # every carried field silently on the field=None arm.
+        ds = _level([None], extra={"count": np.array([3], dtype=np.int32)})
+        assert list(quantile_surface(ds, None, carry="count").data_vars) == ["count"]
+        gen = (n for n in ["count"])
+        assert list(quantile_surface(ds, None, carry=gen).data_vars) == ["count"]
+        digest = _level([[[1.0, 1.0]]], extra={"count": np.array([1], dtype=np.int32)})
+        assert set(quantile_surface(digest, "h_tdigest", carry="count").data_vars) == {
+            "h_tdigest",
+            "count",
+        }
+
     def test_surface_attrs_record_the_evaluation(self):
         surf = quantile_surface(_level([[[1.0, 1.0]]]), "h_tdigest", [0.5], fill=-1.0)
         block = surf["h_tdigest"].attrs[SURFACE_ATTR]
