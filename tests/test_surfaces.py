@@ -180,11 +180,28 @@ class TestQuantileSurface:
                 assert np.isnan(surf["h_tdigest"].values[:, j]).all()
                 continue
             union = np.concatenate(parts, axis=0)
-            union = union[np.argsort(union[:, 0], kind="stable")]
+            union = union[np.lexsort((union[:, 1], union[:, 0]))]
             for i, q in enumerate(DEFAULT_QUANTILES):
                 assert surf["h_tdigest"].values[i, j] == zagg_tdigest.quantile_from_tdigest(
                     union, q
                 )
+
+    def test_merged_total_is_order_independent_under_mean_ties(self):
+        # The tie case the flipped-argument law actually turns on: two strata
+        # SHARING a centroid mean. A stable sort by mean alone keeps the
+        # argument order there, and the kernel's cumsum(weights) rank walk
+        # reads the two orders differently (q=0.5 -> 4.111 vs 5.889 here), so
+        # the union is canonicalized on (mean, weight) instead.
+        a = [[[1.0, 1.0], [5.0, 10.0]]]
+        b = [[[5.0, 1.0], [9.0, 1.0]]]
+        ds = _level(a, field="h_tdigest_a", extra={"h_tdigest_b": b})
+        ab = quantile_surface(ds, ("h_tdigest_a", "h_tdigest_b"))
+        ba = quantile_surface(ds, ("h_tdigest_b", "h_tdigest_a"))
+        np.testing.assert_array_equal(ab["h_tdigest"].values, ba["h_tdigest"].values)
+        # …and the canonical order is the one the kernel is handed.
+        union = np.asarray([[1.0, 1.0], [5.0, 1.0], [5.0, 10.0], [9.0, 1.0]], dtype=np.float32)
+        for i, q in enumerate(DEFAULT_QUANTILES):
+            assert ab["h_tdigest"].values[i, 0] == zagg_tdigest.quantile_from_tdigest(union, q)
 
     def test_per_stratum_vs_merged_parity(self):
         # kitchen_sink's real writer bytes: per-stratum surfaces are the

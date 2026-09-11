@@ -117,11 +117,21 @@ def _cell_digest(columns: list[np.ndarray], elements: list, j: int) -> np.ndarra
 
     Multi-field input is the strata merge: the lossless t-digest union is
     the concatenation of the centroid sets (weights preserved exactly — no
-    re-compression, so the merged total is deterministic and
-    order-independent). Either way the result is re-sorted by mean when it
-    is not already sorted — the interp-based kernel walks centroids in mean
-    order, and a concatenation (or any unsorted input) violates that
-    silently (the standing unsorted-concatenation trap).
+    re-compression). Either way the result is ordered by ``np.lexsort`` on
+    ``(weight, mean)`` — unconditionally, so every input walks the same
+    code:
+
+    - **by mean**, because the interp-based kernel walks centroids in mean
+      order and a concatenation (or any unsorted input) violates that
+      silently (the standing unsorted-concatenation trap);
+    - **by weight within a mean**, because the kernel's rank walk is
+      ``np.cumsum(weights)`` and therefore sensitive to the order of
+      centroids that SHARE a mean. A stable sort would keep the argument
+      order there, so ``("signal", "noise")`` and the flipped pair would
+      disagree whenever the strata happen to share a centroid mean (very
+      reachable on quantized elevations). The second key canonicalizes that
+      tie independently of the argument order, which is what makes the
+      merged total order-independent rather than merely deterministic.
     """
     from moczarr.ragged import decode_cell
 
@@ -133,9 +143,8 @@ def _cell_digest(columns: list[np.ndarray], elements: list, j: int) -> np.ndarra
     if not parts:
         return None
     digest = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
-    means = digest[:, 0]
-    if means.size > 1 and np.any(np.diff(means) < 0):
-        digest = digest[np.argsort(means, kind="stable")]
+    if len(digest) > 1:
+        digest = digest[np.lexsort((digest[:, 1], digest[:, 0]))]
     return digest
 
 
