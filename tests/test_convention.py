@@ -54,6 +54,27 @@ class TestIds:
             ),
         )
 
+    def test_batched_children_is_a_dense_block(self):
+        # intersect._expand_to ravels the batch result and dggs.zoom_to
+        # returns it as the trailing children dimension; both are only
+        # correct if the array arm of generate_morton_children returns the
+        # dense (n, 4**d) block, row i = children of words[i]. A flat or
+        # ragged result would ravel silently into a different cover, so pin
+        # the shape (and the row/parent pairing) here.
+        import mortie
+
+        words = np.asarray([SHARD_WORD, convention.morton_word(NORTH)], dtype=np.uint64)
+        kids = np.asarray(mortie.generate_morton_children(words, 8), dtype=np.uint64)
+        assert kids.shape == (2, 16) and kids.dtype == np.uint64
+        for row, parent in zip(kids, (SHARD, NORTH)):
+            assert all(convention.morton_decimal(int(w)).startswith(parent) for w in row)
+        # And the batch arm agrees element-for-element with the scalar arm it
+        # replaced (the pre-1.0 per-parent loop).
+        np.testing.assert_array_equal(
+            kids,
+            np.stack([mortie.generate_morton_children(int(w), 8) for w in words]),
+        )
+
     def test_order_base_rank(self, shard):
         assert convention.decimal_order(shard) == 6
         assert convention.decimal_base(shard) == ("-5" if shard.startswith("-") else "5")
@@ -75,6 +96,41 @@ class TestIds:
         assert not convention.is_base_component("7")
         assert not convention.is_base_component("55")
         assert not convention.is_base_component("morton_hive.json")
+
+
+def test_every_mortie_name_this_package_imports_exists():
+    """Pin the whole mortie import surface, not just the names a test walks.
+
+    issue #59: every mortie import in this package except ``hhdc.py``'s is
+    lazy and inside a function body, so a retired name stays invisible until
+    some test happens to execute that branch — which is how
+    ``decimals_to_words``/``children_of`` reached a Binder build. Parsing
+    (rather than executing) every module catches a lazy import the same as a
+    module-level one. Run against the pre-migration tree (18b66dd^) it fails
+    naming exactly the two retired names — ``mortie.decimals_to_words`` in
+    ``coverage.py`` and ``mortie.children_of`` in ``intersect.py`` — i.e. it
+    would have caught issue #59 before the Binder build did.
+    """
+    import ast
+    import importlib
+    import pathlib
+
+    import moczarr
+
+    src = pathlib.Path(moczarr.__file__).parent
+    missing = {}
+    for path in sorted(src.rglob("*.py")):
+        tree = ast.parse(path.read_text())
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.ImportFrom) or node.level:
+                continue
+            if node.module != "mortie" and not (node.module or "").startswith("mortie."):
+                continue
+            module = importlib.import_module(node.module)
+            for alias in node.names:
+                if not hasattr(module, alias.name):
+                    missing[f"{node.module}.{alias.name}"] = f"{path.name}:{node.lineno}"
+    assert not missing, f"retired/renamed mortie names still imported: {missing}"
 
 
 class TestLeafPath:
