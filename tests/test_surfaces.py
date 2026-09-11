@@ -1,12 +1,14 @@
-"""Percentile surfaces: the gridlook feeder (issue #21).
+"""Percentile surfaces + the picker ladder: the gridlook feeder (issue #21).
 
-The evaluation acceptance law: every value in a
+Two acceptance laws under test. (1) Evaluation parity: every value in a
 ``(quantile, cells)`` surface IS ``zagg.stats.tdigest.quantile_from_tdigest``
 on that cell's stored digest — per cell, per quantile, on the shared spec
 fixtures — with the standing digest traps covered by hand-built bytes (the
 empty cell, the single-centroid digest, the 0/1 endpoints, and the
 unsorted-concatenation guard: centroids re-sorted by mean before the
-interp-based kernel).
+interp-based kernel). (2) The ladder contract (gridlook#10 Phase 3):
+declared orders, materialized orders (declared ≠ materialized is the
+live-store failure mode), and per-order resolution, typed.
 
 Fixture split mirrors ``test_level.py``: the vendored ``zagg-pyramid/2``
 spec fixtures (``spec/temporal`` — the one with a root ``coverage.moc``;
@@ -20,13 +22,17 @@ import numpy as np
 import pytest
 import xarray as xr
 
-from moczarr import open_level
+from moczarr import open_level, read_manifest
+from moczarr.pyramid import OrderPresence
 from moczarr.ragged import RAGGED_ATTR, RAGGED_SPEC, decode_cell, parse_ragged_attrs
 from moczarr.surfaces import (
     DEFAULT_QUANTILES,
     SURFACE_ATTR,
+    Ladder,
+    LadderLevel,
     open_surface,
     quantile_surface,
+    read_ladder,
 )
 
 zagg_tdigest = pytest.importorskip(
@@ -36,7 +42,10 @@ zagg_tdigest = pytest.importorskip(
 DATA = Path(__file__).parent / "data"
 TEMPORAL = str(DATA / "spec" / "temporal")
 KITCHEN = str(DATA / "spec" / "kitchen_sink")
+MINIMAL = str(DATA / "spec" / "minimal")
+OVERVIEW = str(DATA / "overview_hive" / "atl06")
 WINDOWED = str(DATA / "overview_hive" / "atl06_windows")
+SERC = str(DATA / "serc_hive")
 
 #: The §1.2 attrs block a hand-built t-digest variable carries (spec grammar).
 _DIGEST_ATTRS = {
@@ -288,3 +297,80 @@ class TestOpenSurface:
         assert surf["h_tdigest"].dims == ("quantile", "cells")
         populated = ~np.isnan(surf["h_tdigest"].values[0])
         np.testing.assert_array_equal(populated, surf["count"].values > 0)
+
+
+class TestReadLadder:
+    def test_v2_ladder_declared_vs_materialized(self):
+        # The gridlook#10 failure mode, pinned: the /2 fixture declares the
+        # dense ladder down to order 1, materializes the source + the one
+        # column group — declared and materialized MUST disagree.
+        ladder = read_ladder(TEMPORAL)
+        assert ladder.declared == (6, 5, 4, 3, 2, 1)
+        assert ladder.materialized == (6, 5)
+        by_order = {lvl.cell_order: lvl for lvl in ladder.levels}
+        assert by_order[6].artifact == "source" and by_order[6].materialized is True
+        assert by_order[5].presence == OrderPresence(nodes=1, stamped=1)
+        assert by_order[4].materialized is False
+        assert by_order[4].presence == OrderPresence(nodes=1, stamped=0)
+
+    def test_v1_ladder_is_fully_materialized(self):
+        ladder = read_ladder(OVERVIEW)
+        assert ladder.declared == (8, 6, 4)
+        assert ladder.materialized == (8, 6, 4)
+        by_order = {lvl.cell_order: lvl for lvl in ladder.levels}
+        assert by_order[6].presence == OrderPresence(nodes=4, stamped=4)
+        assert by_order[8].artifact == "source"
+
+    def test_per_order_resolution_is_mortie(self):
+        # Derived, never hardcoded: each entry carries order2res at its CELL
+        # order (the resolution a reader gets, not the node order).
+        from mortie import order2res
+
+        for lvl in read_ladder(OVERVIEW).levels:
+            assert lvl.resolution_km == float(order2res(lvl.cell_order))
+        levels = read_ladder(OVERVIEW).levels
+        assert levels[0].resolution_km < levels[-1].resolution_km  # finest first
+
+    def test_windowed_probe_needs_a_window(self):
+        with pytest.raises(ValueError, match="pass window=.*or probe=False"):
+            read_ladder(WINDOWED)
+        ladder = read_ladder(WINDOWED, window="2019")
+        assert ladder.declared == (8, 6)
+        assert ladder.materialized == (8, 6)
+
+    def test_probe_false_is_declaration_only(self):
+        # One manifest GET: every non-source level reads unknown (None), and
+        # the materialized projection lists nothing it cannot vouch for.
+        ladder = read_ladder(WINDOWED, probe=False)
+        assert ladder.declared == (8, 6)
+        assert ladder.materialized == (8,)
+        assert {lvl.materialized for lvl in ladder.levels} == {True, None}
+
+    def test_window_seams_are_unconditional(self):
+        with pytest.raises(ValueError, match="unwindowed"):
+            read_ladder(OVERVIEW, window="2019")
+        with pytest.raises(ValueError, match="reserved all-time token"):
+            read_ladder(WINDOWED, window="all", probe=False)
+
+    def test_unprobeable_coverage_reads_unknown(self):
+        # minimal has no root coverage.moc: candidates cannot be named, so
+        # every probed level degrades to None — with the arms' warnings —
+        # and only the source order stays materialized.
+        with pytest.warns(UserWarning, match="coverage.moc"):
+            ladder = read_ladder(MINIMAL)
+        assert ladder.declared == (6, 5, 4, 3, 2, 1)
+        assert ladder.materialized == (6,)
+        assert {lvl.materialized for lvl in ladder.levels if lvl.artifact != "source"} == {None}
+
+    def test_declared_off_store_is_the_one_level_ladder(self):
+        ladder = read_ladder(SERC)
+        assert len(ladder.levels) == 1
+        (only,) = ladder.levels
+        assert (only.cell_order, only.artifact, only.materialized) == (8, "source", True)
+
+    def test_threading_manifest_and_typed_record(self):
+        manifest = read_manifest(OVERVIEW)
+        ladder = read_ladder(OVERVIEW, manifest=manifest)
+        assert isinstance(ladder, Ladder) and isinstance(ladder.levels[0], LadderLevel)
+        with pytest.raises(AttributeError):
+            ladder.levels = ()  # frozen — the PyramidInfo posture
