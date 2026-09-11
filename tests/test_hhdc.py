@@ -874,6 +874,18 @@ class TestExplicitWindowValidation:
         with pytest.raises(ValueError, match=match):
             list(read_tensors(_store(), SIGNAL, z_window=bad))
 
+    def test_the_window_is_validated_before_the_store_is_opened(self, tmp_path):
+        """Ordering, not just the message: pointed at a store that cannot be
+        opened at all, the malformed window is still what raises. The legs
+        above pass a valid store, so they would survive the validation
+        moving below ``open_ragged``; this one would not — and the ordering
+        is what lets this class run without the zagg extra."""
+        missing = LocalStore(tmp_path / "nope")
+        with pytest.raises(FileNotFoundError):  # the store itself, when it is reached
+            list(read_tensors(missing, SIGNAL))
+        with pytest.raises(ValueError, match="unpack it"):
+            list(read_tensors(missing, SIGNAL, z_window=(40.0, 128, 0.5)))
+
     def test_collapse_bins_is_refused_with_an_explicit_window(self):
         """Collapsing shrinks each block's bin count independently — the
         blocks would stop sharing the one fixed axis the window pins."""
