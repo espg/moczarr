@@ -614,7 +614,13 @@ def open_level(
     stem is the unwindowed store's spelling) — so naming a source or
     column level under ``all_time=True`` raises, and the arm's own seams
     refuse it on an unwindowed store (whose artifacts ARE the all-time
-    folds, reached with ``window=None``) and beside a ``window=``.
+    folds, reached with ``window=None``) and beside a ``window=``. What the
+    *declaration* says is deliberately NOT a seam here: a store whose
+    ``pyramid.overview.all_time`` is unset still reads whatever ``all.zarr``
+    folds are stamped (declaring is free, sweeping is the operational
+    decision — zagg#381 point (11)), degrading to the ordinary warned
+    ``None`` when none are. Only :func:`open_pyramid` gates on the
+    declaration, where the alternative is a childless tree of warnings.
 
     ``product`` re-roots on a D19 multi-product subtree; ``manifest``
     threads an already-read manifest (of the subtree actually opened) and
@@ -801,8 +807,10 @@ def open_pyramid(
     unless ``levels=`` names one explicitly, which raises instead of
     silently dropping the request. Refused beside ``window=`` (the fold
     sums every window), on an unwindowed store (whose artifacts ARE its
-    all-time folds — open them with ``window=None``), and on a declaration
-    without ``all_time`` folds (nothing was ever written to open).
+    all-time folds — open them with ``window=None``), and — THIS opener
+    alone, see :func:`open_level` — on a declaration without ``all_time``
+    folds, because the whole-ladder alternative is a childless tree of
+    warnings rather than a pointed answer.
     """
     import xarray as xr
 

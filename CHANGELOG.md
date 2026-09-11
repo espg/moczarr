@@ -29,10 +29,12 @@
   `open_level` / `open_pyramid` opens a windowed store's §4.5 cross-window
   `all.zarr` folds as an overviews-only view — the source and column
   levels are absent rather than half-built — mutually exclusive with
-  `window=`, refused on an unwindowed store (whose artifacts ARE its
-  all-time folds, reached with `window=None`) and on a declaration without
-  `all_time` folds; the reserved `"all"` token stays refused as a window
-  label everywhere. **Stage columns** became directly addressable:
+  `window=` and refused on an unwindowed store (whose artifacts ARE its
+  all-time folds, reached with `window=None`). `open_pyramid` alone also
+  refuses a declaration without `all_time` folds (the alternative is a
+  childless tree of warnings); the resolution openers read what is stamped,
+  since what is declared says nothing about what is on disk. The reserved
+  `"all"` token stays refused as a window label everywhere. **Stage columns** became directly addressable:
   `open_column`/`read_column_record` now accept an ANCESTOR node id beside
   a shard id and read the issue-#384 stage column at that dispatch node
   (the record's stage-side members — `stage-gather` groups, `generation`,
