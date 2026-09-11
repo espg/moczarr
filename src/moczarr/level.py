@@ -1,0 +1,457 @@
+"""One resolution level of a pyramid store as ONE xarray Dataset (issue #37).
+
+The per-order data model the #37 thread ruled ("one dataset per order" —
+espg, 2026-08-05): whatever artifact kind materializes a resolution — the
+source leaves at native order, a §4.6 leaf column's coarser groups, or a
+§4.1 overview artifact at an ancestor node — a reader gets the SAME
+in-memory shape, one :class:`xarray.Dataset` per cell order:
+
+- **dims**: the 1-D ``cells`` axis, nested-ascending in packed-word order;
+- **coords**: ``morton`` — the packed ``uint64`` cell words at this level's
+  cell order, the native coordinate (identity is morton, never lat/lon;
+  geometry stays derivable via mortie), lazy under the default
+  ``index_kind="moc"`` (:class:`moczarr.moc_index.MortonMocIndex`) — plus
+  the fabricated NESTED ``cell_ids`` view;
+- **data variables**: dense fields as their stored dtypes; ragged digest
+  fields ride as their ENCODED ``zagg-ragged/1`` vlen-bytes variables
+  (dtype ``object``) on the same ``cells`` axis, the §1.2 ``ragged`` attrs
+  block verbatim on the variable — decode is
+  :func:`moczarr.ragged.parse_ragged_attrs` +
+  :func:`moczarr.ragged.decode_cell` on pulled values, or the
+  store-addressed :func:`moczarr.ragged.read_ragged`. Eager decode into
+  padded dense tensors is rejected (it breaks laziness and invents a fill
+  the spec does not have), and dropping ragged fields is rejected too (the
+  level would stop being the store's level);
+- **attrs**: ``morton_hive`` (the level summary — ``cell_order`` is THIS
+  level's resolution, ``shard_order`` the artifact node order) and
+  ``zagg_objects`` (the per-artifact roster: each entry carries the
+  object's own provenance block verbatim — ``zagg_overview`` for overview
+  artifacts, ``zagg_column`` for columns — so fold regime,
+  ``merges_from_raw``, ``source_children``, and stamped ``demotions``
+  records all ride along without re-keying).
+
+The three artifact kinds keep their existing openers — ``open_hive`` for
+the native order, :func:`moczarr.pyramid.open_overview_order` for ancestor
+artifacts — and this module adds the missing third
+(:func:`open_column_order`: one Dataset per column-carried resolution,
+assembled across the covered leaves' §4.6 columns) plus the resolution
+table (:func:`pyramid_levels`) that says which opener owns which cell
+order. The multi-order assembly (a DataTree over these levels) is
+espg/moczarr#36b, built ON this per-level block — deliberately not here.
+
+Native surfaces only (the englacial/zagg#550 ruling): nothing in this
+module touches ``moczarr.dggs`` or xdggs, and the new entry points expose
+no ``decode=``.
+"""
+
+from __future__ import annotations
+
+import warnings
+from typing import Any
+
+import numpy as np
+
+from moczarr.column import COLUMN_ATTR, COLUMN_SPEC
+from moczarr.convention import (
+    ALL_TOKEN,
+    HIVE_SPEC_V2,
+    column_path,
+    manifest_path_grouping,
+    morton_decimal,
+    morton_word,
+    validate_window,
+)
+from moczarr.coverage import ranges_words, root_coverage_and
+from moczarr.pyramid import ROLE_ATTR, _skip, pyramid_declaration
+from moczarr.ranges import MortonRanges
+from moczarr.store import _stamp_from_meta, load_root_coverage, read_leaf_metas
+
+
+def pyramid_levels(manifest: dict) -> dict[int, dict]:
+    """``{cell order: level record}`` — every addressable resolution, finest first.
+
+    The resolution table of the #37 model: one entry per level of the
+    store, keyed by the CELL ORDER a reader picks (never by node order —
+    resolution is the reader-facing axis, zagg spec §4's "a reader picks
+    its resolution and reads it"). Each record is::
+
+        {"cell_order": r, "order": k, "artifact": kind}
+
+    where ``order`` is the hive-tree node order whose artifact carries the
+    level and ``artifact`` names the kind — the vocabulary deliberately
+    mirrors the ``zagg-multiscales/1`` dataset entries (zagg#392/#555:
+    ``order``/``cells``/``artifact``), read here from the normative
+    ``pyramid`` block via :func:`moczarr.pyramid.pyramid_declaration`
+    rather than the derived mirror:
+
+    - ``"source"`` — the native resolution (``manifest["cell_order"]`` at
+      the shard nodes), present for EVERY store: a declared-off pyramid is
+      the one-level table;
+    - ``"overview"`` — a §4.1 ancestor-node artifact: the ``/1``
+      constant-depth orders, or a ``/2`` fixed-ladder rung;
+    - ``"column"`` — a ``/2`` declared leaf resolution, materialized by the
+      §4.6 leaf columns (``leaf_cells``; ``/1`` declares none).
+
+    Declared, not probed: what is on disk is :func:`moczarr.pyramid.
+    read_pyramid`'s question (declaring is free, sweeping is the
+    operational decision — zagg#381 point (11)), and the §4.6 node-order
+    member (``r == shard_order`` — a recorded column group, never a
+    manifest member) is deliberately absent here while
+    :func:`open_column_order` still opens it. Raises when one cell order is
+    declared at two nodes: "one resolution names one level" is this model's
+    addressing law, and a duplicated resolution has no single answer.
+    """
+    cell_order = int(manifest["cell_order"])
+    shard_order = int(manifest["shard_order"])
+    levels: dict[int, dict] = {
+        cell_order: {"cell_order": cell_order, "order": shard_order, "artifact": "source"}
+    }
+    decl = pyramid_declaration(manifest)
+    if decl is None:
+        return levels
+    for r in decl["leaf_cells"] or []:
+        levels[int(r)] = {"cell_order": int(r), "order": shard_order, "artifact": "column"}
+    for k, cells in decl["cell_orders"].items():
+        for r in cells:
+            if int(r) in levels:
+                raise ValueError(
+                    f"cell order {r} is declared at two levels (node {k} and "
+                    f"{levels[int(r)]['artifact']!r} at node {levels[int(r)]['order']}): "
+                    f"one resolution names one level in this model, so a duplicated "
+                    f"resolution has no single answer (issue #37)"
+                )
+            levels[int(r)] = {"cell_order": int(r), "order": int(k), "artifact": "overview"}
+    return dict(sorted(levels.items(), reverse=True))
+
+
+def _column_entry(attrs: dict, decimal: str, window: str | None, shard_order: int) -> dict | None:
+    """One stamped column's per-object entry, or ``None`` to drop the object.
+
+    The column twin of :func:`moczarr.pyramid._object_entry`, with the same
+    two severities (§4.6 columns are derived artifacts a reader MUST NOT
+    require, like §4.1 overviews):
+
+    * **Uninterpretable** — a role other than ``"column"`` at the name
+      seam, a missing :data:`moczarr.column.COLUMN_ATTR` block, an unknown
+      revision. Warn and skip: one malformed artifact must not take the
+      level's other columns down. (Contrast
+      :func:`moczarr.column.read_column_record`, which names ONE object the
+      caller asked about and raises — a point query cannot degrade by
+      omission.)
+    * **Interpretable but wrong** — a block positively declaring another
+      leaf's ``node``/``order``, or a ``window`` the basename does not
+      round-trip with. Raises: those groups would be read under the wrong
+      node's identity — a wrong answer, not a missing one.
+    """
+    role = attrs.get(ROLE_ATTR)
+    block = attrs.get(COLUMN_ATTR)
+    if role != "column":
+        _skip(
+            decimal,
+            f"is stamped at the §4.6 column basename but declares role {role!r}, "
+            f"not 'column' (zagg spec §4.6)",
+        )
+        return None
+    if not isinstance(block, dict):
+        _skip(decimal, f"lacks the {COLUMN_ATTR!r} provenance block (zagg spec §4.6)")
+        return None
+    if block.get("spec") != COLUMN_SPEC:
+        _skip(
+            decimal,
+            f"declares spec {block.get('spec')!r}; this reader implements {COLUMN_SPEC!r} only",
+        )
+        return None
+    want_window = ALL_TOKEN if window is None else window
+    if (
+        block.get("node") != decimal
+        or block.get("order") != shard_order
+        or block.get("window") != want_window
+    ):
+        raise ValueError(
+            f"column at node {decimal} declares node {block.get('node')!r}/order "
+            f"{block.get('order')!r}/window {block.get('window')!r}, not this leaf's "
+            f"{decimal!r}/{shard_order}/{want_window!r} — its groups would be read "
+            f"under the wrong node (zagg spec §4.6)"
+        )
+    return {"node": decimal, "window": window, "role": "column", COLUMN_ATTR: block}
+
+
+def open_column_order(
+    store_root: str,
+    manifest: dict,
+    order: int,
+    *,
+    aoi=None,
+    window: str | None = None,
+    anonymous: bool = False,
+    fabricate_cell_ids: bool | str = "auto",
+    index_kind: str = "moc",
+    concurrency: int | None = 32,
+    xr_kwargs: dict[str, Any] | None = None,
+    store: Any = None,
+    _envelope: dict | None = None,
+    **store_kwargs: Any,
+):
+    """Open one column-carried resolution of a product as a Dataset, or ``None``.
+
+    The §4.6 tier of the #37 per-level model: ``order`` is a CELL order in
+    ``[shard_order, cell_order)`` — a declared leaf resolution
+    (``pyramid_declaration(...)["leaf_cells"]``), a within-footprint ladder
+    rung, or the node-order member ``order == shard_order`` (the leaves'
+    whole-footprint aggregates: one cell per leaf) — and the returned
+    dataset assembles that resolution group across every covered leaf's
+    column, concatenated along ``cells`` in ascending packed-word order.
+    The shape contract is :mod:`moczarr.level`'s: the same dims / ``morton``
+    coordinate / attrs as :func:`moczarr.open.open_hive` returns for the
+    native order, with dense fields dense and ragged digests as their
+    encoded vlen variables (the ``ragged`` attrs block riding verbatim).
+
+    Which resolutions a given column actually holds is the column's own
+    ``groups`` map (the manifest MAY lag what the fleet wrote — §4.6), so
+    membership is checked per column and a stamped column without this
+    group contributes nothing, silently: the level then UNDER-COVERS those
+    leaves' footprints, visible as absent spans of the ``morton`` domain
+    (the same posture as a cascade's ``source_children.missing`` — absent
+    is never evidence of empty). Leaves with no stamped column at all are
+    skipped the same way (D4: absence of a stamp IS the answer; §4.6 makes
+    torn-worker and never-declared indistinguishable here and neither an
+    error). Per-object classification follows :func:`_column_entry`'s two
+    severities, and each admitted column's ``zagg_column`` block rides
+    verbatim in ``attrs["zagg_objects"]``.
+
+    ``aoi`` restricts the CANDIDATE leaves arithmetically (root MOC ∩ AOI,
+    the same shard-level cut :func:`moczarr.open.candidate_leaves` makes —
+    columns are leaf-sibling artifacts, one per shard, so the unscoped
+    probe cost would be the leaf tier's own) and then rows exactly, per
+    group. An AOI that excludes every column-carried cell returns the
+    issue-#4 schema-correct empty dataset with a ``UserWarning``; ``None``
+    is returned — with a warning — only when NO stamped column anywhere
+    carries this group (not yet written, or a declaration that never
+    carried it), or when the root ``coverage.moc`` is unusable (candidates
+    are named arithmetically, exactly as
+    :func:`moczarr.pyramid.open_overview_order` refuses to walk). Unlike
+    overviews, a grouped tree needs no refusal: a column is a leaf sibling,
+    so ``path_grouping`` renders its path exactly as it renders the leaf's.
+
+    ``window`` follows the leaf dialect (D23): required on a windowed
+    (``morton-hive/2``) store — its columns are ``{window}.pyramid.zarr``
+    per window, with NO all-time column (the ``all.pyramid.zarr`` stem is
+    the unwindowed store's spelling, reached by ``window=None``) — refused
+    on an unwindowed one, and the reserved token is refused at the shared
+    ``validate_window`` seam. ``anonymous``/``store``/``_envelope``/
+    ``store_kwargs`` follow :func:`moczarr.pyramid.open_overview_order`'s
+    posture (one shared handle, one root-MOC read per product).
+    """
+    import xarray as xr
+    from zarr.storage import ObjectStore
+
+    from moczarr.coverage import as_moc_words
+    from moczarr.open import _check_composition_fill
+    from moczarr.store import _resolve_store
+
+    if anonymous:
+        store_kwargs.setdefault("anonymous", True)
+    if fabricate_cell_ids not in ("auto", True, False):
+        raise ValueError(
+            f"fabricate_cell_ids={fabricate_cell_ids!r}: expected 'auto', True, or False"
+        )
+    if index_kind not in ("pandas", "moc"):
+        raise ValueError(f"index_kind={index_kind!r}: expected 'pandas' or 'moc'")
+    cell_order = int(manifest["cell_order"])
+    shard_order = int(manifest["shard_order"])
+    r = int(order)
+    if not (shard_order <= r < cell_order):
+        raise ValueError(
+            f"order {r} is not a column-carried resolution of this store: §4.6 groups "
+            f"live at cell orders shard_order <= r < cell_order "
+            f"({shard_order} <= r < {cell_order}); the native order is open_hive's, "
+            f"and coarser levels are ancestor artifacts (open_overview_order)"
+        )
+    grouping = manifest_path_grouping(manifest)
+    windowed = manifest["spec"] == HIVE_SPEC_V2
+    if window is not None:
+        # The shared seam, ABOVE the windowed branch (the reserved token and
+        # a label on an unwindowed store are refused unconditionally).
+        validate_window(window, where=store_root)
+    if windowed and window is None:
+        raise ValueError(
+            f"{store_root} is a windowed ({HIVE_SPEC_V2}) store; its columns are "
+            f"per-window ({{window}}.pyramid.zarr, D23 naming) — pass window=..."
+        )
+    if not windowed and window is not None:
+        raise ValueError(
+            f"window={window!r} on a {manifest['spec']} store: unwindowed stores "
+            f"have no window leaves (schedule: none)"
+        )
+
+    obstore_store = _resolve_store(store_root, store, store_kwargs)
+    envelope = _envelope
+    if envelope is None:
+        envelope = load_root_coverage(store_root, store=obstore_store)
+    if envelope is None:
+        warnings.warn(
+            f"no usable root coverage.moc at {store_root}: candidate columns are "
+            f"named arithmetically from the source domain, so column order {r} "
+            f"cannot be enumerated and is omitted (regenerate the root coverage; "
+            f"columns are derived artifacts a reader never requires — zagg spec §4.6)",
+            UserWarning,
+            stacklevel=2,
+        )
+        return None
+    aoi_words = as_moc_words(aoi) if aoi is not None else None
+    all_words = np.sort(ranges_words(envelope))
+    if aoi_words is None:
+        words = all_words
+    else:
+        # The shard-level cut candidate_leaves makes (open.py): the MOC
+        # intersection keeps the finer element of each overlapping pair, so
+        # coarsen back to shard order to name the columns.
+        words = root_coverage_and(envelope, aoi_words)
+        if words.size:
+            from mortie import clip2order
+
+            words = np.unique(clip2order(shard_order, words))
+        words = np.sort(words)
+    shards = [morton_decimal(int(w)) for w in words]
+    rels = [column_path(dec, window, path_grouping=grouping) for dec in shards]
+    metas = read_leaf_metas(store_root, rels, store=obstore_store, concurrency=concurrency)
+    zarr_store = ObjectStore(obstore_store, read_only=True)
+
+    def _open_group(rel: str):
+        ds = xr.open_zarr(
+            zarr_store,
+            group=f"{rel}/{r}",
+            consolidated=False,
+            zarr_format=3,
+            **(xr_kwargs or {}),
+        )
+        _check_composition_fill(ds, rel)
+        coords = [name for name in ("morton", "cell_ids") if name in ds]
+        return ds.set_coords(coords), coords
+
+    opened, entries = [], []
+    domain = None
+    moc_dim = "cells"
+    schema_rel = None
+    for dec, rel, meta in zip(shards, rels, metas):
+        stamp = _stamp_from_meta(meta)
+        if stamp is None:
+            continue  # no column, or unstamped debris (D4/§4.6) — never an error
+        attrs = meta.get("attributes") if isinstance(meta, dict) else None
+        entry = _column_entry(attrs or {}, dec, window, shard_order)
+        if entry is None:
+            continue  # malformed artifact, warned and dropped
+        if str(r) not in (entry[COLUMN_ATTR].get("groups") or {}):
+            continue  # this leaf's declaration carried no group r: under-coverage
+        entries.append(entry)
+        if schema_rel is None:
+            schema_rel = rel
+        shard_word = morton_word(dec)
+        if index_kind == "moc":
+            leaf_domain = MortonRanges.from_shards([shard_word], r)
+            if aoi_words is not None:
+                leaf_domain = leaf_domain.intersect(aoi_words)
+                if leaf_domain.size == 0:
+                    continue
+        ds, coords = _open_group(rel)
+        if index_kind == "moc":
+            moc_dim = ds["morton"].dims[0] if "morton" in ds.coords else "cells"
+            ds = ds.drop_vars(coords)
+            if aoi_words is not None:
+                full = MortonRanges.from_shards([shard_word], r)
+                ds = ds.isel({moc_dim: full.rank(leaf_domain.fabricate())})
+            domain = leaf_domain if domain is None else domain.union(leaf_domain)
+        elif aoi_words is not None and "morton" in ds.coords:
+            from moczarr.coverage import aoi_mask
+
+            keep = aoi_mask(np.asarray(ds["morton"].values, dtype=np.uint64), aoi_words)
+            if not keep.any():
+                continue
+            ds = ds.isel({ds["morton"].dims[0]: keep})
+        opened.append(ds)
+    if schema_rel is None and aoi_words is not None:
+        # The AOI cut the candidate list itself, so "no admitted column" is
+        # ambiguous between not-written and AOI-excluded. Resolve it on the
+        # exceptional path only: probe the UNRESTRICTED roster for one
+        # stamped column carrying this group — the issue-#4 empty return
+        # needs a schema object, and its absence store-wide is the honest
+        # None (open_overview_order's unscoped candidates give it the same
+        # split for free at 4^(s-k)-fold lower probe cost).
+        seen = set(shards)
+        rest = [dec for dec in (morton_decimal(int(w)) for w in all_words) if dec not in seen]
+        rest_rels = [column_path(dec, window, path_grouping=grouping) for dec in rest]
+        rest_metas = read_leaf_metas(
+            store_root, rest_rels, store=obstore_store, concurrency=concurrency
+        )
+        for dec, rel, meta in zip(rest, rest_rels, rest_metas):
+            if _stamp_from_meta(meta) is None:
+                continue
+            attrs = meta.get("attributes") if isinstance(meta, dict) else None
+            entry = _column_entry(attrs or {}, dec, window, shard_order)
+            if entry is not None and str(r) in (entry[COLUMN_ATTR].get("groups") or {}):
+                schema_rel = rel
+                break
+    if schema_rel is None:
+        scope = f" window {window!r}" if windowed else ""
+        warnings.warn(
+            f"no stamped column at {store_root}{scope} carries resolution group {r}; "
+            f"level omitted (not yet written, or the writing declarations carried "
+            f"no group there — columns are derived artifacts a reader never "
+            f"requires, zagg spec §4.6)",
+            UserWarning,
+            stacklevel=2,
+        )
+        return None
+    if not opened:
+        warnings.warn(
+            f"the given AOI intersects no column coverage at {store_root} (column "
+            f"order {r}); returning a schema-correct empty dataset (0 cells)",
+            UserWarning,
+            stacklevel=2,
+        )
+        ds, coords = _open_group(schema_rel)
+        empty_dim = ds["morton"].dims[0] if "morton" in ds.coords else "cells"
+        if index_kind == "moc":
+            moc_dim = empty_dim
+            ds = ds.drop_vars(coords)
+            domain = MortonRanges(np.empty((0, 2), dtype=np.uint64), r)
+        opened.append(ds.isel({empty_dim: slice(0)}))
+    dim = opened[0]["morton"].dims[0] if "morton" in opened[0].coords else "cells"
+    if index_kind == "moc":
+        dim = moc_dim
+    result = xr.concat(opened, dim=dim) if len(opened) > 1 else opened[0]
+    if index_kind == "moc":
+        from moczarr.moc_index import MortonMocIndex
+
+        assert domain is not None  # a column set it, or the empty path did
+        index = MortonMocIndex(domain, dim=dim, name="morton")
+        result = result.assign_coords(xr.Coordinates.from_xindex(index))
+    if "morton" in result.coords and (
+        fabricate_cell_ids is True
+        or (fabricate_cell_ids == "auto" and "cell_ids" not in result.coords)
+    ):
+        from moczarr.fabricate import fabricate_cell_ids as _fabricate
+
+        ids = _fabricate(
+            np.asarray(result["morton"].values, dtype=np.uint64),
+            level=r,
+            _stacklevel=4,
+        )
+        result = result.assign_coords(cell_ids=(result["morton"].dims, ids))
+    result = result[sorted(result.data_vars)]
+    from moczarr.pyramid import OBJECTS_ATTR
+
+    result.attrs["morton_hive"] = {
+        "spec": manifest["spec"],
+        "cell_order": r,
+        "shard_order": shard_order,
+        "dataset": manifest.get("dataset"),
+    }
+    result.attrs[OBJECTS_ATTR] = entries
+    return result
+
+
+__all__ = [
+    "open_column_order",
+    "pyramid_levels",
+]
