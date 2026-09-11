@@ -250,11 +250,14 @@ def pyramid_declaration(manifest: dict) -> dict | None:
                 )
             node = int(entry["node"])
             cells = [int(r) for r in entry["cells"]]
-            if not (0 <= node <= shard_order) or any(not (node <= r <= cell_order) for r in cells):
+            if not (0 <= node <= shard_order) or any(not (node < r < cell_order) for r in cells):
                 raise ValueError(
                     f"/2 level entry {entry!r} is off the ladder: node must satisfy "
                     f"0 <= node <= shard_order ({shard_order}) and each cell order "
-                    f"node <= r <= cell_order ({cell_order}) (zagg spec §4.4/§4.5)"
+                    f"node < r < cell_order ({cell_order}) — STRICTLY between, both "
+                    f"ends: the r == node group is the §4.6 column's node-order member "
+                    f"(a recorded group, never a manifest member) and r == cell_order "
+                    f"would BE the base data (zagg spec §4.4/§4.5)"
                 )
             levels[node] = cells
         orders = sorted((k for k in levels if k < shard_order), reverse=True)

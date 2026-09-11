@@ -965,6 +965,34 @@ class TestPyramidDeclaration:
                     },
                 )
             )
+        # Both ladder ends are STRICT (§4.4/§4.5). The node-order member —
+        # the §4.6 column's whole-footprint aggregate — is a recorded group
+        # of that artifact and still never a manifest member...
+        with pytest.raises(ValueError, match="off the ladder"):
+            pyramid_declaration(
+                dict(
+                    base,
+                    pyramid={
+                        "spec": "zagg-pyramid/2",
+                        "overviews": [{"node": 4, "cells": [4]}],
+                        "overview": overview,
+                    },
+                )
+            )
+        # ...and a member at the base data's own order would BE the base
+        # data (the leaf entry's resolutions are strictly interior, and
+        # every ladder rung r = k + d with d >= 1 is coarser still).
+        with pytest.raises(ValueError, match="off the ladder"):
+            pyramid_declaration(
+                dict(
+                    base,
+                    pyramid={
+                        "spec": "zagg-pyramid/2",
+                        "overviews": [{"node": 3, "cells": [6]}],
+                        "overview": overview,
+                    },
+                )
+            )
         with pytest.raises(ValueError, match="malformed /2 level entry"):
             pyramid_declaration(
                 dict(
