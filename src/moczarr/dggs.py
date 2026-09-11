@@ -298,16 +298,20 @@ class MortonInfo(DGGSInfo):
 
         if level < order:
             return np.asarray(clip2order(level, words), dtype=np.uint64)
-        # Finer: one ``generate_morton_children`` call per parent — an O(n)
-        # Python loop. Revisited at the mortie#116 adoption (issue #8):
-        # 0.9.1's group-by-order dispatch landed in the geo kernels only —
-        # there is still no vectorized many-parent children kernel
-        # (``split_children`` builds a compacted trie, different semantics).
+        # Finer: ONE batched ``generate_morton_children`` call for every
+        # parent. The O(n) Python loop this replaces predated mortie 1.0,
+        # which folded the batch kernel (``children_of``) into
+        # ``generate_morton_children`` (espg/mortie#187) — the array arm
+        # returns the dense ``(n, 4**(level - order))`` block, row ``i`` the
+        # children of ``words[i]``, which is exactly what the loop stacked.
+        # Its preconditions are already met here: ``_single_order`` rejects
+        # mixed orders, and ``level == order`` / ``level < order`` returned
+        # above, so every word is strictly coarser than ``level``.
         # Empty input mirrors the coarser ``(0,)`` with a clean ``(0, 4**diff)``
-        # rather than letting ``np.stack`` raise on an empty sequence.
+        # rather than the kernel's ``(0, 1)``.
         if words.size == 0:
             return np.empty((0, 4 ** (level - order)), dtype=np.uint64)
-        return np.stack([generate_morton_children(int(w), level) for w in words])
+        return np.asarray(generate_morton_children(words, level), dtype=np.uint64)
 
 
 @register_dggs(GRID_NAME)

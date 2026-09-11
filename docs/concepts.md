@@ -217,19 +217,37 @@ the same lazy `open_hive` Dataset, plus per-object role entries (below) —
 and each declared overview order with at least one stamped object becomes
 a sibling node, riding the multiscale-DataTree conventions. A product
 whose manifest declares no overview family keeps today's flat form,
-unchanged. Windowed products inherit window naming (D23): `window=` scopes
+unchanged. A `zagg-pyramid/2` product (the fixed ladder) grows the same
+level from `pyramid_levels`' resolution table — the §4.6 column-carried
+leaf resolutions included — its children named `o{cell_order}` (`o5`; the
+espg-ruled reader-side group grammar, shared with `open_pyramid`), each
+the `open_level` Dataset for its cell order, with the normalized
+declaration record under the product node's `zagg_pyramid` attr; `decode=True` is refused there (native
+surfaces only, the englacial/zagg#550 ruling). Windowed products inherit window naming (D23): `window=` scopes
 each order node to that window's `{window}.zarr` overviews, so one call
 still opens a store mixing windowed and unwindowed products.
 
 `window=` takes a **declared window label only**. The reserved all-time
-token `"all"` is refused: a windowed product's all-time folds do exist on
-disk (`pyramid.overview.all_time`, spec §4.5 — `all.zarr` at each ancestor
-node) but they are **not yet a reader surface**, because the source axis has
-no all-time leaf to pair them with. Opening them alone would hand back one
-tree whose source order reports 0 cells beside overview orders summing every
-window, so `open_store(..., window="all")` raises and names the gap instead.
-`all` is excluded from the window grammar forever (§4.2), so the eventual
-surface will be its own opt-in rather than a window label.
+token `"all"` is refused as a label: a windowed product's all-time folds do
+exist on disk (`pyramid.overview.all_time`, spec §4.5 — `all.zarr` at each
+ancestor node) but the source axis has no all-time leaf to pair them with,
+so accepting the token would hand back one tree whose source order reports
+0 cells beside overview orders summing every window —
+`open_store(..., window="all")` raises and names the gap. `all` is
+excluded from the window grammar forever (§4.2); the surface is its own
+opt-in instead: `all_time=True` on `open_overview_order` / `open_level` /
+`open_pyramid` (issue #31, the recorded option-(1) posture) opens the
+cross-window folds as an **overviews-only** view — the source and §4.6
+column levels are absent, honest about what is materialized — mutually
+exclusive with `window=` and refused on an unwindowed store (whose artifacts
+ARE its all-time folds, reached with `window=None`). The *declaration* gate
+is `open_pyramid`'s alone: it refuses `all_time=True` on a store whose
+declaration never carried `all_time` folds, because the alternative there is
+a childless tree of per-level warnings rather than a pointed answer. The
+resolution openers keep the ordinary posture — what is *declared* says
+nothing about what is *on disk* (zagg#381 point (11)) — so
+`open_overview_order` / `open_level` read whatever `all.zarr` folds are
+stamped, and degrade to their usual warned `None` when none are.
 
 `aoi=` and `window=` scope **rows**, never the tree's shape and never the
 answers below: an out-of-coverage AOI empties each node schema-correct
@@ -412,3 +430,70 @@ regardless of grouping. There is no settled path to name, so the reader
 names none: the order nodes are omitted with a warning and the source node
 stands. Every store written today is `path_grouping: 1`, where the per-digit
 form *is* the tree's own node path.
+
+### One resolution, one Dataset: `open_level`
+
+> **Status: implemented** ([issue #37](https://github.com/espg/moczarr/issues/37)
+> — the per-order data model behind issue #36's mechanism; the espg ruling
+> on that thread is "one dataset per order").
+
+A pyramid store's reader-facing axis is **resolution**, not node order: a
+reader picks a cell order and reads it (zagg spec §4). `pyramid_levels`
+turns the manifest declaration into that table — one record per
+addressable cell order, each naming the artifact kind that materializes it
+(`source` at native resolution, `overview` at ancestor nodes, `column` for
+a `/2` declaration's §4.6 leaf tier; the vocabulary mirrors zagg's
+`zagg-multiscales/1` convention entries) — and `open_level` dispatches on
+it, so whichever kind owns the level the caller gets the **same Dataset
+shape**:
+
+- the 1-D `cells` dim, nested-ascending in packed-word order;
+- the `morton` coordinate (packed `uint64` words at the level's cell
+  order; identity is morton, never lat/lon) with the lazy `MortonMocIndex`
+  by default, plus the fabricated NESTED `cell_ids` view;
+- dense fields as dense variables; **ragged digest fields as their encoded
+  vlen-bytes variables** on the same axis, the `ragged` attrs block
+  riding verbatim (decode via `parse_ragged_attrs` + `decode_cell`, or the
+  store-addressed `read_ragged`);
+- `attrs["morton_hive"]` (the level summary), `attrs["zagg_objects"]` (the
+  per-artifact roster with each object's `zagg_overview` / `zagg_column`
+  provenance block verbatim — fold regime, generation, and any stamped
+  `demotions` records: a **pre-spec** key tracking the open
+  englacial/zagg#557, which `level_demotions` flattens from the
+  sweep-written `zagg_overview` blocks without validating it and without
+  claiming a spec for it), and `attrs["zagg_level"]` (the level record plus
+  the declared field classes and fold regime).
+
+Both grammars are first-class: a `/1` store's levels are its native order
+plus the constant-depth overview orders (the live public stores' shape),
+and a `/2` store adds the column-carried leaf resolutions and the fixed
+every-order ladder. `open_level` deliberately exposes no `decode=` (new
+pyramid surfaces are native moczarr only — the englacial/zagg#550 ruling).
+
+### The multi-order assembly: `open_pyramid`
+
+> **Status: implemented**
+> ([issue #36](https://github.com/espg/moczarr/issues/36), the #36b slice —
+> the DataTree over `pyramid_levels`, built on the #37 per-level block).
+
+`open_pyramid(store_root)` assembles the whole ladder as one
+`xarray.DataTree`: an **empty root** carrying the declaration —
+`morton_hive` (the manifest summary, plus `semantic_hash` when recorded),
+`zagg_pyramid` (the normalized `pyramid_declaration` record from the
+NORMATIVE `pyramid` block), and the manifest's §4.9 `multiscales`
+discovery mirror **verbatim** when one is recorded (never consulted, never
+re-derived — the `pyramid` block wins by §4.9's own precedence rule) — and
+one child group per materialized resolution, finest first, named
+`o{cell_order}` (`o5` for the level storing order-5 cells — attribute
+access works, `tree.o5.ds`, and the name is an unambiguous string; the
+`oN` spelling is reader-side tree vocabulary only, store-side wire paths
+stay numeric, `19/...` on disk), each holding exactly the `open_level`
+Dataset for that resolution. Declared-but-unmaterialized levels are
+omitted with their opener's warning (declaring is free, sweeping is the
+operational decision); `aoi=` scopes rows per level, never the tree's
+shape; `levels=` bounds the assembly on a wide ladder (a `/2` store
+declares every order down to 0). A declared-off store is the valid
+one-level degenerate form. The seamless mixed-order composite stays a
+*computed* view, never a node, and zoom-out ergonomics (a default coarse
+level for a first render) stay
+[issue #21](https://github.com/espg/moczarr/issues/21)'s.

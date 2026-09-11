@@ -313,13 +313,13 @@ def _degrade(
 def _expand_to(words: np.ndarray, order: int) -> np.ndarray:
     """A mixed-order cover as unique ascending cells at ``order``.
 
-    Members above ``order`` refine to their descendants (``children_of``,
+    Members above ``order`` refine to their descendants (``generate_morton_children``,
     batched per distinct order); members at-or-below clip. The exact inverse
     of 4:1 OR-coarsening for full subtrees.
     """
     if words.size == 0:
         return np.empty(0, dtype=np.uint64)
-    from mortie import children_of, clip2order, orders_of
+    from mortie import clip2order, generate_morton_children, orders_of
 
     orders = np.asarray(orders_of(words))
     parts = []
@@ -329,7 +329,19 @@ def _expand_to(words: np.ndarray, order: int) -> np.ndarray:
     shallow = words[orders < order]
     for o in np.unique(orders[orders < order]):
         group = shallow[np.asarray(orders_of(shallow)) == o]
-        parts.append(np.asarray(children_of(group, order), dtype=np.uint64).ravel())
+        kids = np.asarray(generate_morton_children(group, order), dtype=np.uint64)
+        # The ``.ravel()`` below is only a cover if the batch arm returns the
+        # dense ``(n, 4**d)`` block — a flat or ragged result would ravel
+        # silently into a DIFFERENT cover, and a wrong cover is invisible (a
+        # superset still "works"). Fail instead. Pinned in
+        # tests/test_convention.py::test_batched_children_is_a_dense_block.
+        expected = (group.size, 4 ** (int(order) - int(o)))
+        if kids.shape != expected:
+            raise RuntimeError(
+                f"generate_morton_children returned {kids.shape}, expected the dense "
+                f"block {expected}; _expand_to cannot flatten it into a cover"
+            )
+        parts.append(kids.ravel())
     return np.unique(np.concatenate(parts))
 
 

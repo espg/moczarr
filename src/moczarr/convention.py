@@ -88,6 +88,10 @@ ALL_TOKEN = "all"
 #: per-``(node, window)`` column and MUST NOT be read as a leaf or an
 #: overview. Unambiguous because the frozen label charset above admits no
 #: ``.``, so no legitimate leaf or overview basename can end this way.
+#: The seam cuts both ways (issue #36): it keeps columns out of the leaf
+#: walk AND makes them discoverable as what they are — ``role: "column"``,
+#: ``zagg-column/1`` attrs — via :func:`moczarr.store.walk_columns` and the
+#: :mod:`moczarr.column` readers.
 PYRAMID_COLUMN_SUFFIX = ".pyramid.zarr"
 
 #: Spec §1 suffix bands: ``0..=27`` area (order == suffix), ``28..=47``
@@ -171,7 +175,7 @@ def morton_word(label: str | int) -> int:
     public scalar ``decimal_to_word`` (espg/mortie#114; issue #38 — the
     deprecated private ``_decimal_to_word`` carried no compatibility
     promise). This seam parses ONE label by contract; a caller with a batch
-    reaches for ``mortie.decimals_to_words`` instead of looping here.
+    reaches for the batched ``mortie.decimal_to_word`` instead of looping here.
     """
     if isinstance(label, (int, np.integer)):
         return int(label)
@@ -453,6 +457,49 @@ def split_leaf_name(name: str) -> tuple[str, str | None]:
     full_id, window = stem.split("_", 1)
     validate_label(window)
     return full_id, window
+
+
+def is_column_basename(name: str) -> bool:
+    """Whether ``name`` is a spec §4.6 leaf-column basename.
+
+    The one normative name seam: a basename ending in
+    :data:`PYRAMID_COLUMN_SUFFIX` is a per-``(node, window)`` column and
+    MUST NOT be read as a leaf or an overview. Suffix-only by design — the
+    frozen label charset admits no ``.``, so no legitimate leaf or overview
+    basename can end this way, and the seam needs no stem parse.
+    """
+    return name.endswith(PYRAMID_COLUMN_SUFFIX)
+
+
+def column_name(window: str | None = None) -> str:
+    """The §4.6 column basename for a ``(node, window)``: ``{stem}.pyramid.zarr``.
+
+    The stem derives from the **window alone** (§4.6 naming, the §4.2
+    overview dialect) — never from the leaf's own basename stem — so the
+    unwindowed / ``schedule: none`` case takes the reserved all-time token
+    (``window=None`` -> ``all.pyramid.zarr``) and a windowed leaf's column
+    is ``{window}.pyramid.zarr``. An explicit ``window="all"`` is refused at
+    the same seam every ``window=`` entry point shares (espg/moczarr#30).
+    """
+    if window is None:
+        return f"{ALL_TOKEN}{PYRAMID_COLUMN_SUFFIX}"
+    validate_window(window)
+    return f"{window}{PYRAMID_COLUMN_SUFFIX}"
+
+
+def column_path(shard: str | int, window: str | None = None, *, path_grouping: int = 1) -> str:
+    """Store-relative path of a shard's §4.6 leaf column.
+
+    The column is a **sibling of the leaf under the leaf's own node prefix**
+    (§4.6), so this is :func:`leaf_path`'s node directory plus
+    :func:`column_name` — the same shard/grouping validation, the window
+    seam included. Naming an object says nothing about existence: columns
+    are derived artifacts a reader never requires (§4.6), so the caller
+    checks the commit stamp (:func:`moczarr.column.read_column_record`).
+    """
+    rel = leaf_path(shard, path_grouping=path_grouping)
+    node, _sep, _leaf = rel.rpartition("/")
+    return f"{node}/{column_name(window)}"
 
 
 def leaf_path(shard: str | int, window: str | None = None, *, path_grouping: int = 1) -> str:
