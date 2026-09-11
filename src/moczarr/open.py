@@ -1044,8 +1044,11 @@ def open_store(
     A ``zagg-pyramid/2`` declaration (the fixed ladder, issue #36b) grows
     the same level: one child per materialized RESOLUTION of
     :func:`moczarr.level.pyramid_levels`' table — the §4.6 column-carried
-    leaf resolutions included — each holding the
-    :func:`moczarr.level.open_level` Dataset for that cell order
+    leaf resolutions included — named ``o{cell_order}`` (the espg-ruled
+    reader-side group grammar, shared with
+    :func:`moczarr.level.open_pyramid`: dot access works and the name is an
+    unambiguous string; store-side wire paths stay numeric), each holding
+    the :func:`moczarr.level.open_level` Dataset for that cell order
     (``zagg_level``/``zagg_objects`` attrs riding along), with the
     normalized declaration record under the product node's
     ``zagg_pyramid`` attr. ``decode=True`` is refused for such a product
@@ -1230,7 +1233,7 @@ concurrency, xr_kwargs, **store_kwargs
                     _envelope=product_envelope,
                 )
                 if child is not None:
-                    nodes[f"{name}/{r}"] = child
+                    nodes[f"{name}/o{r}"] = child
             continue
         cell_orders = pyramid.overview_cell_orders(manifest_rec) if manifest_rec else {}
         objects: list[dict] = []

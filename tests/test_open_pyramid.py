@@ -52,7 +52,7 @@ class TestAssemblyV2:
         # finest first, named by the integer cell order they store.
         tree = _quiet_tree(swept)
         assert isinstance(tree, xr.DataTree)
-        assert list(tree.children) == ["6", "5", "4"]
+        assert list(tree.children) == ["o6", "o5", "o4"]
 
     def test_each_group_is_the_open_level_dataset(self, swept):
         tree = _quiet_tree(swept)
@@ -60,8 +60,8 @@ class TestAssemblyV2:
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
                 want = open_level(swept, r)
-            xr.testing.assert_identical(tree[str(r)].to_dataset(), want)
-            assert tree[str(r)].ds.attrs[LEVEL_ATTR]["cell_order"] == r
+            xr.testing.assert_identical(tree[f"o{r}"].to_dataset(), want)
+            assert tree[f"o{r}"].ds.attrs[LEVEL_ATTR]["cell_order"] == r
 
     def test_root_is_empty_with_the_declaration(self, swept):
         tree = _quiet_tree(swept)
@@ -84,11 +84,11 @@ class TestAssemblyV2:
     def test_unmaterialized_levels_warn_and_are_omitted(self, swept):
         with pytest.warns(UserWarning, match="no stamped overview object"):
             tree = open_pyramid(swept)
-        assert "3" not in tree.children and "1" not in tree.children
+        assert "o3" not in tree.children and "o1" not in tree.children
 
     def test_levels_selector_bounds_the_assembly(self, swept):
         tree = _quiet_tree(swept, levels=[6, 5])
-        assert list(tree.children) == ["6", "5"]
+        assert list(tree.children) == ["o6", "o5"]
 
     def test_levels_selector_refuses_a_non_level(self, swept):
         with pytest.raises(ValueError, match=r"levels are \[6, 5, 4, 3, 2, 1\]"):
@@ -102,10 +102,10 @@ class TestAssemblyV2:
         # The AOI covers only the northern leaf: the southern sibling's rows
         # are cut from the column level, but the groups stay the groups.
         tree = _quiet_tree(swept, aoi=["11213"])
-        assert list(tree.children) == ["6", "5", "4"]
-        assert tree["5"].ds.sizes["cells"] == 4  # the one covered leaf's cells
+        assert list(tree.children) == ["o6", "o5", "o4"]
+        assert tree["o5"].ds.sizes["cells"] == 4  # the one covered leaf's cells
         full = _quiet_tree(swept)
-        assert full["5"].ds.sizes["cells"] == 8  # both leaves
+        assert full["o5"].ds.sizes["cells"] == 8  # both leaves
 
     def test_multiscales_mirror_rides_verbatim(self, swept):
         # The §4.9 discovery mirror is surfaced AS RECORDED when the manifest
@@ -123,17 +123,20 @@ class TestAssemblyV1:
 
     def test_constant_depth_ladder(self):
         tree = open_pyramid(self.ATL06)
-        assert list(tree.children) == ["8", "6", "4"]
+        assert list(tree.children) == ["o8", "o6", "o4"]
         for r in (8, 6, 4):
-            xr.testing.assert_identical(tree[str(r)].to_dataset(), open_level(self.ATL06, r))
+            xr.testing.assert_identical(tree[f"o{r}"].to_dataset(), open_level(self.ATL06, r))
         assert tree.attrs["zagg_pyramid"]["spec"] == "zagg-pyramid/1"
         assert tree.attrs["morton_hive"]["cell_order"] == 8
+        # The point of the oN grammar (espg review ruling on the PR):
+        # attribute-style access works on every level group.
+        assert tree.o6.ds.attrs["morton_hive"]["cell_order"] == 6
 
     def test_windowed_product_scopes_by_window(self):
         root = str(OVERVIEW / "atl06_windows")
         tree = open_pyramid(root, window="2019")
-        assert list(tree.children) == ["8", "6"]
-        assert tree["6"].ds.attrs["morton_hive"]["cell_order"] == 6
+        assert list(tree.children) == ["o8", "o6"]
+        assert tree["o6"].ds.attrs["morton_hive"]["cell_order"] == 6
         with pytest.raises(ValueError, match="window="):
             open_pyramid(root)
 
@@ -141,13 +144,13 @@ class TestAssemblyV1:
         # The valid degenerate form: every store is at least
         # single-resolution, and a declared-off root carries no zagg_pyramid.
         tree = open_pyramid(str(SERC))
-        assert list(tree.children) == ["8"]
+        assert list(tree.children) == ["o8"]
         assert "zagg_pyramid" not in tree.attrs
-        xr.testing.assert_identical(tree["8"].to_dataset(), open_level(str(SERC), 8))
+        xr.testing.assert_identical(tree["o8"].to_dataset(), open_level(str(SERC), 8))
 
     def test_multi_product_root(self):
         tree = open_pyramid(str(OVERVIEW), product="atl06")
-        assert list(tree.children) == ["8", "6", "4"]
+        assert list(tree.children) == ["o8", "o6", "o4"]
         with pytest.raises(ValueError, match="multi-product store root"):
             open_pyramid(str(OVERVIEW))
 
@@ -222,7 +225,7 @@ class TestAssemblyV1:
         manifest = read_manifest(self.ATL06)
         manifest["dataset"] = {"short_name": "THREADED"}
         tree = open_pyramid("/nonexistent/root", store=handle, manifest=manifest)
-        assert list(tree.children) == ["8", "6", "4"]
+        assert list(tree.children) == ["o8", "o6", "o4"]
         assert tree.attrs["morton_hive"]["dataset"] == {"short_name": "THREADED"}
         for child in tree.children.values():
             assert child.ds.attrs["morton_hive"]["dataset"] == {"short_name": "THREADED"}
@@ -239,7 +242,7 @@ class TestAllTime:
         # alone — honest about what is materialized, never a 0-cell source
         # node beside cross-window overviews.
         tree = open_pyramid(self.WINDOWS, all_time=True)
-        assert list(tree.children) == ["6"]
+        assert list(tree.children) == ["o6"]
         assert tree.attrs["zagg_pyramid"]["all_time"] is True
 
     def test_all_time_values_are_the_cross_window_fold(self):
@@ -326,7 +329,7 @@ class TestOpenStoreV2:
         assert product.ds.attrs["zagg_pyramid"]["spec"] == "zagg-pyramid/2"
         assert product.ds.attrs["morton_hive"]["cell_order"] == 6
         assert "semantic_hash" in product.ds.attrs
-        assert list(product.children) == ["6", "5", "4"]
+        assert list(product.children) == ["o6", "o5", "o4"]
 
     def test_children_are_the_open_level_datasets(self, swept):
         from moczarr import open_store
@@ -336,7 +339,7 @@ class TestOpenStoreV2:
             tree = open_store(swept)
             for r in (6, 5, 4):
                 want = open_level(swept, r)
-                xr.testing.assert_identical(tree["spec_fixture"][str(r)].to_dataset(), want)
+                xr.testing.assert_identical(tree["spec_fixture"][f"o{r}"].to_dataset(), want)
 
     def test_decode_refused_on_a_v2_product(self, swept):
         from moczarr import open_store
