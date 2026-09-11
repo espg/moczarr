@@ -192,6 +192,13 @@ def pyramid_declaration(manifest: dict) -> dict | None:
       constant-depth cell as a one-member list.
     - ``leaf_cells`` — the ``/2`` leaf entry's ``cells`` (the declared leaf
       resolutions the §4.6 *columns* materialize), ``None`` under ``/1``.
+      ``None`` on a ``/2`` block too when the list carries no ``node ==
+      shard_order`` entry: §4.6's no-leaf-node-levels arm is a legal
+      declaration (the writing run then deletes any column a previous one
+      left), so the sentinel reads "this declaration declares no leaf
+      resolutions" in **both** grammars rather than distinguishing them —
+      and it is deliberately not raised on. Which leaves actually carry
+      columns is a question for the columns (:func:`moczarr.store.walk_columns`).
     - ``spacing`` — the ``/1`` schedule step; ``None`` under ``/2`` (the key
       does not exist there).
     - ``overviews`` — the ``/2`` block-level level entries verbatim
@@ -258,6 +265,18 @@ def pyramid_declaration(manifest: dict) -> dict | None:
                     f"ends: the r == node group is the §4.6 column's node-order member "
                     f"(a recorded group, never a manifest member) and r == cell_order "
                     f"would BE the base data (zagg spec §4.4/§4.5)"
+                )
+            if node in levels:
+                # Last-writer-wins would make the record self-inconsistent:
+                # `overviews` is the VERBATIM surface (it carries the #381
+                # point-(7) per-entry `actuals`), so a silently merged
+                # duplicate leaves two consumers of the same declaration
+                # disagreeing. §4.4 has one level entry — one artifact —
+                # per (node, window), so a repeated node is malformed, not
+                # a merge instruction.
+                raise ValueError(
+                    f"/2 'overviews' declares node {node} twice: §4.4 has exactly one "
+                    f"level entry (one artifact) per (node, window) (zagg spec §4.4/§4.5)"
                 )
             levels[node] = cells
         orders = sorted((k for k in levels if k < shard_order), reverse=True)
