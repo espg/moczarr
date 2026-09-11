@@ -69,6 +69,8 @@ from moczarr.level import (
 from moczarr.open import candidate_leaves, candidate_shards, open_hive, open_leaf, open_store
 from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.pyramid import (
+    OrderPresence,
+    PyramidInfo,
     finest_source_at,
     node_objects,
     open_overview_order,
@@ -153,6 +155,8 @@ __all__ = [
     "ConservativeCoverageWarning",
     "MortonRanges",
     "NoCoverageError",
+    "OrderPresence",
+    "PyramidInfo",
     "RaggedElement",
     "__version__",
     "aoi_mask",

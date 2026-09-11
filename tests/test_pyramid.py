@@ -38,6 +38,7 @@ from moczarr import (
 from moczarr.convention import morton_word
 from moczarr.pyramid import (
     OBJECTS_ATTR,
+    OrderPresence,
     open_overview_order,
     overview_cell_orders,
     overview_declaration,
@@ -1083,15 +1084,15 @@ class TestReadPyramid:
 
     def test_v1_swept_store_presence(self, root):
         rp = read_pyramid(f"{root}/atl06")
-        assert rp["declaration"]["orders"] == [4, 2]
+        assert rp.declaration["orders"] == [4, 2]
         # The fixture's sweep materialized every declared order: each
         # candidate ancestor node (arithmetic off the root MOC) holds a
         # stamped artifact.
         want_4 = len(GOLDEN["products"]["atl06"]["overviews"]["6"]["all"]["objects"])
         want_2 = len(GOLDEN["products"]["atl06"]["overviews"]["4"]["all"]["objects"])
-        assert rp["presence"] == {
-            4: {"nodes": want_4, "stamped": want_4},
-            2: {"nodes": want_2, "stamped": want_2},
+        assert rp.presence == {
+            4: OrderPresence(nodes=want_4, stamped=want_4),
+            2: OrderPresence(nodes=want_2, stamped=want_2),
         }
 
     def test_declared_but_unswept_order_probes_zero(self, root, tmp_path):
@@ -1103,9 +1104,9 @@ class TestReadPyramid:
         manifest["pyramid"]["overview"]["orders"] = [5, 4, 2]  # 5 never swept
         (copy / "atl06" / "morton_hive.json").write_text(json.dumps(manifest))
         rp = read_pyramid(str(copy / "atl06"))
-        assert rp["presence"][5]["stamped"] == 0
-        assert rp["presence"][5]["nodes"] > 0
-        assert rp["presence"][4]["stamped"] == rp["presence"][4]["nodes"]
+        assert rp.presence[5].stamped == 0
+        assert rp.presence[5].nodes > 0
+        assert rp.presence[4].stamped == rp.presence[4].nodes
 
     def test_v2_declared_but_unmaterialized(self):
         # The vendored /2 fixture is declared-but-unswept end to end: one
@@ -1114,8 +1115,8 @@ class TestReadPyramid:
         # outside presence (read the columns, not the manifest — §4.6).
         root = str(Path(__file__).parent / "data" / "spec" / "temporal")
         rp = read_pyramid(root)
-        assert rp["declaration"]["spec"] == "zagg-pyramid/2"
-        assert rp["presence"] == {k: {"nodes": 1, "stamped": 0} for k in (3, 2, 1, 0)}
+        assert rp.declaration["spec"] == "zagg-pyramid/2"
+        assert rp.presence == {k: OrderPresence(nodes=1, stamped=0) for k in (3, 2, 1, 0)}
 
     def test_no_root_moc_degrades_presence_to_none(self):
         # spec/minimal carries no root coverage.moc: candidates cannot be
@@ -1123,31 +1124,31 @@ class TestReadPyramid:
         root = str(Path(__file__).parent / "data" / "spec" / "minimal")
         with pytest.warns(UserWarning, match="no usable root coverage.moc"):
             rp = read_pyramid(root)
-        assert rp["declaration"]["orders"] == [3, 2, 1, 0]
-        assert rp["presence"] is None
+        assert rp.declaration["orders"] == [3, 2, 1, 0]
+        assert rp.presence is None
 
     def test_probe_false_is_declaration_only(self, root, recorded):
         rp = read_pyramid(f"{root}/atl06", probe=False)
-        assert rp["presence"] is None
+        assert rp.presence is None
         # One manifest GET; no coverage.moc read, no ancestor-node probes.
         assert [k for k in recorded if not k.endswith("morton_hive.json")] == []
 
     def test_orders_subset_and_validation(self, root):
         rp = read_pyramid(f"{root}/atl06", orders=[2])
-        assert list(rp["presence"]) == [2]
+        assert list(rp.presence) == [2]
         with pytest.raises(ValueError, match="not declared ancestor orders"):
             read_pyramid(f"{root}/atl06", orders=[3])
 
     def test_windowed_store_window_seam(self, root):
         rp = read_pyramid(f"{root}/atl06_windows", window="2019")
         want = len(GOLDEN["products"]["atl06_windows"]["overviews"]["6"]["2019"]["objects"])
-        assert rp["presence"] == {4: {"nodes": want, "stamped": want}}
+        assert rp.presence == {4: OrderPresence(nodes=want, stamped=want)}
         with pytest.raises(ValueError, match="pass window="):
             read_pyramid(f"{root}/atl06_windows")
         with pytest.raises(ValueError, match="reserved all-time token"):
             read_pyramid(f"{root}/atl06_windows", window="all")
         # probe=False asks nothing window-shaped, so no window is needed.
-        assert read_pyramid(f"{root}/atl06_windows", probe=False)["presence"] is None
+        assert read_pyramid(f"{root}/atl06_windows", probe=False).presence is None
         # ...but a window= this call cannot honour is refused whatever
         # `probe` says: the reserved-token trap (espg/moczarr#30) must not
         # be reachable by flipping an unrelated flag.
@@ -1164,5 +1165,5 @@ class TestReadPyramid:
 
     def test_product_reroot(self, root):
         rp = read_pyramid(root, product="atl06")
-        assert rp["declaration"]["orders"] == [4, 2]
-        assert rp["presence"][2]["stamped"] == 1
+        assert rp.declaration["orders"] == [4, 2]
+        assert rp.presence[2].stamped == 1

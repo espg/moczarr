@@ -53,6 +53,7 @@ arithmetic), never a tree node.
 from __future__ import annotations
 
 import warnings
+from dataclasses import dataclass
 from typing import Any
 
 import numpy as np
@@ -338,6 +339,47 @@ def pyramid_declaration(manifest: dict) -> dict | None:
     }
 
 
+@dataclass(frozen=True)
+class OrderPresence:
+    """One declared ancestor order's existence probe (D4 stamps only).
+
+    Attributes
+    ----------
+    nodes : int
+        Candidate ancestor nodes at this order, named arithmetically by
+        coarsening the root ``coverage.moc``'s source shards.
+    stamped : int
+        How many of them hold a D4 commit-stamped artifact for the probed
+        window. Existence, not readability -- see :func:`read_pyramid`.
+    """
+
+    nodes: int
+    stamped: int
+
+
+@dataclass(frozen=True)
+class PyramidInfo:
+    """A store's declared ladder plus the cheap materialization report.
+
+    :func:`read_pyramid`'s return record. ``declaration`` stays the raw
+    :func:`pyramid_declaration` dict -- it mirrors stored manifest JSON, and
+    dicts are how this reader spells wire bytes -- while ``presence`` is the
+    computed half and is typed, per the :class:`~moczarr.ragged.RaggedElement`
+    posture for API returns.
+
+    Attributes
+    ----------
+    declaration : dict
+        The parsed pyramid declaration (both grammars), verbatim.
+    presence : dict of int to OrderPresence, or None
+        Per declared ancestor order; ``None`` when probes cannot be named or
+        ``probe=False``.
+    """
+
+    declaration: dict
+    presence: dict[int, OrderPresence] | None
+
+
 def read_pyramid(
     store_root: str,
     *,
@@ -350,7 +392,7 @@ def read_pyramid(
     store: Any = None,
     concurrency: int | None = 32,
     **store_kwargs: Any,
-) -> dict | None:
+) -> PyramidInfo | None:
     """A store's declared pyramid ladder plus a cheap materialization report.
 
     The issue #36 store-root surface: one manifest GET decodes the
@@ -358,8 +400,8 @@ def read_pyramid(
     **probes** answer which declared ancestor orders actually have D4
     commit-stamped artifacts on disk today (existence, not readability — see
     ``stamped`` below). ``None`` when the pyramid is declared off;
-    otherwise ``{"declaration": record, "presence": {order: {"nodes": N,
-    "stamped": M}} | None}``.
+    otherwise a :class:`PyramidInfo` -- ``.declaration`` the parsed record,
+    ``.presence`` ``{order: OrderPresence(nodes, stamped)} | None``.
 
     ``presence`` is per declared ancestor order: ``nodes`` counts the
     candidate ancestor nodes — named *arithmetically* by coarsening the root
@@ -457,7 +499,7 @@ def read_pyramid(
             f"have no window leaves (schedule: none)"
         )
     if not probe:
-        return {"declaration": declaration, "presence": None}
+        return PyramidInfo(declaration, None)
     # Genuinely probe-scoped: this one is about NAMING objects, and
     # `probe=False` names none.
     if windowed and window is None:
@@ -482,7 +524,7 @@ def read_pyramid(
             UserWarning,
             stacklevel=2,
         )
-        return {"declaration": declaration, "presence": None}
+        return PyramidInfo(declaration, None)
     envelope = load_root_coverage(store_root, store=handle)
     if envelope is None:
         warnings.warn(
@@ -492,22 +534,22 @@ def read_pyramid(
             UserWarning,
             stacklevel=2,
         )
-        return {"declaration": declaration, "presence": None}
+        return PyramidInfo(declaration, None)
     words = ranges_words(envelope)
     basename = f"{window}.zarr" if windowed else f"{ALL_TOKEN}.zarr"
     per_order = [(k, overview_nodes(manifest, words, k)) for k in probe_orders]
     rels = [f"{_node_rel(dec)}/{basename}" for _k, decs in per_order for dec in decs]
     metas = read_leaf_metas(store_root, rels, store=handle, concurrency=concurrency)
-    presence: dict[int, dict[str, int]] = {}
+    presence: dict[int, OrderPresence] = {}
     cursor = 0
     for k, decs in per_order:
         chunk = metas[cursor : cursor + len(decs)]
         cursor += len(decs)
-        presence[k] = {
-            "nodes": len(decs),
-            "stamped": sum(1 for meta in chunk if _stamp_from_meta(meta) is not None),
-        }
-    return {"declaration": declaration, "presence": presence}
+        presence[k] = OrderPresence(
+            nodes=len(decs),
+            stamped=sum(1 for meta in chunk if _stamp_from_meta(meta) is not None),
+        )
+    return PyramidInfo(declaration, presence)
 
 
 def _ancestor_order(manifest: dict, order: int) -> int:
@@ -1086,6 +1128,8 @@ __all__ = [
     "PYRAMID_SPEC",
     "PYRAMID_SPEC_V2",
     "ROLE_ATTR",
+    "OrderPresence",
+    "PyramidInfo",
     "finest_source_at",
     "node_objects",
     "open_overview_order",

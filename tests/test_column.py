@@ -311,7 +311,7 @@ class TestLiveAtl03Pyramid:
         # nodes — presence shape only, not a zero pin: the #547 sweep will
         # legitimately move stamped from 0.
         rp = read_pyramid(self.ROOT, orders=[1], **self.S3)
-        decl = rp["declaration"]
+        decl = rp.declaration
         assert decl["spec"] == "zagg-pyramid/1"
         assert decl["orders"] == [7, 5, 3, 1]
         assert decl["spacing"] == 2
@@ -323,8 +323,8 @@ class TestLiveAtl03Pyramid:
             "h_tdigest_noise": "approximate",
             "composition": "packed",
         }
-        (probe,) = rp["presence"].values()
-        assert probe["nodes"] > 0 and 0 <= probe["stamped"] <= probe["nodes"]
+        (probe,) = rp.presence.values()
+        assert probe.nodes > 0 and 0 <= probe.stamped <= probe.nodes
 
     def test_column_split_and_groups(self):
         from moczarr import read_manifest
