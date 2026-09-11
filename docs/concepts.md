@@ -217,7 +217,12 @@ the same lazy `open_hive` Dataset, plus per-object role entries (below) —
 and each declared overview order with at least one stamped object becomes
 a sibling node, riding the multiscale-DataTree conventions. A product
 whose manifest declares no overview family keeps today's flat form,
-unchanged. Windowed products inherit window naming (D23): `window=` scopes
+unchanged. A `zagg-pyramid/2` product (the fixed ladder) grows the same
+level from `pyramid_levels`' resolution table — the §4.6 column-carried
+leaf resolutions included — each child the `open_level` Dataset for its
+cell order, with the normalized declaration record under the product
+node's `zagg_pyramid` attr; `decode=True` is refused there (native
+surfaces only, the englacial/zagg#550 ruling). Windowed products inherit window naming (D23): `window=` scopes
 each order node to that window's `{window}.zarr` overviews, so one call
 still opens a store mixing windowed and unwindowed products.
 

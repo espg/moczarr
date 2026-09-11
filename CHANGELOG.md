@@ -15,6 +15,14 @@
   wide ladder, and a declared-off store is the valid one-level degenerate
   form. One manifest GET and one shared root-MOC read serve the whole
   ladder (`open_level` gained the private `_envelope=` threading).
+  `open_store` grows the same level for `zagg-pyramid/2` products: the
+  product node's children are the materialized resolutions of
+  `pyramid_levels`' table — the §4.6 column-carried leaf resolutions
+  included — each the `open_level` Dataset, with the normalized
+  declaration under the product node's `zagg_pyramid` attr (`/1` products
+  are byte-identical to before; `decode=True` on a `/2` product is refused
+  per the englacial/zagg#550 native-surfaces ruling, and an unknown
+  pyramid revision now fails loudly instead of reading as declared-off).
 
 - The multi-resolution reader surface
   ([#36](https://github.com/espg/moczarr/issues/36) /
