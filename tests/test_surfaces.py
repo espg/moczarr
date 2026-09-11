@@ -421,6 +421,28 @@ class TestReadLadder:
         ladder = read_ladder(WINDOWED, window="2019")
         assert ladder.declared == (8, 6)
         assert ladder.materialized == (8, 6)
+        by_order = {lvl.cell_order: lvl for lvl in ladder.levels}
+        assert by_order[8].presence == OrderPresence(nodes=7, stamped=7)
+
+    def test_windowed_source_level_is_probed_per_window(self):
+        # A windowed store's leaves are per window ({shard}_{window}.zarr,
+        # D23), so "the leaves ARE the store" stops being an answer once a
+        # window is named: an unswept-but-valid label must read False, or
+        # the picker offers an order whose surface comes back with 0 cells.
+        ladder = read_ladder(WINDOWED, window="1975")
+        by_order = {lvl.cell_order: lvl for lvl in ladder.levels}
+        assert by_order[8].artifact == "source"
+        assert by_order[8].materialized is False
+        assert by_order[8].presence == OrderPresence(nodes=7, stamped=0)
+        assert ladder.declared == (8, 6)
+        assert ladder.materialized == ()
+        # The surface behind that rung is exactly the empty the probe predicts.
+        with pytest.warns(UserWarning, match="intersects no coverage"):
+            assert open_level(WINDOWED, 8, window="1975").sizes["cells"] == 0
+        # An unwindowed store's source level is still True unprobed — its
+        # leaves really are the store, and no window can make them absent.
+        source = next(lvl for lvl in read_ladder(OVERVIEW).levels if lvl.artifact == "source")
+        assert (source.materialized, source.presence) == (True, None)
 
     def test_probe_false_is_declaration_only(self):
         # One manifest GET: every non-source level reads unknown (None), and
@@ -429,6 +451,11 @@ class TestReadLadder:
         assert ladder.declared == (8, 6)
         assert ladder.materialized == (8,)
         assert {lvl.materialized for lvl in ladder.levels} == {True, None}
+        # …and with a window NAMED but no probe, the source rung reads
+        # unknown rather than guessing that window was swept.
+        named = read_ladder(WINDOWED, window="1975", probe=False)
+        assert named.materialized == ()
+        assert {lvl.materialized for lvl in named.levels} == {None}
 
     def test_window_seams_are_unconditional(self):
         with pytest.raises(ValueError, match="unwindowed"):

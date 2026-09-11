@@ -48,6 +48,7 @@ from moczarr.column import COLUMN_ATTR
 from moczarr.convention import (
     HIVE_SPEC_V2,
     column_path,
+    leaf_path,
     manifest_path_grouping,
     morton_decimal,
     validate_window,
@@ -405,11 +406,14 @@ class LadderLevel:
         derived, never hardcoded.
     materialized : bool or None
         Whether the level has stamped artifacts on disk today: ``True`` for
-        the source level (the leaves ARE the store), probed for overview
-        and column levels, ``None`` when unprobed (``probe=False``) or
-        unprobeable (no usable root coverage; a grouped tree's overview
-        nodes). Declared ≠ materialized is a legal recorded state — the
-        picker lists ``True`` levels only.
+        the source level of an unwindowed store (the leaves ARE the store),
+        probed for overview and column levels — and for the source level
+        too once a windowed store is read at a NAMED window, whose leaves
+        are per window (``{shard}_{window}.zarr``, D23) and exist only for
+        the windows that were swept. ``None`` when unprobed
+        (``probe=False``) or unprobeable (no usable root coverage; a
+        grouped tree's overview nodes). Declared ≠ materialized is a legal
+        recorded state — the picker lists ``True`` levels only.
     presence : OrderPresence or None
         The probe counts behind ``materialized``, when probed: for an
         overview level the D4 existence probe (:func:`moczarr.pyramid.
@@ -417,8 +421,10 @@ class LadderLevel:
         ``nodes`` counts the candidate leaves and ``stamped`` the admitted
         columns whose own ``groups`` map carries this resolution
         (classification-bound, unlike the overview probe — a column's
-        membership lives only in its attrs). ``None`` on the source level
-        and whenever unprobed.
+        membership lives only in its attrs); for a windowed store's probed
+        source level ``nodes`` counts the candidate leaves and ``stamped``
+        the ones stamped for that window. ``None`` on an unprobed level and
+        on an unwindowed store's source level, which is not probed.
     """
 
     cell_order: int
@@ -453,26 +459,38 @@ class Ladder:
         return tuple(lvl.cell_order for lvl in self.levels if lvl.materialized)
 
 
-def _column_presence(
+def _leaf_presence(
     store_root: str,
     manifest: dict,
     leaf_cells: list[int],
     window: str | None,
     handle: Any,
     concurrency: int | None,
-) -> dict[int, OrderPresence] | None:
-    """Per column level: how many candidate leaves' columns carry the group.
+    *,
+    source: bool,
+) -> tuple[OrderPresence | None, dict[int, OrderPresence] | None]:
+    """The leaf tier's presence: the source leaves, the column levels, or both.
 
     The leaf-tier half of the ladder probe, which :func:`moczarr.pyramid.
     read_pyramid` deliberately leaves out (§4.6: the manifest MAY lag what
     the fleet wrote, so column membership is answerable only from the
-    columns' own ``groups`` maps). One batched ``zarr.json`` GET per
-    candidate leaf — the same enumeration and classification
-    :func:`moczarr.level.open_column_order` runs (:func:`moczarr.level.
-    _column_entry`), shared here across every column level so the ladder
-    pays the leaf tier once, not once per level. ``None`` (with a warning)
-    when the root coverage is unusable — candidates are named
-    arithmetically, exactly as the openers refuse to walk.
+    columns' own ``groups`` maps). Both halves ride ONE batched
+    ``zarr.json`` read over the same arithmetically named candidates, so
+    the ladder pays the leaf tier once — not once per level, and not twice
+    when a windowed store wants its source rung probed too:
+
+    - ``source`` counts the leaves themselves (``{shard}_{window}.zarr`` —
+      D23), the existence question :func:`read_ladder` asks only when a
+      windowed store's per-window leaves make ``True`` a guess. The D4
+      stamp is the same existence test the overview probe uses.
+    - ``leaf_cells`` counts, per declared leaf resolution, the admitted
+      columns whose own ``groups`` map carries it — the same enumeration
+      and classification :func:`moczarr.level.open_column_order` runs
+      (:func:`moczarr.level._column_entry`).
+
+    ``(None, None)`` (with a warning) when the root coverage is unusable —
+    candidates are named arithmetically, exactly as the openers refuse to
+    walk.
 
     NEITHER of ``_column_entry``'s severities is fatal here: this is a
     presence count, not a read. An uninterpretable object is warned and
@@ -488,19 +506,31 @@ def _column_presence(
     envelope = load_root_coverage(store_root, store=handle)
     if envelope is None:
         warnings.warn(
-            f"no usable root coverage.moc at {store_root}: candidate columns are named "
-            f"arithmetically from the source domain, so column materialization cannot "
-            f"be probed and reads None (regenerate the root coverage)",
+            f"no usable root coverage.moc at {store_root}: candidate leaves and columns "
+            f"are named arithmetically from the source domain, so leaf-tier "
+            f"materialization cannot be probed and reads None (regenerate the root "
+            f"coverage)",
             UserWarning,
             stacklevel=3,
         )
-        return None
+        return None, None
     grouping = manifest_path_grouping(manifest)
     shard_order = int(manifest["shard_order"])
     words = np.sort(ranges_words(envelope))
     shards = [morton_decimal(int(w)) for w in words]
-    rels = [column_path(dec, window, path_grouping=grouping) for dec in shards]
+    rels = []
+    if source:
+        rels += [leaf_path(dec, window, path_grouping=grouping) for dec in shards]
+    if leaf_cells:
+        rels += [column_path(dec, window, path_grouping=grouping) for dec in shards]
     metas = read_leaf_metas(store_root, rels, store=handle, concurrency=concurrency)
+    source_presence: OrderPresence | None = None
+    if source:
+        stamped = sum(_stamp_from_meta(m) is not None for m in metas[: len(shards)])
+        source_presence = OrderPresence(nodes=len(shards), stamped=stamped)
+        metas = metas[len(shards) :]
+    if not leaf_cells:
+        return source_presence, None
     carrying: dict[int, int] = {r: 0 for r in leaf_cells}
     for dec, meta in zip(shards, metas):
         if _stamp_from_meta(meta) is None:
@@ -531,7 +561,9 @@ def _column_presence(
         for r in leaf_cells:
             if str(r) in groups:
                 carrying[r] += 1
-    return {r: OrderPresence(nodes=len(shards), stamped=carrying[r]) for r in leaf_cells}
+    return source_presence, {
+        r: OrderPresence(nodes=len(shards), stamped=carrying[r]) for r in leaf_cells
+    }
 
 
 def read_ladder(
@@ -558,19 +590,28 @@ def read_ladder(
     :func:`moczarr.pyramid.read_pyramid`, typed per the
     :class:`~moczarr.pyramid.PyramidInfo` posture.
 
-    ``materialized`` per artifact kind: the source level is ``True`` (the
-    leaves ARE the store); overview levels take :func:`moczarr.pyramid.
-    read_pyramid`'s D4 existence probe (``stamped > 0`` — existence, not
-    readability, its documented split); column levels are probed from the
-    §4.6 columns' own ``groups`` maps (one batched GET per candidate leaf,
-    shared across the column levels — see :func:`_column_presence`), since
-    the manifest MAY lag the fleet there. The probe never raises: a
-    malformed or mis-stamped column is warned about and counted as not
-    carrying, so one bad object cannot take the picker's whole catalog
-    entry — the source and overview rungs included — down with it.
-    ``None`` marks *unknown*:
-    ``probe=False`` (declaration only — one manifest GET, no coverage or
-    stamp reads), an unusable root coverage, or the grouped-tree overview
+    ``materialized`` per artifact kind: overview levels take
+    :func:`moczarr.pyramid.read_pyramid`'s D4 existence probe (``stamped >
+    0`` — existence, not readability, its documented split); column levels
+    are probed from the §4.6 columns' own ``groups`` maps (one batched GET
+    per candidate leaf, shared across the column levels — see
+    :func:`_leaf_presence`), since the manifest MAY lag the fleet there.
+    The **source** level is ``True`` by definition on an unwindowed store
+    (the leaves ARE the store) and is PROBED on a windowed one whenever a
+    window is named: those leaves are per window (``{shard}_{window}.zarr``
+    — D23) and exist only for the windows that were swept, so a
+    syntactically valid label that was never swept must read ``False``, not
+    ``True``. It rides the same batched leaf-tier read as the columns, so
+    the extra honesty costs no extra round trip when a column level is
+    probed too — and on a windowed store with no column levels it is the
+    one leaf-tier batch the ladder pays (``probe=False`` opts out
+    entirely). The probe never raises: a malformed or mis-stamped column is
+    warned about and counted as not carrying, so one bad object cannot take
+    the picker's whole catalog entry — the source and overview rungs
+    included — down with it. ``None`` marks *unknown*: ``probe=False``
+    (declaration only — one manifest GET, no coverage or stamp reads, so a
+    windowed store's source rung reads unknown rather than guessing at a
+    named window), an unusable root coverage, or the grouped-tree overview
     refusal — :attr:`Ladder.materialized` lists ``True`` levels only, so an
     unknown level never masquerades as materialized.
 
@@ -607,10 +648,17 @@ def read_ladder(
             f"or probe=False for the declared ladder alone"
         )
 
+    # The source rung is True by definition on an unwindowed store — the
+    # leaves ARE the store — but a windowed store's leaves are per window
+    # (D23), so once a window is NAMED the same declared-vs-materialized
+    # question applies to it as to every other rung, and it is probed.
+    source_probe = probe and windowed and window is not None
+
     overview_presence: dict[int, OrderPresence] | None = None
     column_presence: dict[int, OrderPresence] | None = None
-    if needs_probe:
-        if any(rec["artifact"] == "overview" for rec in table.values()):
+    source_presence: OrderPresence | None = None
+    if needs_probe or source_probe:
+        if needs_probe and any(rec["artifact"] == "overview" for rec in table.values()):
             info = read_pyramid(
                 store_root,
                 manifest=manifest,
@@ -623,16 +671,31 @@ def read_ladder(
             (rec["cell_order"] for rec in table.values() if rec["artifact"] == "column"),
             reverse=True,
         )
-        if leaf_cells:
-            column_presence = _column_presence(
-                store_root, manifest, leaf_cells, window, handle, concurrency
+        if not needs_probe:
+            leaf_cells = []
+        if leaf_cells or source_probe:
+            source_presence, column_presence = _leaf_presence(
+                store_root,
+                manifest,
+                leaf_cells,
+                window,
+                handle,
+                concurrency,
+                source=source_probe,
             )
 
     levels = []
     for rec in table.values():
         presence: OrderPresence | None = None
         if rec["artifact"] == "source":
-            materialized: bool | None = True
+            materialized: bool | None
+            if not (windowed and window is not None):
+                materialized = True  # the leaves ARE the store
+            elif not probe:
+                materialized = None  # a named window, declaration only
+            else:
+                presence = source_presence
+                materialized = presence.stamped > 0 if presence is not None else None
         elif not needs_probe:
             materialized = None
         elif rec["artifact"] == "overview":
