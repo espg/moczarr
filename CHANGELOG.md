@@ -13,8 +13,10 @@
   Unmaterialized levels are omitted with their opener's warning, `aoi=`
   scopes rows never the tree's shape, `levels=` bounds the assembly on a
   wide ladder, and a declared-off store is the valid one-level degenerate
-  form. One manifest GET and one shared root-MOC read serve the whole
-  ladder (`open_level` gained the private `_envelope=` threading).
+  form. The sidecar tier is constant in the number of levels: one manifest
+  GET, and one root-MOC read shared across every non-source level beside
+  `open_hive`'s own on the source arm (`open_level` gained the private
+  `_envelope=` threading).
   `open_store` grows the same level for `zagg-pyramid/2` products: the
   product node's children are the materialized resolutions of
   `pyramid_levels`' table — the §4.6 column-carried leaf resolutions

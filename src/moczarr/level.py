@@ -760,8 +760,12 @@ def open_pyramid(
     materializes it (source leaves, §4.6 column groups, §4.1/§4.4 overview
     artifacts), on either declaration grammar (``/1`` constant-depth and
     the ``/2`` fixed ladder alike). The tree layer adds no reads of its
-    own beyond one manifest GET and one root-MOC read shared across the
-    levels (issue #5), and "lazy" stays each level's own laziness.
+    own: the sidecar tier is CONSTANT in the number of levels (issue #5) —
+    one manifest GET, and one root-MOC read threaded across every
+    non-source level, beside the one :func:`moczarr.open.open_hive` takes
+    on the source arm (it has no ``_envelope`` parameter, deliberately —
+    the source axis owns its own coverage read). "Lazy" stays each
+    level's own laziness.
 
     The **root node is empty** — no variables, no coordinates — and carries
     the declaration:
@@ -865,8 +869,10 @@ def open_pyramid(
         # open_level's own all_time raise below — never a silent drop.
     envelope = None
     if any(rec["artifact"] != "source" for rec in table.values()):
-        # ONE root-MOC read for the whole ladder (issue #5): the non-source
-        # arms name their candidates from it. None means "not usable" and the
+        # ONE root-MOC read for every non-source arm of the ladder (issue
+        # #5): they name their candidates from it. The source arm keeps its
+        # own (open_hive takes no _envelope), so a ladder costs two reads
+        # total, not one per level. None means "not usable" and the
         # per-level opens then warn exactly as they do standalone.
         envelope = load_root_coverage(store_root, store=handle)
     nodes: dict[str, Any] = {}
