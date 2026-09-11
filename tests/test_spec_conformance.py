@@ -429,8 +429,20 @@ class TestFluxDeclaration:
             for word, values in read_ragged(store, f"{expected['group']}/rx_flux")
         }
         assert set(sums) == set(counts)
-        assert any(not s.is_integer() for s in sums.values())
+        assert all(not s.is_integer() for s in sums.values())
         assert all(sums[w] != float(counts[w]) for w in sums)
+
+    def test_flux_weights_are_positive_finite_reals(self):
+        """§2.0's definition of ``"flux"``: "positive finite float32 reals
+        (a zero-weight observation carries no flux and MUST NOT produce a
+        row)" — the one clause of that definition checkable on the
+        committed bytes, and the one a ``0.0`` or ``nan`` weight would slip
+        past every other assertion in this class."""
+        store, expected = _load("flux")
+        for _word, values in read_ragged(store, f"{expected['group']}/rx_flux"):
+            assert values.dtype == np.float32
+            assert np.all(np.isfinite(values))
+            assert np.all(values[:, 1] > 0)
 
     def test_counts_fixtures_read_as_counts_by_default(self):
         """§2.0's absent-key default on committed pre-declaration bytes:
