@@ -993,6 +993,21 @@ class TestPyramidDeclaration:
                     },
                 )
             )
+        # One level entry (one artifact) per (node, window): a repeated node
+        # is malformed, not a merge instruction — collapsing it last-writer-
+        # wins would leave `overviews` (verbatim) and `cell_orders` (keyed)
+        # disagreeing about the same declaration.
+        with pytest.raises(ValueError, match="declares node 2 twice"):
+            pyramid_declaration(
+                dict(
+                    base,
+                    pyramid={
+                        "spec": "zagg-pyramid/2",
+                        "overviews": [{"node": 2, "cells": [3]}, {"node": 2, "cells": [4]}],
+                        "overview": overview,
+                    },
+                )
+            )
         with pytest.raises(ValueError, match="malformed /2 level entry"):
             pyramid_declaration(
                 dict(
@@ -1004,6 +1019,25 @@ class TestPyramidDeclaration:
                     },
                 )
             )
+
+    def test_v2_without_a_leaf_entry_reads_leaf_cells_none(self):
+        # NOT malformed: §4.6's no-leaf-node-levels arm is a legal /2
+        # declaration (the writing run deletes any column a previous one
+        # left), so `leaf_cells` reads None — "this declaration declares no
+        # leaf resolutions" — the same sentinel /1 uses, and no raise.
+        rec = pyramid_declaration(
+            {
+                "cell_order": 6,
+                "shard_order": 4,
+                "pyramid": {
+                    "spec": "zagg-pyramid/2",
+                    "overviews": [{"node": 3, "cells": [4]}, {"node": 2, "cells": [3]}],
+                    "overview": {"all_time": False, "fields": {"count": {"class": "exact"}}},
+                },
+            }
+        )
+        assert rec["leaf_cells"] is None
+        assert rec["orders"] == [3, 2]
 
     def test_unknown_revision_fails_loudly(self, manifest):
         # §4.5's conformance rule, and BEFORE the /1 shape test: a future /3
