@@ -859,6 +859,13 @@ class TestExplicitWindowValidation:
             ((40.0, -0.5), "dz > 0"),
             ((math.nan, 0.5), "finite"),
             ((40.0, math.inf), "finite"),
+            # Shapes Python would otherwise report from inside the unpack:
+            # a bare scalar is not iterable, a string iterates into
+            # characters, a non-numeric element does not convert.
+            (40.0, r"\(z0, dz\) pair"),
+            ("40", r"\(z0, dz\) pair"),
+            ((None, 0.5), r"\(z0, dz\) pair"),
+            (("a", "b"), r"\(z0, dz\) pair"),
         ],
     )
     def test_a_malformed_window_names_the_callers_mistake(self, bad, match):

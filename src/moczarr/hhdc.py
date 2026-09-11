@@ -61,7 +61,7 @@ stays with :func:`moczarr.open_hive` / the coverage MOC.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from itertools import chain, groupby
 from typing import Literal
 
@@ -398,7 +398,9 @@ def chunk_z_range(
     raise ValueError(f"unknown fit mode {fit!r}")
 
 
-def _explicit_window(z_window, fit: FitMode) -> tuple[float, float]:
+def _explicit_window(
+    z_window: tuple[float, float] | Sequence[float], fit: FitMode
+) -> tuple[float, float]:
     """Validate ``read_tensors``' explicit ``(z0, dz)`` window, once per call.
 
     Returns the window as a float pair. Raises up front — before any store
@@ -408,8 +410,19 @@ def _explicit_window(z_window, fit: FitMode) -> tuple[float, float]:
     independently, and one fixed shared axis is the point of supplying the
     window), and on an unknown ``fit`` (the derive path defers that check
     to :func:`chunk_z_range`; the explicit path never gets there).
+
+    Every malformed shape lands on the pair message, including the ones
+    Python would otherwise report from inside the unpack: a bare scalar
+    (``z_window=40.0``) is not iterable, a string iterates into characters,
+    and a non-numeric element does not convert.
     """
-    seq = tuple(z_window)
+    pair = f"z_window must be a (z0, dz) pair, got {z_window!r}"
+    if isinstance(z_window, str | bytes):
+        raise ValueError(pair)
+    try:
+        seq = tuple(z_window)
+    except TypeError:
+        raise ValueError(pair) from None
     if len(seq) == 3:
         raise ValueError(
             "z_window is a (z0, dz) pair, not chunk_z_range's (z0, n_bins, dz) triple — "
@@ -417,8 +430,11 @@ def _explicit_window(z_window, fit: FitMode) -> tuple[float, float]:
             "read_tensors(..., n_bins=n_bins, z_window=(z0, dz))"
         )
     if len(seq) != 2:
-        raise ValueError(f"z_window must be a (z0, dz) pair, got {z_window!r}")
-    z0, dz = float(seq[0]), float(seq[1])
+        raise ValueError(pair)
+    try:
+        z0, dz = float(seq[0]), float(seq[1])
+    except (TypeError, ValueError):
+        raise ValueError(pair) from None
     if not (math.isfinite(z0) and math.isfinite(dz)) or dz <= 0:
         raise ValueError(f"z_window (z0, dz) must be finite with dz > 0, got ({z0}, {dz})")
     if fit == "collapse_bins":
