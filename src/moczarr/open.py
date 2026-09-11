@@ -510,6 +510,8 @@ def open_hive(
     index_kind: str = "moc",
     concurrency: int | None = 32,
     xr_kwargs: dict[str, Any] | None = None,
+    store: Any = None,
+    manifest: dict | None = None,
     _objects_out: list | None = None,
     **store_kwargs: Any,
 ):
@@ -585,6 +587,22 @@ def open_hive(
     xr_kwargs : dict, optional
         Extra keyword arguments for each leaf's ``xarray.open_zarr`` (e.g.
         ``chunks={}`` for dask-backed laziness).
+    store : obstore store, optional
+        An already-constructed object store rooted at the subtree actually
+        opened, shared instead of building one from ``store_root`` +
+        ``store_kwargs`` (issue #5 — the same spelling and posture as
+        :func:`moczarr.pyramid.open_overview_order` and
+        :func:`moczarr.level.open_column_order`, so a caller threading ONE
+        handle across a product's levels gets shared reads on EVERY level,
+        the native one included). With ``product=``, the handle must be
+        rooted at ``{store_root}/{product}`` — the subtree this open
+        re-roots on — since every key is resolved against it.
+    manifest : dict, optional
+        An already-read ``morton_hive.json`` (of that same subtree),
+        re-validated through :func:`moczarr.convention.parse_manifest`
+        rather than re-fetched. What is passed is what the open uses, so a
+        caller's manifest governs the cell/shard orders, the window dialect,
+        and ``attrs["morton_hive"]``.
     **store_kwargs
         Extra keyword arguments for the object store (``region=...`` etc.).
 
@@ -639,9 +657,12 @@ def open_hive(
     # ONE store construction pair for the whole open (issue #5): the obstore
     # handle serves every JSON/sidecar read; the zarr wrapper serves every
     # leaf open via deep paths through the parentless digit tree.
-    obstore_store = open_object_store(store_root, **store_kwargs)
+    obstore_store = _resolve_store(store_root, store, store_kwargs)
     zarr_store = ObjectStore(obstore_store, read_only=True)
-    manifest = read_manifest(store_root, store=obstore_store)
+    if manifest is not None:
+        manifest = parse_manifest(manifest)
+    else:
+        manifest = read_manifest(store_root, store=obstore_store)
     if manifest is None:
         if product is None:
             # A multi-product root has no root manifest by design (§6.5

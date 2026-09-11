@@ -412,3 +412,45 @@ regardless of grouping. There is no settled path to name, so the reader
 names none: the order nodes are omitted with a warning and the source node
 stands. Every store written today is `path_grouping: 1`, where the per-digit
 form *is* the tree's own node path.
+
+### One resolution, one Dataset: `open_level`
+
+> **Status: implemented** ([issue #37](https://github.com/espg/moczarr/issues/37)
+> — the per-order data model behind issue #36's mechanism; the espg ruling
+> on that thread is "one dataset per order").
+
+A pyramid store's reader-facing axis is **resolution**, not node order: a
+reader picks a cell order and reads it (zagg spec §4). `pyramid_levels`
+turns the manifest declaration into that table — one record per
+addressable cell order, each naming the artifact kind that materializes it
+(`source` at native resolution, `overview` at ancestor nodes, `column` for
+a `/2` declaration's §4.6 leaf tier; the vocabulary mirrors zagg's
+`zagg-multiscales/1` convention entries) — and `open_level` dispatches on
+it, so whichever kind owns the level the caller gets the **same Dataset
+shape**:
+
+- the 1-D `cells` dim, nested-ascending in packed-word order;
+- the `morton` coordinate (packed `uint64` words at the level's cell
+  order; identity is morton, never lat/lon) with the lazy `MortonMocIndex`
+  by default, plus the fabricated NESTED `cell_ids` view;
+- dense fields as dense variables; **ragged digest fields as their encoded
+  vlen-bytes variables** on the same axis, the `ragged` attrs block
+  riding verbatim (decode via `parse_ragged_attrs` + `decode_cell`, or the
+  store-addressed `read_ragged`);
+- `attrs["morton_hive"]` (the level summary), `attrs["zagg_objects"]` (the
+  per-artifact roster with each object's `zagg_overview` / `zagg_column`
+  provenance block verbatim — fold regime, generation, and any stamped
+  `demotions` records: a **pre-spec** key tracking the open
+  englacial/zagg#557, which `level_demotions` flattens from the
+  sweep-written `zagg_overview` blocks without validating it and without
+  claiming a spec for it), and `attrs["zagg_level"]` (the level record plus
+  the declared field classes and fold regime).
+
+Both grammars are first-class: a `/1` store's levels are its native order
+plus the constant-depth overview orders (the live public stores' shape),
+and a `/2` store adds the column-carried leaf resolutions and the fixed
+every-order ladder. The multi-order assembly — a DataTree over these
+levels — is [issue #36b](https://github.com/espg/moczarr/issues/36)'s,
+built on this per-level block; `open_level` deliberately exposes no
+`decode=` (new pyramid surfaces are native moczarr only — the
+englacial/zagg#550 ruling).

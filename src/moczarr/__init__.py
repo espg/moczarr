@@ -59,9 +59,18 @@ from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.hhdc import cell_index, has_exact_occupancy, read_tensors
 from moczarr.intersect import iter_occupancy_and, occupancy_and
 from moczarr.join import join_coarse, parent_cells
+from moczarr.level import (
+    LEVEL_ATTR,
+    level_demotions,
+    open_column_order,
+    open_level,
+    pyramid_levels,
+)
 from moczarr.open import candidate_leaves, candidate_shards, open_hive, open_leaf, open_store
 from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.pyramid import (
+    OrderPresence,
+    PyramidInfo,
     finest_source_at,
     node_objects,
     open_overview_order,
@@ -135,6 +144,7 @@ __all__ = [
     "HIVE_SPEC",
     "HIVE_SPEC_V2",
     "HIVE_SPEC_V3",
+    "LEVEL_ATTR",
     "MANIFEST_NAME",
     "MORTON_CONVENTION_ENTRY",
     "MORTON_CONVENTION_UUID",
@@ -145,6 +155,8 @@ __all__ = [
     "ConservativeCoverageWarning",
     "MortonRanges",
     "NoCoverageError",
+    "OrderPresence",
+    "PyramidInfo",
     "RaggedElement",
     "__version__",
     "aoi_mask",
@@ -175,6 +187,7 @@ __all__ = [
     "join_coarse",
     "lane_presence",
     "leaf_path",
+    "level_demotions",
     "list_products",
     "load_root_coverage",
     "morton_decimal",
@@ -183,8 +196,10 @@ __all__ = [
     "node_objects",
     "occupancy_and",
     "open_column",
+    "open_column_order",
     "open_hive",
     "open_leaf",
+    "open_level",
     "open_object_store",
     "open_overview_order",
     "open_ragged",
@@ -203,6 +218,7 @@ __all__ = [
     "parse_ragged_attrs",
     "parse_root_coverage",
     "pyramid_declaration",
+    "pyramid_levels",
     "ranges_contain",
     "ranges_words",
     "read_cell",

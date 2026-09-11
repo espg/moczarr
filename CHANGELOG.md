@@ -2,6 +2,48 @@
 
 ## Unreleased
 
+- The multi-resolution reader surface
+  ([#36](https://github.com/espg/moczarr/issues/36) /
+  [#37](https://github.com/espg/moczarr/issues/37)): a pyramid store reads as
+  a ladder of RESOLUTIONS rather than a pile of artifacts, in three tiers.
+  **Declaration** — `pyramid_declaration(manifest)` binds zagg spec §4.5's
+  ladder under both grammars (`zagg-pyramid/1`'s `overview.orders`, `/2`'s
+  `overviews` entries decoded verbatim, never re-derived) into one normalized
+  record, or `None` when the pyramid is declared off; `read_pyramid(store_root)` pairs it with a cheap materialization report
+  over the whole store — one manifest GET plus D4 stamp probes at the
+  arithmetically named ancestor nodes — returning the typed `PyramidInfo`
+  (`.declaration`, `.presence`) whose `presence` is
+  `{order: OrderPresence(nodes, stamped)} | None`. `stamped` is EXISTENCE and
+  nothing more (deliberately not §4.3's per-object classification, so it and
+  `open_overview_order` can disagree about one store, each documented at the
+  other), `probe=False` is the declaration-only read, and an unswept declared
+  order is a legal `stamped: 0` answer rather than an error. **Columns** — the
+  §4.6 leaf-column tier the manifest does not describe: `walk_columns` yields
+  every column artifact's store-relative path, `open_column(root, shard)` opens
+  one as a read-only zarr store through the same path/transport/window seams
+  `open_leaf` owns, `read_column_record` returns its validated `zagg_column`
+  provenance block (or `None`), and `column_orders(record)` names the
+  resolution groups it carries, finest first. **Levels** —
+  `pyramid_levels(manifest)` is the addressing table, `{cell order: {cell_order,
+  order, artifact}}`, raising on a declaration that places one resolution at two
+  nodes (one resolution names one level; the §4.6 node-order member is a
+  recorded partial tier, not a level); `open_level(root, cell_order)` opens that
+  resolution as ONE `xarray.Dataset`, identical in shape whichever artifact kind
+  materializes it — source leaves via `open_hive`, §4.1/§4.4 overviews via
+  `open_overview_order`, §4.6 column groups via the new `open_column_order` —
+  stamping the level's `zagg_level` record beside `morton_hive` and
+  `zagg_objects`, and degrading to `None` with a warning on a declared but
+  unmaterialized level. Ragged digest fields ride as their encoded
+  `zagg-ragged/1` vlen-bytes variables on the level's `cells` axis (decode stays
+  `parse_ragged_attrs` + `decode_cell`, or `read_ragged`), never eagerly
+  decoded into padded tensors. `level_demotions(ds)` flattens the stamped
+  `demotions` records (pre-spec, englacial/zagg#557) across a level's roster,
+  node-attributed. Two ride-alongs: `open_overview_order` gained `cell_order=`
+  (the `/2` ladder rung's stored resolution, cross-checked against each
+  artifact's own attrs) and classifies `zagg-overview/2` beside `/1`; `open_hive`
+  gained the public `store=` / `manifest=` keywords its siblings already had.
+  The multi-order assembly (a DataTree over `pyramid_levels`) stays #36b.
+
 - **mortie 1.0 is now the floor** ([#59](https://github.com/espg/moczarr/issues/59)):
   mortie 1.0.0 retired its plural batch names with no aliases
   (espg/mortie#187), so a fresh install against unpinned mortie failed at
