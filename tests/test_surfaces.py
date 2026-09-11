@@ -346,6 +346,24 @@ class TestOpenSurface:
         surf = open_surface(WINDOWED, 6, None, all_time=True, carry=("count",))
         assert surf.attrs["zagg_objects"][0]["window"] == "all"
 
+    def test_level_model_knobs_thread_through(self):
+        # open_level's WHOLE signature reaches the arm — including the three
+        # that are not surface arguments: fabricate_cell_ids decides whether
+        # the surface has a cell_ids coordinate at all, index_kind selects
+        # the level's index, and xr_kwargs reaches xr.open_zarr (the read,
+        # which is the wall at viewer scales).
+        assert "cell_ids" in open_surface(TEMPORAL, 6, "h_tdigest").coords
+        bare = open_surface(TEMPORAL, 6, "h_tdigest", fabricate_cell_ids=False)
+        assert "cell_ids" not in bare.coords
+        pandas_index = open_surface(
+            TEMPORAL, 6, "h_tdigest", index_kind="pandas", fabricate_cell_ids=False
+        )
+        assert pandas_index["h_tdigest"].shape == bare["h_tdigest"].shape
+        with pytest.raises(ValueError, match="index_kind='bogus'"):  # the level model's own refusal
+            open_surface(TEMPORAL, 6, "h_tdigest", index_kind="bogus", fabricate_cell_ids=False)
+        with pytest.raises(TypeError, match="open_zarr"):  # unfiltered, all the way down
+            open_surface(TEMPORAL, 6, "h_tdigest", xr_kwargs={"not_an_open_zarr_kwarg": 1})
+
     def test_strata_store_native_level(self):
         # kitchen_sink through the store-addressed arm: the merged total at
         # the native order, count riding along.

@@ -336,24 +336,31 @@ def open_surface(
     window: str | None = None,
     all_time: bool = False,
     anonymous: bool = False,
+    fabricate_cell_ids: bool | str = "auto",
+    index_kind: str = "moc",
     concurrency: int | None = 32,
+    xr_kwargs: dict[str, Any] | None = None,
     store: Any = None,
     **store_kwargs: Any,
 ):
     """Open one level and materialize its surface — the one-call feeder.
 
-    :func:`moczarr.level.open_level` then :func:`quantile_surface`: every
-    level-model knob passes through verbatim — ``aoi`` scopes rows exactly
-    as the level model does (an out-of-coverage AOI yields the
-    schema-correct EMPTY surface, ``(len(quantiles), 0)``), ``window``
-    follows the D23 dialect (required on a windowed store, refused on an
-    unwindowed one, the reserved all-time token refused everywhere), and
-    ``all_time`` reads a windowed store's §4.5 cross-window folds
-    (overview levels only). ``None`` — with the arm's own warning — when
-    the level is declared but unmaterialized, exactly as ``open_level``
-    answers. Surface arguments (``quantiles``/``fill``/``carry``/``name``,
-    ``field`` string / sequence / ``None``) follow
-    :func:`quantile_surface`.
+    :func:`moczarr.level.open_level` then :func:`quantile_surface`, with
+    ``open_level``'s whole signature threaded through verbatim (defaults
+    unchanged): ``aoi`` scopes rows exactly as the level model does (an
+    out-of-coverage AOI yields the schema-correct EMPTY surface,
+    ``(len(quantiles), 0)``), ``window`` follows the D23 dialect (required
+    on a windowed store, refused on an unwindowed one, the reserved
+    all-time token refused everywhere), ``all_time`` reads a windowed
+    store's §4.5 cross-window folds (overview levels only),
+    ``fabricate_cell_ids`` governs whether the surface carries a
+    ``cell_ids`` coordinate at all, ``index_kind`` selects the level's
+    index (and with it how ``aoi`` cuts rows), and ``xr_kwargs`` reaches
+    ``xr.open_zarr`` — the knob that governs the read, which is the wall at
+    viewer scales. ``None`` — with the arm's own warning — when the level
+    is declared but unmaterialized, exactly as ``open_level`` answers.
+    Surface arguments (``quantiles``/``fill``/``carry``/``name``, ``field``
+    string / sequence / ``None``) follow :func:`quantile_surface`.
     """
     ds = open_level(
         store_root,
@@ -364,7 +371,10 @@ def open_surface(
         window=window,
         all_time=all_time,
         anonymous=anonymous,
+        fabricate_cell_ids=fabricate_cell_ids,
+        index_kind=index_kind,
         concurrency=concurrency,
+        xr_kwargs=xr_kwargs,
         store=store,
         **store_kwargs,
     )
