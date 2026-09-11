@@ -342,8 +342,9 @@ def read_pyramid(
 
     The issue #36 store-root surface: one manifest GET decodes the
     declaration (:func:`pyramid_declaration` — both grammars), and existence
-    **probes** answer which declared ancestor orders actually have
-    materialized artifacts today. ``None`` when the pyramid is declared off;
+    **probes** answer which declared ancestor orders actually have D4
+    commit-stamped artifacts on disk today (existence, not readability — see
+    ``stamped`` below). ``None`` when the pyramid is declared off;
     otherwise ``{"declaration": record, "presence": {order: {"nodes": N,
     "stamped": M}} | None}``.
 
@@ -351,7 +352,26 @@ def read_pyramid(
     candidate ancestor nodes — named *arithmetically* by coarsening the root
     ``coverage.moc``'s source shards (the zagg#201 ruling-(5) enumeration,
     shared with :func:`open_overview_order`) — and ``stamped`` how many hold
-    a D4 commit-stamped artifact for this window. One batched ``zarr.json``
+    a D4 commit-stamped artifact for this window.
+
+    ``stamped`` is an **existence** count and nothing more: the D4 stamp,
+    revision-agnostic, "the sweep wrote an object here". It deliberately
+    does **not** run §4.3's per-object classification
+    (:func:`_object_entry`: ``role``, the ``zagg_overview`` provenance
+    block, its ``cell_order``), so the two surfaces CAN disagree about one
+    store — an ancestor node carrying a stamped object with a bad ``role``
+    value or a missing/unknown-revision ``zagg_overview`` block counts here
+    while :func:`open_overview_order` warns and drops it, and reports the
+    order node as absent if it was the only candidate. That is the intended
+    split, not an oversight: classification is **revision-bound** (this
+    reader implements :data:`OVERVIEW_SPEC` only, while §4.4 gives ``/2``
+    ladder artifacts ``zagg-overview/2`` attrs), so running it here would
+    report every conformant ``/2`` artifact as unclassifiable on exactly
+    the stores this declaration surface exists for. The shared enumeration
+    pins the candidate **node set** the two agree on; which of those objects
+    a ``/1`` reader can surface is the open path's answer, and the open path
+    says so loudly. A stamped object is always evidence the sweep ran.
+    One batched ``zarr.json``
     GET per candidate node, never a listing walk and never a data read:
     declared-but-unmaterialized is a **legal recorded state** (declaring is
     free, sweeping is the operational decision — zagg#381 point (11)), so
