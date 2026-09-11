@@ -1,5 +1,12 @@
 """moczarr: sparse-DGGS xarray reader for morton-hive zarr stores."""
 
+from moczarr.column import (
+    COLUMN_ATTR,
+    COLUMN_SPEC,
+    column_orders,
+    open_column,
+    read_column_record,
+)
 from moczarr.composition import (
     COMPOSITION_LANES,
     COMPOSITION_SPEC,
@@ -20,6 +27,9 @@ from moczarr.convention import (
     MORTON_CONVENTION_UUID,
     ROOT_COVERAGE_NAME,
     check_node_invariant,
+    column_name,
+    column_path,
+    is_column_basename,
     is_point_word,
     leaf_path,
     morton_decimal,
@@ -49,9 +59,19 @@ from moczarr.fabricate import FLOAT64_EXACT_MAX_ORDER, fabricate_cell_ids
 from moczarr.hhdc import cell_index, has_exact_occupancy, read_tensors
 from moczarr.intersect import iter_occupancy_and, occupancy_and
 from moczarr.join import join_coarse, parent_cells
+from moczarr.level import (
+    LEVEL_ATTR,
+    level_demotions,
+    open_column_order,
+    open_level,
+    open_pyramid,
+    pyramid_levels,
+)
 from moczarr.open import candidate_leaves, candidate_shards, open_hive, open_leaf, open_store
 from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.pyramid import (
+    OrderPresence,
+    PyramidInfo,
     finest_source_at,
     node_objects,
     open_overview_order,
@@ -59,6 +79,8 @@ from moczarr.pyramid import (
     overview_declaration,
     overview_nodes,
     overview_orders,
+    pyramid_declaration,
+    read_pyramid,
     source_orders,
 )
 from moczarr.ragged import (
@@ -101,6 +123,7 @@ from moczarr.store import (
     read_leaf_coverage,
     read_leaf_metas,
     read_manifest,
+    walk_columns,
     walk_leaves,
     warn_if_stale,
 )
@@ -111,6 +134,8 @@ except ImportError:  # pragma: no cover - version file is generated at build tim
     __version__ = "0.0.0+unknown"
 
 __all__ = [
+    "COLUMN_ATTR",
+    "COLUMN_SPEC",
     "COMMIT_ATTR",
     "COMPOSITION_LANES",
     "COMPOSITION_SPEC",
@@ -120,6 +145,7 @@ __all__ = [
     "HIVE_SPEC",
     "HIVE_SPEC_V2",
     "HIVE_SPEC_V3",
+    "LEVEL_ATTR",
     "MANIFEST_NAME",
     "MORTON_CONVENTION_ENTRY",
     "MORTON_CONVENTION_UUID",
@@ -130,6 +156,8 @@ __all__ = [
     "ConservativeCoverageWarning",
     "MortonRanges",
     "NoCoverageError",
+    "OrderPresence",
+    "PyramidInfo",
     "RaggedElement",
     "__version__",
     "aoi_mask",
@@ -140,6 +168,9 @@ __all__ = [
     "candidate_shards",
     "cell_index",
     "check_node_invariant",
+    "column_name",
+    "column_orders",
+    "column_path",
     "combined_hash",
     "counts_from_composition",
     "coverage_moc",
@@ -150,12 +181,14 @@ __all__ = [
     "finest_source_at",
     "has_exact_occupancy",
     "hash_arrays",
+    "is_column_basename",
     "is_point_word",
     "is_product_name",
     "iter_occupancy_and",
     "join_coarse",
     "lane_presence",
     "leaf_path",
+    "level_demotions",
     "list_products",
     "load_root_coverage",
     "morton_decimal",
@@ -163,10 +196,14 @@ __all__ = [
     "named_lanes",
     "node_objects",
     "occupancy_and",
+    "open_column",
+    "open_column_order",
     "open_hive",
     "open_leaf",
+    "open_level",
     "open_object_store",
     "open_overview_order",
+    "open_pyramid",
     "open_ragged",
     "open_store",
     "overview_cell_orders",
@@ -182,9 +219,12 @@ __all__ = [
     "parse_manifest",
     "parse_ragged_attrs",
     "parse_root_coverage",
+    "pyramid_declaration",
+    "pyramid_levels",
     "ranges_contain",
     "ranges_words",
     "read_cell",
+    "read_column_record",
     "read_commit",
     "read_commits",
     "read_coverage_bitmap",
@@ -193,6 +233,7 @@ __all__ = [
     "read_manifest",
     "read_overview_order_stats",
     "read_overview_stats",
+    "read_pyramid",
     "read_ragged",
     "read_stats",
     "read_stats_rollup",
@@ -208,6 +249,7 @@ __all__ = [
     "validate_product_name",
     "verify_arrays",
     "verify_overview_arrays",
+    "walk_columns",
     "walk_leaves",
     "warn_if_stale",
 ]

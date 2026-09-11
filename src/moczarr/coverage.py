@@ -163,12 +163,12 @@ def decode_bitmap(payload: bytes, shard: str | int, cell_order: int) -> np.ndarr
     ranks = np.flatnonzero(bits)
     if ranks.size == 0:
         return np.empty(0, dtype=np.uint64)
-    from mortie import decimals_to_words
+    from mortie import decimal_to_word
 
     # One Python->Rust crossing for the whole set bit field, not one per
     # occupied cell: a dense order-19 leaf is millions of labels.
     labels = [dec + rank_tail(int(rank), depth) for rank in ranks]
-    return np.sort(np.asarray(decimals_to_words(labels), dtype=np.uint64))
+    return np.sort(np.asarray(decimal_to_word(labels), dtype=np.uint64))
 
 
 def parse_root_coverage(payload: object) -> dict | None:
@@ -208,7 +208,7 @@ def ranges_words(envelope: dict) -> np.ndarray:
     Malformed ranges (base-crossing, wrong order, reversed endpoints) raise:
     a corrupt cache must never yield a plausible partial answer — every
     range is validated BEFORE any of them is parsed. Expansion is O(covered
-    shards) through ONE batched ``mortie.decimals_to_words`` call rather than
+    shards) through ONE batched ``mortie.decimal_to_word`` call rather than
     a per-shard crossing (this runs on every root-MOC-backed open, and a
     CONUS/Antarctic root MOC is thousands of shards); containment checks on
     the hot path should use :func:`ranges_contain` instead (rank space, no
@@ -226,9 +226,9 @@ def ranges_words(envelope: dict) -> np.ndarray:
         labels.extend(base + rank_tail(r, order) for r in range(lo_rank, hi_rank + 1))
     if not labels:
         return np.empty(0, dtype=np.uint64)
-    from mortie import decimals_to_words
+    from mortie import decimal_to_word
 
-    return np.unique(np.asarray(decimals_to_words(labels), dtype=np.uint64))
+    return np.unique(np.asarray(decimal_to_word(labels), dtype=np.uint64))
 
 
 def root_coverage_and(envelope: dict, aoi) -> np.ndarray:
@@ -393,9 +393,9 @@ def temporal_shard_words(envelope: dict) -> tuple[np.ndarray, np.ndarray]:
         values.append(value)
     if not labels:
         return empty, empty
-    from mortie import decimals_to_words
+    from mortie import decimal_to_word
 
-    shard_words = np.asarray(decimals_to_words(labels), dtype=np.uint64)
+    shard_words = np.asarray(decimal_to_word(labels), dtype=np.uint64)
     toc_words = np.asarray(values, dtype=np.uint64)
     ordering = np.argsort(shard_words)
     return shard_words[ordering], toc_words[ordering]

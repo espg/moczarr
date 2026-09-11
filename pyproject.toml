@@ -34,8 +34,18 @@ dependencies = [
     # review time. Earlier floors this supersedes: 0.9.3 for the spec §8
     # ``rank_to_xy``/``xy_to_rank`` deinterleave kernels (espg/mortie#150)
     # the HHDC tensor layout is built on (issue #19), and 0.9.1 for the
-    # mixed-order geo kernels (mortie#116/#122).
-    "mortie>=0.9.10",
+    # mixed-order geo kernels (mortie#116/#122). Floor 1.0.0 (issue #59):
+    # mortie 1.0 collapsed each scalar/batch pair into one polymorphic entry
+    # point (espg/mortie#187). Both surviving names PREDATE 1.0 as
+    # scalar-only kernels, so a name check alone does not justify a lower
+    # floor -- what this package needs is their ARRAY form:
+    # ``decimal_to_word(list[str])`` (was ``decimals_to_words``) in
+    # ``coverage``, and ``generate_morton_children(ndarray, order)`` (was
+    # ``children_of``) in ``intersect._expand_to`` and ``dggs.zoom_to``.
+    # Neither array form exists below 1.0.0 -- at 0.9.10
+    # ``generate_morton_children`` coerces its argument with
+    # ``np.uint64(parent_morton)``, which is a ``TypeError`` on an array.
+    "mortie>=1.0.0",
     # mortie's MortonIndexArray (.decimal_repr()/.hive_path()) imports pandas;
     # a direct runtime dep the reader calls into, not just transitive via xarray.
     "pandas",
@@ -81,7 +91,12 @@ test = [
 # signed off on the issue #19 thread). The import is lazy (the dggs.py
 # posture), so the core import graph is unchanged. Floor 0.39: the current
 # release at adoption time; the algebra surface itself is far older.
-zagg = ["zagg>=0.40"]
+# Floor 0.53.0 (issue #59): the first zagg on mortie 1.0 (englacial/zagg#559).
+# Every earlier zagg still imports ``decimals_to_words``, retired by the
+# ``mortie>=1.0.0`` floor above, so the t-digest path would raise
+# ``ImportError`` at first use; pinning past it makes the extra fail at
+# resolve time instead, which is the honest failure until 0.53.0 is on PyPI.
+zagg = ["zagg>=0.53.0"]
 
 [project.urls]
 Homepage = "https://github.com/espg/moczarr"

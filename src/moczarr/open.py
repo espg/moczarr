@@ -510,6 +510,8 @@ def open_hive(
     index_kind: str = "moc",
     concurrency: int | None = 32,
     xr_kwargs: dict[str, Any] | None = None,
+    store: Any = None,
+    manifest: dict | None = None,
     _objects_out: list | None = None,
     **store_kwargs: Any,
 ):
@@ -585,6 +587,22 @@ def open_hive(
     xr_kwargs : dict, optional
         Extra keyword arguments for each leaf's ``xarray.open_zarr`` (e.g.
         ``chunks={}`` for dask-backed laziness).
+    store : obstore store, optional
+        An already-constructed object store rooted at the subtree actually
+        opened, shared instead of building one from ``store_root`` +
+        ``store_kwargs`` (issue #5 — the same spelling and posture as
+        :func:`moczarr.pyramid.open_overview_order` and
+        :func:`moczarr.level.open_column_order`, so a caller threading ONE
+        handle across a product's levels gets shared reads on EVERY level,
+        the native one included). With ``product=``, the handle must be
+        rooted at ``{store_root}/{product}`` — the subtree this open
+        re-roots on — since every key is resolved against it.
+    manifest : dict, optional
+        An already-read ``morton_hive.json`` (of that same subtree),
+        re-validated through :func:`moczarr.convention.parse_manifest`
+        rather than re-fetched. What is passed is what the open uses, so a
+        caller's manifest governs the cell/shard orders, the window dialect,
+        and ``attrs["morton_hive"]``.
     **store_kwargs
         Extra keyword arguments for the object store (``region=...`` etc.).
 
@@ -639,9 +657,12 @@ def open_hive(
     # ONE store construction pair for the whole open (issue #5): the obstore
     # handle serves every JSON/sidecar read; the zarr wrapper serves every
     # leaf open via deep paths through the parentless digit tree.
-    obstore_store = open_object_store(store_root, **store_kwargs)
+    obstore_store = _resolve_store(store_root, store, store_kwargs)
     zarr_store = ObjectStore(obstore_store, read_only=True)
-    manifest = read_manifest(store_root, store=obstore_store)
+    if manifest is not None:
+        manifest = parse_manifest(manifest)
+    else:
+        manifest = read_manifest(store_root, store=obstore_store)
     if manifest is None:
         if product is None:
             # A multi-product root has no root manifest by design (§6.5
@@ -1020,6 +1041,21 @@ def open_store(
     :func:`moczarr.pyramid.overview_orders`,
     :func:`moczarr.pyramid.finest_source_at`.
 
+    A ``zagg-pyramid/2`` declaration (the fixed ladder, issue #36b) grows
+    the same level: one child per materialized RESOLUTION of
+    :func:`moczarr.level.pyramid_levels`' table — the §4.6 column-carried
+    leaf resolutions included — named ``o{cell_order}`` (the espg-ruled
+    reader-side group grammar, shared with
+    :func:`moczarr.level.open_pyramid`: dot access works and the name is an
+    unambiguous string; store-side wire paths stay numeric), each holding
+    the :func:`moczarr.level.open_level` Dataset for that cell order
+    (``zagg_level``/``zagg_objects`` attrs riding along), with the
+    normalized declaration record under the product node's
+    ``zagg_pyramid`` attr. ``decode=True`` is refused for such a product
+    (pyramid level surfaces are native moczarr only — the englacial/zagg#550
+    ruling), and an unknown pyramid revision fails loudly rather than
+    reading as declared-off (§4.5's conformance rule).
+
     Named after its scope (the store), not its return type: the xarray-
     native name ``open_datatree`` is reserved for zarr-native hierarchies,
     which the hive tree deliberately is not (the D12 interop hierarchy is
@@ -1144,8 +1180,61 @@ concurrency, xr_kwargs, **store_kwargs
         node_window = window if record["spec"] == HIVE_SPEC_V2 else None
         manifest_rec = record.get("manifest")
         # Node discovery is MANIFEST DECLARATION (zagg spec §4.5; issue #15
-        # phase 8b): the reader binds pyramid.overview.orders and nothing
-        # else. Empty/absent -> today's flat product node, unchanged.
+        # phase 8b): the reader binds the pyramid block and nothing else.
+        # Declared off/absent -> today's flat product node, unchanged; an
+        # unknown revision fails loudly (§4.5's conformance rule — a future
+        # /3 block must not read as declared-off).
+        decl = pyramid.pyramid_declaration(manifest_rec) if manifest_rec else None
+        if decl is not None and decl["spec"] == pyramid.PYRAMID_SPEC_V2:
+            # The /2 fixed ladder (issue #36b): the product's children are
+            # the RESOLUTION levels of pyramid_levels' table — source,
+            # §4.6 column-carried leaf resolutions, and ladder rungs alike —
+            # each opened through open_level's dispatch, so every child is
+            # the #37 per-level Dataset (zagg_level/zagg_objects included).
+            # A declared level with no stamped artifact is omitted with its
+            # opener's warning, exactly as an unswept /1 order is.
+            if decode:
+                raise ValueError(
+                    f"decode=True is not available for product {name!r}: its pyramid "
+                    f"declares {pyramid.PYRAMID_SPEC_V2}, whose level surfaces are "
+                    f"native moczarr only (the englacial/zagg#550 ruling) — open "
+                    f"levels via open_pyramid/open_level and decode per level with "
+                    f"moczarr.dggs.decode if needed"
+                )
+            from moczarr.level import open_level, pyramid_levels
+
+            product_attrs = {
+                "morton_hive": {
+                    key: manifest_rec[key]
+                    for key in ("spec", "cell_order", "shard_order", "dataset")
+                },
+                "zagg_pyramid": decl,
+            }
+            if record.get("semantic_hash"):
+                product_attrs["semantic_hash"] = record["semantic_hash"]
+            nodes[name] = xr.Dataset(attrs=product_attrs)
+            product_root = store_root if bare else f"{store_root.rstrip('/')}/{name}"
+            # One store construction and one root-MOC read for the whole
+            # ladder (issue #5), same as the /1 loop below.
+            product_store = open_object_store(product_root, anonymous=anonymous, **store_kwargs)
+            product_envelope = load_root_coverage(product_root, store=product_store)
+            for r in pyramid_levels(manifest_rec):
+                child = open_level(
+                    product_root,
+                    r,
+                    manifest=manifest_rec,
+                    aoi=aoi,
+                    window=node_window,
+                    fabricate_cell_ids=fabricate_cell_ids,
+                    index_kind=index_kind,
+                    concurrency=concurrency,
+                    xr_kwargs=xr_kwargs,
+                    store=product_store,
+                    _envelope=product_envelope,
+                )
+                if child is not None:
+                    nodes[f"{name}/o{r}"] = child
+            continue
         cell_orders = pyramid.overview_cell_orders(manifest_rec) if manifest_rec else {}
         objects: list[dict] = []
         ds = open_hive(
