@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- **mortie 1.0 is now the floor** ([#59](https://github.com/espg/moczarr/issues/59)):
+  mortie 1.0.0 retired its plural batch names with no aliases
+  (espg/mortie#187), so a fresh install against unpinned mortie failed at
+  import (`cannot import name 'decimals_to_words'`, seen on a Binder build of
+  the zagg reader notebooks). `coverage` now parses label batches through the
+  array form of `decimal_to_word`, `intersect._expand_to` refines through
+  `generate_morton_children`, and `pyproject` requires `mortie>=1.0.0`. No
+  behaviour change: both replacements are the same kernels under the surviving
+  name.
+
 - New `moczarr.hhdc.block_rank(words, block_order)`
   ([#52](https://github.com/espg/moczarr/issues/52)): the block-local nested
   rank of each packed morton word, plus each word's own order — the decode a
