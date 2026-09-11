@@ -39,7 +39,7 @@ class TestIds:
         # (espg/mortie#114) instead of the deprecated private
         # _decimal_to_word. Pin BOTH public forms against the frozen golden
         # word — the scalar this seam calls, and the batched
-        # decimals_to_words that coverage.ranges_words and
+        # decimal_to_word that coverage.ranges_words and
         # coverage.decode_bitmap run their expansions through — so a
         # behavior change in either fails here before it can drift a
         # decoded MOC.
@@ -47,7 +47,7 @@ class TestIds:
 
         assert int(mortie.decimal_to_word(SHARD)) == SHARD_WORD
         np.testing.assert_array_equal(
-            np.asarray(mortie.decimals_to_words([SHARD, NORTH]), dtype=np.uint64),
+            np.asarray(mortie.decimal_to_word([SHARD, NORTH]), dtype=np.uint64),
             np.asarray(
                 [convention.morton_word(SHARD), convention.morton_word(NORTH)],
                 dtype=np.uint64,

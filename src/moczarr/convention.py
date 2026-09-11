@@ -171,7 +171,7 @@ def morton_word(label: str | int) -> int:
     public scalar ``decimal_to_word`` (espg/mortie#114; issue #38 — the
     deprecated private ``_decimal_to_word`` carried no compatibility
     promise). This seam parses ONE label by contract; a caller with a batch
-    reaches for ``mortie.decimals_to_words`` instead of looping here.
+    reaches for the batched ``mortie.decimal_to_word`` instead of looping here.
     """
     if isinstance(label, (int, np.integer)):
         return int(label)
