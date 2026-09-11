@@ -227,14 +227,20 @@ each order node to that window's `{window}.zarr` overviews, so one call
 still opens a store mixing windowed and unwindowed products.
 
 `window=` takes a **declared window label only**. The reserved all-time
-token `"all"` is refused: a windowed product's all-time folds do exist on
-disk (`pyramid.overview.all_time`, spec §4.5 — `all.zarr` at each ancestor
-node) but they are **not yet a reader surface**, because the source axis has
-no all-time leaf to pair them with. Opening them alone would hand back one
-tree whose source order reports 0 cells beside overview orders summing every
-window, so `open_store(..., window="all")` raises and names the gap instead.
-`all` is excluded from the window grammar forever (§4.2), so the eventual
-surface will be its own opt-in rather than a window label.
+token `"all"` is refused as a label: a windowed product's all-time folds do
+exist on disk (`pyramid.overview.all_time`, spec §4.5 — `all.zarr` at each
+ancestor node) but the source axis has no all-time leaf to pair them with,
+so accepting the token would hand back one tree whose source order reports
+0 cells beside overview orders summing every window —
+`open_store(..., window="all")` raises and names the gap. `all` is
+excluded from the window grammar forever (§4.2); the surface is its own
+opt-in instead: `all_time=True` on `open_overview_order` / `open_level` /
+`open_pyramid` (issue #31, the recorded option-(1) posture) opens the
+cross-window folds as an **overviews-only** view — the source and §4.6
+column levels are absent, honest about what is materialized — mutually
+exclusive with `window=`, refused on an unwindowed store (whose artifacts
+ARE its all-time folds, reached with `window=None`), and refused when the
+declaration never carried `all_time` folds.
 
 `aoi=` and `window=` scope **rows**, never the tree's shape and never the
 answers below: an out-of-coverage AOI empties each node schema-correct

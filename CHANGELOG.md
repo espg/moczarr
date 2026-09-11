@@ -23,6 +23,16 @@
   are byte-identical to before; `decode=True` on a `/2` product is refused
   per the englacial/zagg#550 native-surfaces ruling, and an unknown
   pyramid revision now fails loudly instead of reading as declared-off).
+  The **all-time overview surface** ships as its own opt-in
+  ([#31](https://github.com/espg/moczarr/issues/31), the recorded
+  option-(1) posture): `all_time=True` on `open_overview_order` /
+  `open_level` / `open_pyramid` opens a windowed store's §4.5 cross-window
+  `all.zarr` folds as an overviews-only view — the source and column
+  levels are absent rather than half-built — mutually exclusive with
+  `window=`, refused on an unwindowed store (whose artifacts ARE its
+  all-time folds, reached with `window=None`) and on a declaration without
+  `all_time` folds; the reserved `"all"` token stays refused as a window
+  label everywhere.
 
 - The multi-resolution reader surface
   ([#36](https://github.com/espg/moczarr/issues/36) /

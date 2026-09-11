@@ -723,6 +723,7 @@ def open_overview_order(
     aoi=None,
     window: str | None = None,
     cell_order: int | None = None,
+    all_time: bool = False,
     anonymous: bool = False,
     fabricate_cell_ids: bool | str = "auto",
     decode: bool = False,
@@ -776,13 +777,20 @@ def open_overview_order(
     ``window`` must be a declared label: the reserved all-time token
     (``"all"``, §4.2) is **refused**. Its ``all.zarr`` folds exist on disk
     (``pyramid.overview.all_time``, §4.5) but have no counterpart on the
-    source axis, so surfacing them alone would report a 0-cell source node
-    beside overview nodes summing every window — the opt-in surface is
-    deferred rather than half-built. On an *unwindowed* store any ``window``
-    is refused, the way :func:`moczarr.open.open_hive` refuses it on the
-    source axis: the ancestor nodes there hold one ``all.zarr`` apiece, so
-    an accepted label would return the all-time rows under a name the store
-    has no leaves for. Only ``window=None`` reaches them.
+    source axis, so accepting the token as a *label* would report a 0-cell
+    source node beside overview nodes summing every window. The opt-in is
+    ``all_time=True`` (issue #31, the recorded option-(1) lean): it opens a
+    windowed store's ``all.zarr`` cross-window folds at this ancestor
+    order, is mutually exclusive with ``window=`` (the fold sums every
+    window), and is refused on an *unwindowed* store — whose ancestor
+    artifacts ARE its all-time folds, reached with ``window=None``. The
+    fold levels stand alone by design: a windowed store has no all-time
+    source leaf (the fold is *of* the windows), so the all-time view is
+    overviews-only rather than half-built. On an *unwindowed* store any
+    ``window`` is refused, the way :func:`moczarr.open.open_hive` refuses
+    it on the source axis: the ancestor nodes there hold one ``all.zarr``
+    apiece, so an accepted label would return the all-time rows under a
+    name the store has no leaves for. Only ``window=None`` reaches them.
 
     ``anonymous`` skips request signing for public buckets, and remaining
     ``store_kwargs`` reach ``open_object_store`` — the same posture (and
@@ -837,13 +845,28 @@ def open_overview_order(
         # source order reports 0 cells beside overview orders summing EVERY
         # window.
         validate_window(window, where=store_root)
+    if all_time and window is not None:
+        raise ValueError(
+            f"window={window!r} with all_time=True: the §4.5 all-time fold sums EVERY "
+            f"window, so the two selections are mutually exclusive (the reserved token "
+            f"stays refused as a label — espg/moczarr#30/#31)"
+        )
+    if all_time and not windowed:
+        raise ValueError(
+            f"all_time=True on a {manifest['spec']} store: an unwindowed store's "
+            f"ancestor artifacts ARE its all-time folds — open them with window=None"
+        )
     if windowed:
-        if window is None:
+        if all_time:
+            basename = f"{ALL_TOKEN}.zarr"
+        elif window is None:
             raise ValueError(
                 f"{store_root} is a windowed ({HIVE_SPEC_V2}) store; its overview "
-                f"orders are per-window (D23 naming) — pass window=..."
+                f"orders are per-window (D23 naming) — pass window=..., or "
+                f"all_time=True for the cross-window folds (issue #31)"
             )
-        basename = f"{window}.zarr"
+        else:
+            basename = f"{window}.zarr"
     else:
         if window is not None:
             # Same message (and same substance) `open.candidate_leaves`
@@ -921,7 +944,11 @@ def open_overview_order(
         entry = _object_entry(
             attrs or {},
             dec,
-            window if windowed else None,
+            # The roster's window identity: the label on a windowed open,
+            # the reserved token for its cross-window folds (what the fold
+            # artifact's own §4.3 block records), None on an unwindowed
+            # store (whose all.zarr is the whole product, not a selection).
+            ALL_TOKEN if all_time else (window if windowed else None),
             target_order,
             derived_order=cell_order is None,
         )
@@ -966,7 +993,7 @@ def open_overview_order(
         # Declared but no stamped object anywhere at this order/window: not
         # yet swept, or the overviews were deleted (legal — they are D9
         # regenerable caches, never load-bearing). The node is omitted.
-        scope = f" window {window!r}" if windowed else ""
+        scope = " (all-time)" if all_time else (f" window {window!r}" if windowed else "")
         warnings.warn(
             f"declared overview order {k} (cells at order {target_order}) has no "
             f"stamped overview object at {store_root}{scope}; order node omitted "

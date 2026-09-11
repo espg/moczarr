@@ -218,6 +218,65 @@ class TestAssemblyV1:
             assert child.ds.attrs["morton_hive"]["dataset"] == {"short_name": "THREADED"}
 
 
+class TestAllTime:
+    """The §4.5 cross-window fold surface (issue #31, option (1) — #36b)."""
+
+    WINDOWS = str(OVERVIEW / "atl06_windows")
+
+    def test_all_time_tree_is_overviews_only(self):
+        # A windowed store has no all-time source leaf (the fold is OF the
+        # windows) and no all-time column, so the tree is the fold levels
+        # alone — honest about what is materialized, never a 0-cell source
+        # node beside cross-window overviews.
+        tree = open_pyramid(self.WINDOWS, all_time=True)
+        assert list(tree.children) == ["6"]
+        assert tree.attrs["zagg_pyramid"]["all_time"] is True
+
+    def test_all_time_values_are_the_cross_window_fold(self):
+        # The fixture's all.zarr folds are zagg-written: the exact-class
+        # count at the fold level sums every window's own level.
+        ds_all = open_level(self.WINDOWS, 6, all_time=True)
+        per_window = [
+            int(open_level(self.WINDOWS, 6, window=w)["count"].sum()) for w in ("2019", "2020")
+        ]
+        assert int(ds_all["count"].sum()) == sum(per_window)
+        assert ds_all.attrs["morton_hive"]["cell_order"] == 6
+
+    def test_all_time_roster_records_the_reserved_token(self):
+        # The roster's window identity is the fold artifact's own §4.3
+        # record — the reserved token, not a label and not None.
+        ds = open_level(self.WINDOWS, 6, all_time=True)
+        assert {e["window"] for e in ds.attrs["zagg_objects"]} == {"all"}
+        for entry in ds.attrs["zagg_objects"]:
+            assert entry["zagg_overview"]["window"] == "all"
+
+    def test_all_time_refused_on_an_unwindowed_store(self):
+        with pytest.raises(ValueError, match="window=None"):
+            open_pyramid(str(OVERVIEW / "atl06"), all_time=True)
+
+    def test_all_time_and_window_are_mutually_exclusive(self):
+        with pytest.raises(ValueError, match="mutually exclusive"):
+            open_pyramid(self.WINDOWS, all_time=True, window="2019")
+
+    def test_undeclared_all_time_raises_pointedly(self):
+        # all_time: false is a legal declaration — nothing was ever written,
+        # so the answer is pointed rather than a childless tree of warnings.
+        manifest = read_manifest(self.WINDOWS)
+        manifest["pyramid"]["overview"]["all_time"] = False
+        with pytest.raises(ValueError, match="declares no all-time folds"):
+            open_pyramid(self.WINDOWS, all_time=True, manifest=manifest)
+
+    def test_open_level_all_time_on_a_source_level_raises(self):
+        with pytest.raises(ValueError, match="overview levels"):
+            open_level(self.WINDOWS, 8, all_time=True)
+
+    def test_explicit_levels_naming_source_raises_not_drops(self):
+        # levels= naming the source level under all_time is a caller error,
+        # answered loudly — never a silent drop from the tree.
+        with pytest.raises(ValueError, match="overview levels"):
+            open_pyramid(self.WINDOWS, all_time=True, levels=[8])
+
+
 class TestOpenStoreV2:
     """open_store's /2 order nodes (issue #36b scope (2))."""
 
