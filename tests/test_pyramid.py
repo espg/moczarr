@@ -42,6 +42,8 @@ from moczarr.pyramid import (
     overview_cell_orders,
     overview_declaration,
     overview_nodes,
+    pyramid_declaration,
+    read_pyramid,
 )
 
 FIXTURE = Path(__file__).parent / "data" / "overview_hive"
@@ -843,3 +845,251 @@ class TestLaziness:
             == GOLDEN["products"]["atl06"]["overviews"]["4"]["all"]["count_total"]
         )
         assert [k for k in recorded if "/c/" in k] != []
+
+
+class TestPyramidDeclaration:
+    """The issue #36 declaration surface: both grammars, one record."""
+
+    def test_declared_off_shapes_read_none(self):
+        base = {"cell_order": 8, "shard_order": 6}
+        for pyramid in (
+            None,
+            {"orders": [], "aggregation": {}},  # the committed pre-8b fixtures
+            {"spec": "zagg-pyramid/1", "overview": {"orders": []}},  # canonical off
+        ):
+            manifest = dict(base, **({} if pyramid is None else {"pyramid": pyramid}))
+            assert pyramid_declaration(manifest) is None
+
+    def test_v1_fixture_record(self, manifest):
+        rec = pyramid_declaration(manifest)
+        assert rec["spec"] == "zagg-pyramid/1"
+        assert rec["orders"] == [4, 2]
+        assert rec["spacing"] == 2
+        # §4.4 constant depth as one-member lists, keyed by ancestor order.
+        assert rec["cell_orders"] == {4: [6], 2: [4]}
+        assert rec["leaf_cells"] is None
+        assert rec["overviews"] is None
+        # No fold_source written (a pre-#376 declaration): the default is
+        # "leaves", the only regime that existed before.
+        assert rec["fold_source"] == "leaves"
+        assert rec["exact_levels"] is None
+        assert rec["fields"]["h_mean"] == {"class": "none"}
+        assert rec["fields"]["count"]["class"] == "exact"
+        # The family-dict sweep actuals ride along verbatim.
+        assert sorted(rec["materialized"]["orders"]) == [2, 4]
+
+    def test_v1_published_store_shape(self):
+        # The published ATL03 store's exact /1 block shape (audit facts on
+        # englacial/zagg#547): spacing-2 [7,5,3,1] on the 19/13/9 geometry,
+        # cascade with one exact level, four fields across three classes.
+        manifest = {
+            "shard_order": 9,
+            "cell_order": 19,
+            "pyramid": {
+                "spec": "zagg-pyramid/1",
+                "overview": {
+                    "spacing": 2,
+                    "orders": [7, 5, 3, 1],
+                    "all_time": False,
+                    "fold_source": "cascade",
+                    "exact_levels": 1,
+                    "fields": {
+                        "count": {"class": "exact", "method": "sum"},
+                        "h_tdigest_signal": {"class": "approximate", "method": "tdigest_kway"},
+                        "h_tdigest_noise": {"class": "approximate", "method": "tdigest_kway"},
+                        "composition": {"class": "packed", "method": "composition_kway"},
+                    },
+                },
+            },
+        }
+        rec = pyramid_declaration(manifest)
+        assert rec["orders"] == [7, 5, 3, 1]
+        assert rec["cell_orders"] == {7: [17], 5: [15], 3: [13], 1: [11]}
+        assert rec["fold_source"] == "cascade"
+        assert rec["exact_levels"] == 1
+        assert {f: e["class"] for f, e in rec["fields"].items()} == {
+            "count": "exact",
+            "h_tdigest_signal": "approximate",
+            "h_tdigest_noise": "approximate",
+            "composition": "packed",
+        }
+
+    @pytest.mark.parametrize("fixture", ["minimal", "temporal", "kitchen_sink"])
+    def test_v2_fixture_record(self, fixture):
+        # The vendored §7 fixtures declare the /2 fixed ladder: leaf entry
+        # first, then every order down to node 0 — decoded VERBATIM, never
+        # re-derived (the recorded list IS the contract).
+        path = Path(__file__).parent / "data" / "spec" / fixture / "morton_hive.json"
+        manifest = json.loads(path.read_text())
+        rec = pyramid_declaration(manifest)
+        assert rec["spec"] == "zagg-pyramid/2"
+        assert rec["orders"] == [3, 2, 1, 0]
+        assert rec["cell_orders"] == {3: [4], 2: [3], 1: [2], 0: [1]}
+        assert rec["leaf_cells"] == [5]
+        assert rec["spacing"] is None
+        assert rec["overviews"] == manifest["pyramid"]["overviews"]
+        assert rec["fold_source"] == "cascade"
+        assert rec["fields"] == manifest["pyramid"]["overview"]["fields"]
+
+    def test_v2_malformed_raises(self):
+        base = {"cell_order": 6, "shard_order": 4}
+        overview = {"all_time": False, "fields": {"count": {"class": "exact"}}}
+        # A /2 overviews list is never empty (§4.5): the declared-off form
+        # is always the /1 shape.
+        with pytest.raises(ValueError, match="never empty"):
+            pyramid_declaration(
+                dict(
+                    base,
+                    pyramid={"spec": "zagg-pyramid/2", "overviews": [], "overview": overview},
+                )
+            )
+        with pytest.raises(ValueError, match="all_time"):
+            pyramid_declaration(
+                dict(
+                    base,
+                    pyramid={
+                        "spec": "zagg-pyramid/2",
+                        "overviews": [{"node": 4, "cells": [5]}],
+                        "overview": {"fields": {}},
+                    },
+                )
+            )
+        with pytest.raises(ValueError, match="off the ladder"):
+            pyramid_declaration(
+                dict(
+                    base,
+                    pyramid={
+                        "spec": "zagg-pyramid/2",
+                        "overviews": [{"node": 5, "cells": [6]}],
+                        "overview": overview,
+                    },
+                )
+            )
+        with pytest.raises(ValueError, match="malformed /2 level entry"):
+            pyramid_declaration(
+                dict(
+                    base,
+                    pyramid={
+                        "spec": "zagg-pyramid/2",
+                        "overviews": [{"node": 3}],
+                        "overview": overview,
+                    },
+                )
+            )
+
+    def test_unknown_revision_fails_loudly(self, manifest):
+        # §4.5's conformance rule, and BEFORE the /1 shape test: a future /3
+        # block might carry no /1 key at all, and reading it as declared-off
+        # would be a silent wrong answer.
+        broken = json.loads(json.dumps(manifest))
+        broken["pyramid"]["spec"] = "zagg-pyramid/3"
+        with pytest.raises(ValueError, match="zagg-pyramid/3"):
+            pyramid_declaration(broken)
+        del broken["pyramid"]["overview"]["orders"]
+        with pytest.raises(ValueError, match="zagg-pyramid/3"):
+            pyramid_declaration(broken)
+
+
+class TestReadPyramid:
+    """The store-root surface: declaration + existence-probe presence."""
+
+    @pytest.fixture()
+    def recorded(self, monkeypatch):
+        """The counting-store pattern (TestLaziness style)."""
+        import obstore
+
+        keys: list[str] = []
+        real_get, real_get_async = obstore.get, obstore.get_async
+
+        def record(store_, key, *args, **kwargs):
+            keys.append(key)
+            return real_get(store_, key, *args, **kwargs)
+
+        def record_async(store_, key, *args, **kwargs):
+            keys.append(key)
+            return real_get_async(store_, key, *args, **kwargs)
+
+        monkeypatch.setattr(obstore, "get", record)
+        monkeypatch.setattr(obstore, "get_async", record_async)
+        return keys
+
+    def test_declared_off_reads_none(self):
+        serc = Path(__file__).parent / "data" / "serc_hive"
+        assert read_pyramid(str(serc)) is None
+
+    def test_v1_swept_store_presence(self, root):
+        rp = read_pyramid(f"{root}/atl06")
+        assert rp["declaration"]["orders"] == [4, 2]
+        # The fixture's sweep materialized every declared order: each
+        # candidate ancestor node (arithmetic off the root MOC) holds a
+        # stamped artifact.
+        want_4 = len(GOLDEN["products"]["atl06"]["overviews"]["6"]["all"]["objects"])
+        want_2 = len(GOLDEN["products"]["atl06"]["overviews"]["4"]["all"]["objects"])
+        assert rp["presence"] == {
+            4: {"nodes": want_4, "stamped": want_4},
+            2: {"nodes": want_2, "stamped": want_2},
+        }
+
+    def test_declared_but_unswept_order_probes_zero(self, root, tmp_path):
+        # Declaring is free, sweeping is the operational decision (zagg#381
+        # point (11)): an unswept order is a LEGAL recorded state and reads
+        # stamped: 0 — an answer, not an error (contrast the open path,
+        # which omits the node with a warning).
+        copy, manifest = _doctored(tmp_path)
+        manifest["pyramid"]["overview"]["orders"] = [5, 4, 2]  # 5 never swept
+        (copy / "atl06" / "morton_hive.json").write_text(json.dumps(manifest))
+        rp = read_pyramid(str(copy / "atl06"))
+        assert rp["presence"][5]["stamped"] == 0
+        assert rp["presence"][5]["nodes"] > 0
+        assert rp["presence"][4]["stamped"] == rp["presence"][4]["nodes"]
+
+    def test_v2_declared_but_unmaterialized(self):
+        # The vendored /2 fixture is declared-but-unswept end to end: one
+        # shard, so one candidate ancestor per declared order, none stamped.
+        # The leaf tier IS materialized — by the §4.6 column, deliberately
+        # outside presence (read the columns, not the manifest — §4.6).
+        root = str(Path(__file__).parent / "data" / "spec" / "temporal")
+        rp = read_pyramid(root)
+        assert rp["declaration"]["spec"] == "zagg-pyramid/2"
+        assert rp["presence"] == {k: {"nodes": 1, "stamped": 0} for k in (3, 2, 1, 0)}
+
+    def test_no_root_moc_degrades_presence_to_none(self):
+        # spec/minimal carries no root coverage.moc: candidates cannot be
+        # named, so presence degrades loudly while the declaration stands.
+        root = str(Path(__file__).parent / "data" / "spec" / "minimal")
+        with pytest.warns(UserWarning, match="no usable root coverage.moc"):
+            rp = read_pyramid(root)
+        assert rp["declaration"]["orders"] == [3, 2, 1, 0]
+        assert rp["presence"] is None
+
+    def test_probe_false_is_declaration_only(self, root, recorded):
+        rp = read_pyramid(f"{root}/atl06", probe=False)
+        assert rp["presence"] is None
+        # One manifest GET; no coverage.moc read, no ancestor-node probes.
+        assert [k for k in recorded if not k.endswith("morton_hive.json")] == []
+
+    def test_orders_subset_and_validation(self, root):
+        rp = read_pyramid(f"{root}/atl06", orders=[2])
+        assert list(rp["presence"]) == [2]
+        with pytest.raises(ValueError, match="not declared ancestor orders"):
+            read_pyramid(f"{root}/atl06", orders=[3])
+
+    def test_windowed_store_window_seam(self, root):
+        rp = read_pyramid(f"{root}/atl06_windows", window="2019")
+        want = len(GOLDEN["products"]["atl06_windows"]["overviews"]["6"]["2019"]["objects"])
+        assert rp["presence"] == {4: {"nodes": want, "stamped": want}}
+        with pytest.raises(ValueError, match="pass window="):
+            read_pyramid(f"{root}/atl06_windows")
+        with pytest.raises(ValueError, match="reserved all-time token"):
+            read_pyramid(f"{root}/atl06_windows", window="all")
+        # probe=False asks nothing window-shaped, so no window is needed.
+        assert read_pyramid(f"{root}/atl06_windows", probe=False)["presence"] is None
+
+    def test_unwindowed_store_refuses_window(self, root):
+        with pytest.raises(ValueError, match="unwindowed stores"):
+            read_pyramid(f"{root}/atl06", window="2019")
+
+    def test_product_reroot(self, root):
+        rp = read_pyramid(root, product="atl06")
+        assert rp["declaration"]["orders"] == [4, 2]
+        assert rp["presence"][2]["stamped"] == 1

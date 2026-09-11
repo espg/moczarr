@@ -62,6 +62,8 @@ from moczarr.pyramid import (
     overview_declaration,
     overview_nodes,
     overview_orders,
+    pyramid_declaration,
+    read_pyramid,
     source_orders,
 )
 from moczarr.ragged import (
@@ -189,6 +191,7 @@ __all__ = [
     "parse_manifest",
     "parse_ragged_attrs",
     "parse_root_coverage",
+    "pyramid_declaration",
     "ranges_contain",
     "ranges_words",
     "read_cell",
@@ -200,6 +203,7 @@ __all__ = [
     "read_manifest",
     "read_overview_order_stats",
     "read_overview_stats",
+    "read_pyramid",
     "read_ragged",
     "read_stats",
     "read_stats_rollup",
