@@ -18,6 +18,7 @@ spec fixtures (``spec/temporal`` — the one with a root ``coverage.moc``;
 the read+evaluate timing the issue's performance posture asks for.
 """
 
+import copy
 import json
 import os
 import shutil
@@ -472,6 +473,30 @@ class TestReadLadder:
         assert ladder.declared == (6, 5, 4, 3, 2, 1)
         assert ladder.materialized == (6,)
         assert {lvl.materialized for lvl in ladder.levels if lvl.artifact != "source"} == {None}
+
+    def test_multi_cell_overview_node_reads_unknown(self):
+        # A /2 entry's `cells` is a LIST, so one node can legally carry
+        # several rungs — but its object's zagg_overview.cell_order is
+        # scalar, so at most one of them is backed. read_pyramid's probe is
+        # a bare node-existence count, and fanning it out would tell the
+        # picker both orders are materialized and then raise on the second.
+        # Unknown is what the existence probe can honestly say. (The
+        # fixtures are all 1:1, so the declaration is doctored here.)
+        manifest = copy.deepcopy(read_manifest(TEMPORAL))
+        overviews = manifest["pyramid"]["overviews"]
+        manifest["pyramid"]["overviews"] = [
+            {"node": 2, "cells": [4, 3]} if e["node"] == 2 else e
+            for e in overviews
+            if e["node"] != 3  # node 3 also declares cell 4 — one resolution, one level
+        ]
+        ladder = read_ladder(TEMPORAL, manifest=manifest)
+        by_order = {lvl.cell_order: lvl for lvl in ladder.levels}
+        assert by_order[4].order == by_order[3].order == 2
+        for rung in (4, 3):
+            assert by_order[rung].materialized is None
+            assert by_order[rung].presence is None
+        assert ladder.materialized == (6, 5)  # the 1:1 rungs still answer
+        assert by_order[2].materialized is False  # node 1, one declared cell
 
     def test_mis_stamped_column_counts_as_absent_not_as_a_raise(self, tmp_path):
         # _column_entry's wrong-identity severity is a RAISE, which is right

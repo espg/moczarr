@@ -55,7 +55,7 @@ from moczarr.convention import (
 )
 from moczarr.coverage import ranges_words
 from moczarr.level import LEVEL_ATTR, _resolve_target, open_level, pyramid_levels
-from moczarr.pyramid import OBJECTS_ATTR, OrderPresence, read_pyramid
+from moczarr.pyramid import OBJECTS_ATTR, OrderPresence, pyramid_declaration, read_pyramid
 from moczarr.store import _stamp_from_meta, load_root_coverage, read_leaf_metas
 
 #: Default quantile set (the STV percentile-slicing conventions, issue #21):
@@ -412,8 +412,10 @@ class LadderLevel:
         are per window (``{shard}_{window}.zarr``, D23) and exist only for
         the windows that were swept. ``None`` when unprobed
         (``probe=False``) or unprobeable (no usable root coverage; a
-        grouped tree's overview nodes). Declared ≠ materialized is a legal
-        recorded state — the picker lists ``True`` levels only.
+        grouped tree's overview nodes; an overview rung whose ``/2`` node
+        declares SEVERAL cell orders, which the node-existence probe cannot
+        tell apart). Declared ≠ materialized is a legal recorded state —
+        the picker lists ``True`` levels only.
     presence : OrderPresence or None
         The probe counts behind ``materialized``, when probed: for an
         overview level the D4 existence probe (:func:`moczarr.pyramid.
@@ -592,7 +594,11 @@ def read_ladder(
 
     ``materialized`` per artifact kind: overview levels take
     :func:`moczarr.pyramid.read_pyramid`'s D4 existence probe (``stamped >
-    0`` — existence, not readability, its documented split); column levels
+    0`` — existence, not readability, its documented split) — except where
+    a ``/2`` node declares SEVERAL cell orders, whose rungs read ``None``:
+    the node's object carries a scalar ``zagg_overview.cell_order``, so at
+    most one of those rungs is backed and a node-existence count cannot say
+    which; column levels
     are probed from the §4.6 columns' own ``groups`` maps (one batched GET
     per candidate leaf, shared across the column levels — see
     :func:`_leaf_presence`), since the manifest MAY lag the fleet there.
@@ -684,6 +690,11 @@ def read_ladder(
                 source=source_probe,
             )
 
+    decl = pyramid_declaration(manifest)
+    multi_cell_nodes = {
+        int(k) for k, cells in ((decl or {}).get("cell_orders") or {}).items() if len(cells) > 1
+    }
+
     levels = []
     for rec in table.values():
         presence: OrderPresence | None = None
@@ -697,6 +708,17 @@ def read_ladder(
                 presence = source_presence
                 materialized = presence.stamped > 0 if presence is not None else None
         elif not needs_probe:
+            materialized = None
+        elif rec["artifact"] == "overview" and rec["order"] in multi_cell_nodes:
+            # A /2 node declaring SEVERAL cell orders is backed by at most
+            # one of them — its object's zagg_overview.cell_order is scalar
+            # — and read_pyramid's probe is a bare node-existence count that
+            # says nothing about which. Fanning that one count out to every
+            # declared rung would tell the picker two orders are
+            # materialized and then raise on the second (open_level names
+            # the level explicitly, and _object_entry's wrong-cell_order
+            # severity is a raise). Unknown is the honest answer the
+            # existence probe can give.
             materialized = None
         elif rec["artifact"] == "overview":
             presence = (overview_presence or {}).get(rec["order"])
