@@ -32,7 +32,16 @@
   `window=`, refused on an unwindowed store (whose artifacts ARE its
   all-time folds, reached with `window=None`) and on a declaration without
   `all_time` folds; the reserved `"all"` token stays refused as a window
-  label everywhere.
+  label everywhere. **Stage columns** became directly addressable:
+  `open_column`/`read_column_record` now accept an ANCESTOR node id beside
+  a shard id and read the issue-#384 stage column at that dispatch node
+  (the record's stage-side members — `stage-gather` groups, `generation`,
+  `source_children`, `run_id` — ride verbatim). Existence at a given order
+  stays orchestration, never contract: absence is the ordinary `None`, no
+  assembly surface consumes stage columns, a cell id is still refused, and
+  an ancestor address on a `path_grouping > 1` store raises (the same
+  unsettled grouped-tree seam the overview opener refuses, point-query
+  flavored; leaf columns are unaffected).
 
 - The multi-resolution reader surface
   ([#36](https://github.com/espg/moczarr/issues/36) /

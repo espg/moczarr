@@ -94,13 +94,12 @@ class TestWalkColumns:
     def test_store_without_columns_walks_empty(self):
         assert list(store.walk_columns(SERC)) == []
 
-    def test_stage_columns_walk_but_are_not_addressable(self, tmp_path):
+    def test_stage_columns_walk_beside_leaf_columns(self, tmp_path):
         # §4.6's issue-#384 stage columns are the same artifact shape at a
         # staged sweep's ANCESTOR dispatch nodes, and the suffix seam is the
         # seam at every depth — so the walk yields them beside the leaf
-        # column, while the read pair (keyed by shard id) refuses them. The
-        # split is on spec: stage-column existence at a given order is
-        # orchestration, never contract, so a path-addressed reader is #36b.
+        # column and walk_leaves stays blind to both. (Direct reads by
+        # ancestor node id: TestStageColumns below.)
         root = tmp_path / "hive"
         shutil.copytree(SPEC / "minimal", root)
         stage = root / "1" / "1" / "2"  # the order-2 ancestor of leaf 11213
@@ -113,8 +112,6 @@ class TestWalkColumns:
             "1/1/2/all.pyramid.zarr",
         ]
         assert list(store.walk_leaves(str(root))) == [LEAF_REL]
-        with pytest.raises(ValueError, match="LEAF columns"):
-            read_column_record(str(root), "112")
 
     def test_windowed_column_names_walk_as_columns(self, tmp_path):
         # A windowed leaf's column is `{window}.pyramid.zarr` (§4.6); the
@@ -189,9 +186,9 @@ class TestReadColumnRecord:
             # wrong" class, not a missing one.
             (
                 lambda a: a["zagg_column"].__setitem__("node", "11214"),
-                "not this leaf's '11213'/4",
+                "not this node's '11213'/4",
             ),
-            (lambda a: a["zagg_column"].__setitem__("order", 3), "not this leaf's '11213'/4"),
+            (lambda a: a["zagg_column"].__setitem__("order", 3), "not this node's '11213'/4"),
             (lambda a: a["zagg_column"].__setitem__("window", "2019"), "round-trip"),
         ],
     )
@@ -281,6 +278,98 @@ class TestColumnReads:
         assert rows
         for _word, values, locs, times in rows:
             assert len(locs) == len(values) == len(times)
+
+
+class TestStageColumns:
+    """Direct reads of issue-#384 stage columns by ancestor node id (#36b).
+
+    A stage column is the SAME ``zagg-column/1`` artifact shape at a staged
+    sweep's dispatch node; addressing one is a direct read of an object the
+    caller already names — existence at a given order stays orchestration,
+    never contract (§4.6), so absence is the ordinary ``None`` and no
+    assembly surface consumes these.
+    """
+
+    MINIMAL = str(SPEC / "minimal")
+
+    @staticmethod
+    def _write_stage_column(root: Path, node: str = "112") -> None:
+        """A stage column at an ancestor dispatch node, by hand.
+
+        Re-headed from the fixture's REAL leaf column: the group bytes are
+        the leaf's, the identity is the stage node's, and the stage-side
+        members (``stage-gather`` groups, ``generation``,
+        ``source_children``, ``run_id`` — spec §4.6) are added. zagg's
+        staged sweep has no committed fixture generator (the same gap
+        ``test_level.py``'s ``_write_stage_artifact`` records), so these
+        are spec GRAMMAR bytes, never writer bytes — same deferral.
+        """
+        src = root / COLUMN_REL
+        dst = root / convention.column_path(node)
+        shutil.copytree(src, dst)
+        meta_path = dst / "zarr.json"
+        meta = json.loads(meta_path.read_text())
+        block = meta["attributes"]["zagg_column"]
+        block["node"] = node
+        block["order"] = len(node) - 1
+        for group in block["groups"].values():
+            group["regime"] = "stage-gather"
+            group["merges_from_raw"] = 1
+        block["generation"] = {
+            "n_leaves": 1,
+            "max_leaf_timestamp": "2026-08-16T23:20:03+00:00",
+            "run_ids": [],
+        }
+        block["source_children"] = {"folded": 1, "missing": 0, "unreadable": 0}
+        block["run_id"] = "stage-20260911T000000Z-test"
+        meta_path.write_text(json.dumps(meta))
+
+    @pytest.fixture()
+    def staged(self, tmp_path):
+        root = tmp_path / "hive"
+        shutil.copytree(SPEC / "minimal", root)
+        self._write_stage_column(root)
+        return str(root)
+
+    def test_record_binds_by_ancestor_node_id(self, staged):
+        rec = read_column_record(staged, "112")
+        assert rec["node"] == "112" and rec["order"] == 2
+        # The stage-side members ride verbatim — no re-keying, no schema.
+        assert rec["run_id"] == "stage-20260911T000000Z-test"
+        assert rec["generation"]["n_leaves"] == 1
+        assert rec["source_children"] == {"folded": 1, "missing": 0, "unreadable": 0}
+        assert all(g["regime"] == "stage-gather" for g in rec["groups"].values())
+        assert column_orders(rec) == (5, 4)
+
+    def test_absence_is_the_ordinary_none(self):
+        # Existence at a given order is orchestration, never contract: an
+        # unwritten dispatch node — the base cell included — reads None.
+        assert read_column_record(self.MINIMAL, "112") is None
+        assert read_column_record(self.MINIMAL, "1") is None
+
+    def test_wrong_identity_still_raises(self, staged):
+        # The same artifact copied to ANOTHER dispatch node: interpretable
+        # but wrong — its groups would be read under the wrong node.
+        root = Path(staged)
+        shutil.copytree(root / convention.column_path("112"), root / convention.column_path("111"))
+        with pytest.raises(ValueError, match="not this node's '111'/2"):
+            read_column_record(staged, "111")
+
+    def test_open_column_reads_a_stage_group(self, staged):
+        import zarr
+
+        col = open_column(staged, "112")
+        arr = zarr.open_array(col, path="4/count", mode="r", zarr_format=3)[:]
+        assert arr.shape == (1,)
+
+    def test_grouped_ancestor_is_refused_leaf_unaffected(self):
+        # The unsettled grouped-tree seam, point-query flavored: it raises
+        # (a direct read cannot degrade by omission) while a leaf column on
+        # the same store keeps the ordinary absence answer.
+        pg3 = str(Path(__file__).parent / "data" / "serc_hive_pg3")
+        with pytest.raises(ValueError, match="path_grouping"):
+            read_column_record(pg3, "43314")
+        assert read_column_record(pg3, "433142242") is None
 
 
 @pytest.mark.skipif(
