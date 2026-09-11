@@ -94,6 +94,28 @@ class TestWalkColumns:
     def test_store_without_columns_walks_empty(self):
         assert list(store.walk_columns(SERC)) == []
 
+    def test_stage_columns_walk_but_are_not_addressable(self, tmp_path):
+        # §4.6's issue-#384 stage columns are the same artifact shape at a
+        # staged sweep's ANCESTOR dispatch nodes, and the suffix seam is the
+        # seam at every depth — so the walk yields them beside the leaf
+        # column, while the read pair (keyed by shard id) refuses them. The
+        # split is on spec: stage-column existence at a given order is
+        # orchestration, never contract, so a path-addressed reader is #36b.
+        root = tmp_path / "hive"
+        shutil.copytree(SPEC / "minimal", root)
+        stage = root / "1" / "1" / "2"  # the order-2 ancestor of leaf 11213
+        stage.mkdir(parents=True, exist_ok=True)
+        (stage / "all.pyramid.zarr").mkdir()
+        payload = json.loads((root / COLUMN_REL / "zarr.json").read_text())
+        (stage / "all.pyramid.zarr" / "zarr.json").write_text(json.dumps(payload))
+        assert sorted(store.walk_columns(str(root))) == [
+            COLUMN_REL,
+            "1/1/2/all.pyramid.zarr",
+        ]
+        assert list(store.walk_leaves(str(root))) == [LEAF_REL]
+        with pytest.raises(ValueError, match="LEAF columns"):
+            read_column_record(str(root), "112")
+
     def test_windowed_column_names_walk_as_columns(self, tmp_path):
         # A windowed leaf's column is `{window}.pyramid.zarr` (§4.6); the
         # walker classifies by suffix, not stem.

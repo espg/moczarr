@@ -535,7 +535,7 @@ def walk_columns(
     path_grouping: int = 1,
     **store_kwargs: Any,
 ) -> Iterator[str]:
-    """Yield the store-relative path of every §4.6 leaf column (issue #36).
+    """Yield the store-relative path of every §4.6 column artifact (issue #36).
 
     The column twin of :func:`walk_leaves` — same walk, same contracts
     (fallback/verification path, stamped and debris objects alike, set
@@ -548,6 +548,21 @@ def walk_columns(
     (:func:`read_commit` — an unstamped column prefix is debris), and a
     column's classification is its ``role``/``zagg_column`` attrs
     (:func:`moczarr.column.read_column_record`), never the name alone.
+
+    The suffix is the seam at **every** depth, so on a staged store this
+    yields two §4.6 kinds interleaved: the **leaf columns** at
+    ``shard_order`` nodes, and the issue-#384 **stage columns** a staged
+    sweep leaves at its dispatch nodes (the same artifact shape under an
+    *ancestor* node's prefix). A caller tells them apart by node order, read
+    off the path. :func:`moczarr.column.read_column_record` and
+    :func:`moczarr.column.open_column` address **leaf** columns only — both
+    are keyed by shard id and refuse an ancestor-node id — so a stage column
+    is discoverable here and not readable through that pair today
+    (espg/moczarr#36b). The split is deliberate rather than an oversight:
+    §4.6 makes stage-column existence at a given ancestor order
+    *orchestration, never contract* ("a reader binds to the ladder artifacts
+    of §4.4, not to stage columns"), so a path-addressed reader for them is
+    a design step this surface does not take on spec.
     """
     yield from _walk(
         store_root,
