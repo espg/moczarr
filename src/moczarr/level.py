@@ -554,6 +554,7 @@ def open_level(
     manifest: dict | None = None,
     aoi=None,
     window: str | None = None,
+    all_time: bool = False,
     anonymous: bool = False,
     fabricate_cell_ids: bool | str = "auto",
     index_kind: str = "moc",
@@ -606,6 +607,15 @@ def open_level(
     object, never summarized. ``spec``/``fields``/``fold_source`` are
     ``None`` on a declared-off store, whose one level is the native order.
 
+    ``all_time`` opens a windowed store's §4.5 CROSS-WINDOW folds at this
+    level (issue #31, the recorded option-(1) posture): overview levels
+    only — a windowed store has no all-time source leaf (the fold is *of*
+    the windows) and no all-time column (§4.6: the ``all.pyramid.zarr``
+    stem is the unwindowed store's spelling) — so naming a source or
+    column level under ``all_time=True`` raises, and the arm's own seams
+    refuse it on an unwindowed store (whose artifacts ARE the all-time
+    folds, reached with ``window=None``) and beside a ``window=``.
+
     ``product`` re-roots on a D19 multi-product subtree; ``manifest``
     threads an already-read manifest (of the subtree actually opened) and
     ``store`` one already-constructed obstore handle — both reach EVERY
@@ -644,6 +654,13 @@ def open_level(
         raise ValueError(
             f"cell order {cell_order} is not a level of {store_root}: this store's "
             f"levels are {list(levels)} (finest first; see pyramid_levels){hint}"
+        )
+    if all_time and record["artifact"] != "overview":
+        raise ValueError(
+            f"all_time=True reads the §4.5 cross-window FOLDS, which exist only at "
+            f"overview levels: level {cell_order} is {record['artifact']!r} (a windowed "
+            f"store has no all-time source leaf and no all-time column — issue #31, "
+            f"zagg spec §4.5/§4.6)"
         )
     if record["artifact"] == "source":
         from moczarr.open import open_hive
@@ -691,7 +708,12 @@ def open_level(
             # it EQUALS the constant-depth default, for /2 it is the ladder
             # entry's cells member (the recorded list is the contract).
             ds = open_overview_order(
-                store_root, manifest, record["order"], cell_order=record["cell_order"], **common
+                store_root,
+                manifest,
+                record["order"],
+                cell_order=record["cell_order"],
+                all_time=all_time,
+                **common,
             )
     if ds is None:
         return None
@@ -712,6 +734,7 @@ def open_pyramid(
     levels=None,
     aoi=None,
     window: str | None = None,
+    all_time: bool = False,
     anonymous: bool = False,
     fabricate_cell_ids: bool | str = "auto",
     index_kind: str = "moc",
@@ -769,6 +792,17 @@ def open_pyramid(
     one, the reserved all-time token refused everywhere). Deliberately no
     ``decode=``: pyramid surfaces are native moczarr only (the
     englacial/zagg#550 ruling).
+
+    ``all_time`` is the windowed store's cross-window surface (issue #31,
+    the recorded option-(1) posture): the tree's groups are the §4.5
+    all-time FOLD levels alone — overviews-only, honest about what is
+    materialized. The source level and any §4.6 column levels are ABSENT
+    (a windowed store has no all-time source leaf and no all-time column),
+    unless ``levels=`` names one explicitly, which raises instead of
+    silently dropping the request. Refused beside ``window=`` (the fold
+    sums every window), on an unwindowed store (whose artifacts ARE its
+    all-time folds — open them with ``window=None``), and on a declaration
+    without ``all_time`` folds (nothing was ever written to open).
     """
     import xarray as xr
 
@@ -793,6 +827,34 @@ def open_pyramid(
                 f"levels are {list(table)} (finest first; see pyramid_levels)"
             )
         table = {r: table[r] for r in table if r in set(wanted)}
+    if all_time:
+        # issue #31, the recorded option-(1) posture: the all-time view is
+        # overviews-only. The window/unwindowed seams are re-checked by the
+        # per-level arm; the declaration gate lives here because an
+        # undeclared all_time would otherwise degrade to a childless tree
+        # (every level None) instead of the pointed answer.
+        if manifest["spec"] != HIVE_SPEC_V2:
+            raise ValueError(
+                f"all_time=True on a {manifest['spec']} store: an unwindowed store's "
+                f"ancestor artifacts ARE its all-time folds — open them with window=None"
+            )
+        if window is not None:
+            raise ValueError(
+                f"window={window!r} with all_time=True: the §4.5 all-time fold sums "
+                f"EVERY window, so the two selections are mutually exclusive"
+            )
+        if decl is None or not decl["all_time"]:
+            raise ValueError(
+                f"{store_root} declares no all-time folds "
+                f"(pyramid.overview.all_time is not set), so there is nothing to open "
+                f"(zagg spec §4.5; declaring is the writer's choice)"
+            )
+        if levels is None:
+            # The source level (and any §4.6 column level) has no all-time
+            # artifact by construction — absent from the tree, not empty.
+            table = {r: rec for r, rec in table.items() if rec["artifact"] == "overview"}
+        # An explicit levels= naming a non-overview level flows to
+        # open_level's own all_time raise below — never a silent drop.
     envelope = None
     if any(rec["artifact"] != "source" for rec in table.values()):
         # ONE root-MOC read for the whole ladder (issue #5): the non-source
@@ -807,6 +869,7 @@ def open_pyramid(
             manifest=manifest,
             aoi=aoi,
             window=window,
+            all_time=all_time,
             fabricate_cell_ids=fabricate_cell_ids,
             index_kind=index_kind,
             concurrency=concurrency,
