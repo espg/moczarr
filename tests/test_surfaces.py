@@ -571,9 +571,15 @@ class TestLiveSurface:
         t_eval = time.perf_counter() - t0
         n = surf.sizes["cells"]
         populated = int((~np.isnan(surf["h_tdigest"].values[0])).sum())
+        # The per-cell rate comes out of the test, not out of a division done
+        # by hand: it is the number the PR's performance posture is quoted
+        # from, and the extrapolation to a full rung (order 5: 12,288 cells;
+        # order 6: 49,152; order 7: 196,608 — full-sphere upper bounds) is
+        # only as good as the rate it multiplies.
         print(
             f"\nlive surface: {n} cells at group 13 (one o9 shard), {populated} populated; "
-            f"read {t_read:.2f}s, evaluate {t_eval:.2f}s"
+            f"read {t_read:.2f}s, evaluate {t_eval:.2f}s "
+            f"({1e3 * t_eval / max(populated, 1):.2f} ms/populated cell)"
         )
         assert surf["h_tdigest"].shape == (len(DEFAULT_QUANTILES), n)
         assert 0 < populated <= n
