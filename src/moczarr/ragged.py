@@ -777,6 +777,19 @@ def _require_word_element(element: RaggedElement, path: str, section: str) -> No
         )
 
 
+def _geometry(arr: zarr.Array) -> tuple[tuple[int, ...], tuple[int, ...], tuple[int, ...]]:
+    """``(shape, declared chunk grid, read-chunk shape)`` of one array.
+
+    The chunk geometry §1.1 binds a sibling to, read at BOTH levels it has,
+    because zarr's two accessors do not report what their names suggest: on
+    a sharded array ``Array.chunks`` is the sharding codec's INNER chunk
+    shape and the declared ``chunk_grid.chunk_shape`` is the shard span,
+    which ``Array.shards`` reports; unsharded, ``shards`` is ``None`` and
+    the two levels coincide.
+    """
+    return tuple(arr.shape), tuple(arr.shards or arr.chunks), tuple(arr.chunks)
+
+
 def _require_matching_geometry(
     arr: zarr.Array, sibling: zarr.Array, field: str, path: str, section: str
 ) -> None:
@@ -787,21 +800,28 @@ def _require_matching_geometry(
     mismatched chunk geometry can still yield per-row words that look
     aligned within the rows a decode happens to visit, while chunk-boundary
     rows silently mis-associate words with the wrong cells. So the sibling's
-    own zarr metadata — shape and read-chunk shape — is compared against the
-    payload's at open, before a word is decoded. The §1.5 STORAGE geometry
-    (sharded vs per-inner-chunk) is deliberately not gated: the spec keeps
-    it reader-transparent and self-describing per array, and "chunk
-    geometry" in §1.1/§8.3 is the chunk grid, not the packaging.
+    own zarr metadata is compared against the payload's at open, before a
+    word is decoded — shape, the declared chunk grid, and the read-chunk
+    shape (:func:`_geometry`, which reads both levels since neither zarr
+    accessor stands in for the other). Both levels are gated because §1.1
+    binds the PAIR ("the same shape and chunk geometry as the payload
+    array") while §1.5's reader-transparency sentence is about a SINGLE
+    array being self-describing in its own metadata: it licenses one reader
+    path over either storage geometry, not a sibling packaged unlike the
+    payload it rides. Every zagg-written array in the vendored fixtures
+    agrees at both levels, so the strict reading costs no false positive.
     """
-    if tuple(sibling.shape) != tuple(arr.shape) or tuple(sibling.chunks) != tuple(arr.chunks):
+    if _geometry(sibling) != _geometry(arr):
+        shape, grid, chunks = _geometry(sibling)
+        p_shape, p_grid, p_chunks = _geometry(arr)
         raise ValueError(
-            f"{path!r} has shape {tuple(sibling.shape)} and read chunks "
-            f"{tuple(sibling.chunks)}; its payload {field!r} has shape "
-            f"{tuple(arr.shape)} and read chunks {tuple(arr.chunks)} — a companion "
-            f"sibling MUST have the same shape and chunk geometry as the payload "
-            f"array it rides (spec §1.1/{section}): mismatched chunk boundaries can "
-            f"mis-associate words with the wrong cells without breaking per-row "
-            f"alignment, so a reader refuses rather than mis-decodes"
+            f"{path!r} has shape {shape}, chunk grid {grid} and read chunks {chunks}; "
+            f"its payload {field!r} has shape {p_shape}, chunk grid {p_grid} and read "
+            f"chunks {p_chunks} — a companion sibling MUST have the same shape and "
+            f"chunk geometry as the payload array it rides (spec §1.1/{section}): "
+            f"mismatched chunk boundaries can mis-associate words with the wrong "
+            f"cells without breaking per-row alignment, so a reader refuses rather "
+            f"than mis-decodes"
         )
 
 
