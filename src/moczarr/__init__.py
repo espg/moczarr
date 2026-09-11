@@ -127,6 +127,15 @@ from moczarr.store import (
     walk_leaves,
     warn_if_stale,
 )
+from moczarr.surfaces import (
+    DEFAULT_QUANTILES,
+    SURFACE_ATTR,
+    Ladder,
+    LadderLevel,
+    open_surface,
+    quantile_surface,
+    read_ladder,
+)
 
 try:
     from moczarr._version import __version__
@@ -141,6 +150,7 @@ __all__ = [
     "COMPOSITION_SPEC",
     "COVERAGE_SIDECAR",
     "COVERAGE_SPEC",
+    "DEFAULT_QUANTILES",
     "FLOAT64_EXACT_MAX_ORDER",
     "HIVE_SPEC",
     "HIVE_SPEC_V2",
@@ -151,9 +161,12 @@ __all__ = [
     "MORTON_CONVENTION_UUID",
     "RAGGED_SPEC",
     "ROOT_COVERAGE_NAME",
+    "SURFACE_ATTR",
     "TEMPORAL_SPEC",
     "CompanionDeclaration",
     "ConservativeCoverageWarning",
+    "Ladder",
+    "LadderLevel",
     "MortonRanges",
     "NoCoverageError",
     "OrderPresence",
@@ -206,6 +219,7 @@ __all__ = [
     "open_pyramid",
     "open_ragged",
     "open_store",
+    "open_surface",
     "overview_cell_orders",
     "overview_declaration",
     "overview_nodes",
@@ -221,6 +235,7 @@ __all__ = [
     "parse_root_coverage",
     "pyramid_declaration",
     "pyramid_levels",
+    "quantile_surface",
     "ranges_contain",
     "ranges_words",
     "read_cell",
@@ -228,6 +243,7 @@ __all__ = [
     "read_commit",
     "read_commits",
     "read_coverage_bitmap",
+    "read_ladder",
     "read_leaf_coverage",
     "read_leaf_metas",
     "read_manifest",

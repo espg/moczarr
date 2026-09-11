@@ -13,9 +13,13 @@ live-store failure mode), and per-order resolution, typed.
 Fixture split mirrors ``test_level.py``: the vendored ``zagg-pyramid/2``
 spec fixtures (``spec/temporal`` — the one with a root ``coverage.moc``;
 ``spec/kitchen_sink`` for the strata pair) and the zagg-swept ``/1``
-``overview_hive`` stores.
+``overview_hive`` stores. The live class at the bottom is env-gated
+(``MOCZARR_LIVE_TESTS=1``) and bounded to one shard's column — it measures
+the read+evaluate timing the issue's performance posture asks for.
 """
 
+import os
+import time
 from pathlib import Path
 
 import numpy as np
@@ -374,3 +378,45 @@ class TestReadLadder:
         assert isinstance(ladder, Ladder) and isinstance(ladder.levels[0], LadderLevel)
         with pytest.raises(AttributeError):
             ladder.levels = ()  # frozen — the PyramidInfo posture
+
+
+@pytest.mark.skipif(
+    os.environ.get("MOCZARR_LIVE_TESTS", "").lower() not in {"1", "true", "yes"},
+    reason="live S3 acceptance (anonymous, one shard's column group); set MOCZARR_LIVE_TESTS=1",
+)
+class TestLiveSurface:
+    """The performance posture against the published ATL03 store.
+
+    Bounded to ONE shard's §4.6 column (the audited four-field shard
+    ``test_column.py`` pins): reads one column group and materializes the
+    default quantile set for both strata merged — the exact per-order
+    choropleth call gridlook's hive.py makes. Prints read/evaluate wall
+    times for the PR record; asserts only sanity bounds so the test stays a
+    check, not a benchmark gate.
+    """
+
+    ROOT = "s3://us-west-2.opendata.source.coop/englacial/zagg/demo/atl03_tdigest_o9.zarr"
+    S3 = {"region": "us-west-2", "anonymous": True}
+    FOUR_FIELD = "3133332144"  # audited 2026-09-10 (see test_column.py)
+
+    def test_one_shard_column_surface_timing(self):
+        from moczarr import open_column_order
+        from moczarr.convention import morton_word
+
+        manifest = read_manifest(self.ROOT, **self.S3)
+        aoi = np.asarray([morton_word(self.FOUR_FIELD)], dtype=np.uint64)
+        t0 = time.perf_counter()
+        ds = open_column_order(self.ROOT, manifest, 13, aoi=aoi, **self.S3)
+        _ = ds["h_tdigest_signal"].load()  # pull the vlen payloads inside the read timing
+        t_read = time.perf_counter() - t0
+        t0 = time.perf_counter()
+        surf = quantile_surface(ds, ("h_tdigest_signal", "h_tdigest_noise"), carry=("count",))
+        t_eval = time.perf_counter() - t0
+        n = surf.sizes["cells"]
+        populated = int((~np.isnan(surf["h_tdigest"].values[0])).sum())
+        print(
+            f"\nlive surface: {n} cells at group 13 (one o9 shard), {populated} populated; "
+            f"read {t_read:.2f}s, evaluate {t_eval:.2f}s"
+        )
+        assert surf["h_tdigest"].shape == (len(DEFAULT_QUANTILES), n)
+        assert 0 < populated <= n
