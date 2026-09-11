@@ -396,31 +396,35 @@ def bitmap_and(
     return moc_and(occupied, aoi)
 
 
-def _classify_children(listing, prefix: str, path_grouping: int = 1) -> Iterator[tuple[str, bool]]:
-    """``(rel, is_leaf)`` for each conforming child prefix of one digit node.
+def _classify_children(listing, prefix: str, path_grouping: int = 1) -> Iterator[tuple[str, str]]:
+    """``(rel, kind)`` for each conforming child prefix of one digit node.
 
     Root children must be ``{sign+base}``-shaped, deeper children a digit
     (``1..4``) component of 1..``path_grouping`` digits (spec §6.1: only the
     terminal component may be short, but terminal-ness is not knowable from
     one LIST, so the walker accepts any conforming width and recurses); a
-    ``*.zarr`` child is a leaf at that node — except a ``*.pyramid.zarr``
-    one. That suffix is spec §4.6's one **normative** name seam for
-    name-grammar consumers (this walker is the named example): a basename
-    ending in ``.pyramid.zarr`` is a leaf **column** and MUST NOT be read as
-    a leaf or an overview. The seam is unambiguous because the D23 window
-    charset admits no ``.``, so no legitimate leaf or overview basename can
-    end that way — and a column is commit-stamped like a leaf, so nothing
-    downstream (:func:`read_commit`, the tiered completeness check) would
-    catch it. Non-conforming names below the root are ignored (the node
+    ``*.zarr`` child is a ``"leaf"`` at that node — except a
+    ``*.pyramid.zarr`` one, which classifies as a ``"column"``. That suffix
+    is spec §4.6's one **normative** name seam for name-grammar consumers
+    (this walker is the named example): a basename ending in
+    ``.pyramid.zarr`` is a leaf **column** and MUST NOT be read as a leaf or
+    an overview — but it IS discoverable as what it is (issue #36), so the
+    seam classifies rather than drops. The seam is unambiguous because the
+    D23 window charset admits no ``.``, so no legitimate leaf or overview
+    basename can end that way — and a column is commit-stamped like a leaf,
+    so nothing downstream (:func:`read_commit`, the tiered completeness
+    check) would catch it. Remaining ``kind``: ``"node"``, a digit node to
+    recurse into. Non-conforming names below the root are ignored (the node
     invariant says they are not ours to interpret).
     """
     for child in listing["common_prefixes"]:
         rel = child.rstrip("/")
         name = rel.split("/")[-1]
         if name.endswith(PYRAMID_COLUMN_SUFFIX):
-            continue  # §4.6 column: never a leaf, never an overview
+            yield rel, "column"  # §4.6: never a leaf, never an overview
+            continue
         if name.endswith(".zarr"):
-            yield rel, True
+            yield rel, "leaf"
             continue
         is_digit_node = (
             is_base_component(name)
@@ -428,7 +432,7 @@ def _classify_children(listing, prefix: str, path_grouping: int = 1) -> Iterator
             else 1 <= len(name) <= path_grouping and set(name) <= set("1234")
         )
         if is_digit_node:
-            yield rel, False
+            yield rel, "node"
 
 
 async def _list_level_async(store, prefixes: list[str], concurrency: int):
@@ -444,6 +448,43 @@ async def _list_level_async(store, prefixes: list[str], concurrency: int):
             return await obstore.list_with_delimiter_async(store, prefix or None)
 
     return await asyncio.gather(*(one(prefix) for prefix in prefixes))
+
+
+def _walk(
+    store_root: str,
+    kind: str,
+    *,
+    store: Any = None,
+    concurrency: int | None = None,
+    path_grouping: int = 1,
+    **store_kwargs: Any,
+) -> Iterator[str]:
+    """Yield every discovered object of one ``_classify_children`` kind."""
+    import obstore
+
+    handle = _resolve_store(store_root, store, store_kwargs)
+    if concurrency is None or concurrency <= 1:
+        stack = [""]
+        while stack:
+            prefix = stack.pop()
+            listing = obstore.list_with_delimiter(handle, prefix or None)
+            for rel, child_kind in _classify_children(listing, prefix, path_grouping):
+                if child_kind == kind:
+                    yield rel
+                elif child_kind == "node":
+                    stack.append(rel + "/")
+        return
+    level = [""]
+    while level:
+        listings = _run_coroutine(_list_level_async(handle, level, concurrency))
+        next_level = []
+        for prefix, listing in zip(level, listings):
+            for rel, child_kind in _classify_children(listing, prefix, path_grouping):
+                if child_kind == kind:
+                    yield rel
+                elif child_kind == "node":
+                    next_level.append(rel + "/")
+        level = next_level
 
 
 def walk_leaves(
@@ -463,7 +504,8 @@ def walk_leaves(
     the caller's check (:func:`read_commit`), matching the tiered postures.
     A §4.6 leaf **column** (``*.pyramid.zarr``) is never yielded: the name
     seam excludes it, and it has to, because a column carries a commit stamp
-    of its own and would pass that completeness check.
+    of its own and would pass that completeness check. Columns have their
+    own discovery walk (:func:`walk_columns`, issue #36).
 
     ``path_grouping`` is the manifest's digit-chunking (spec §6.1) — child
     classification depends on it, so callers walking a grouped store must
@@ -475,31 +517,46 @@ def walk_leaves(
     The yielded SET is identical to the serial walk's; the ORDER may differ
     (level-by-level vs depth-first) — callers sort, per the contract.
     """
-    import obstore
+    yield from _walk(
+        store_root,
+        "leaf",
+        store=store,
+        concurrency=concurrency,
+        path_grouping=path_grouping,
+        **store_kwargs,
+    )
 
-    handle = _resolve_store(store_root, store, store_kwargs)
-    if concurrency is None or concurrency <= 1:
-        stack = [""]
-        while stack:
-            prefix = stack.pop()
-            listing = obstore.list_with_delimiter(handle, prefix or None)
-            for rel, is_leaf in _classify_children(listing, prefix, path_grouping):
-                if is_leaf:
-                    yield rel
-                else:
-                    stack.append(rel + "/")
-        return
-    level = [""]
-    while level:
-        listings = _run_coroutine(_list_level_async(handle, level, concurrency))
-        next_level = []
-        for prefix, listing in zip(level, listings):
-            for rel, is_leaf in _classify_children(listing, prefix, path_grouping):
-                if is_leaf:
-                    yield rel
-                else:
-                    next_level.append(rel + "/")
-        level = next_level
+
+def walk_columns(
+    store_root: str,
+    *,
+    store: Any = None,
+    concurrency: int | None = None,
+    path_grouping: int = 1,
+    **store_kwargs: Any,
+) -> Iterator[str]:
+    """Yield the store-relative path of every §4.6 leaf column (issue #36).
+
+    The column twin of :func:`walk_leaves` — same walk, same contracts
+    (fallback/verification path, stamped and debris objects alike, set
+    identical between the serial and concurrent forms, order not guaranteed)
+    — but yielding the ``*.pyramid.zarr`` objects the name seam classifies
+    as columns. This is the read-the-columns discovery §4.6 prescribes: the
+    manifest's ``pyramid`` block MAY lag a config-only change, so "which
+    leaves actually carry columns" is answerable only from the columns
+    themselves. Completeness stays the caller's check
+    (:func:`read_commit` — an unstamped column prefix is debris), and a
+    column's classification is its ``role``/``zagg_column`` attrs
+    (:func:`moczarr.column.read_column_record`), never the name alone.
+    """
+    yield from _walk(
+        store_root,
+        "column",
+        store=store,
+        concurrency=concurrency,
+        path_grouping=path_grouping,
+        **store_kwargs,
+    )
 
 
 def warn_if_stale(store_root: str, shard: str | int, envelope: dict | None) -> bool:
@@ -547,6 +604,7 @@ __all__ = [
     "read_json",
     "read_leaf_coverage",
     "read_manifest",
+    "walk_columns",
     "walk_leaves",
     "warn_if_stale",
 ]
