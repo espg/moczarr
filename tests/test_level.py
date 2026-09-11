@@ -212,6 +212,26 @@ class TestMultiLeafColumnLevel:
             f"{SIBLING}{d}" for d in "1234"
         ]
 
+    def test_empty_return_names_under_coverage_not_the_aoi(self, two_leaves):
+        # The AOI selected a stamped, admitted, identity-checked column that
+        # simply carries no group 5, and the schema came from the sibling
+        # outside the AOI. Saying "the AOI intersects no column coverage"
+        # there tells the reader the opposite of what happened.
+        path = Path(two_leaves) / COLUMN_REL / "zarr.json"
+        meta = json.loads(path.read_text())
+        del meta["attributes"]["zagg_column"]["groups"]["5"]
+        path.write_text(json.dumps(meta))
+        manifest = read_manifest(two_leaves)
+        aoi = np.array([morton_word("11213")], dtype=np.uint64)
+        with pytest.warns(UserWarning, match="UNDER-COVERS"):
+            ds = open_column_order(two_leaves, manifest, 5, aoi=aoi)
+        assert dict(ds.sizes) == {"cells": 0}
+        # The genuine miss keeps the AOI wording.
+        with pytest.warns(UserWarning, match="intersects no column coverage"):
+            open_column_order(
+                two_leaves, manifest, 5, aoi=np.array([morton_word("21213")], dtype=np.uint64)
+            )
+
     def test_roster_is_query_scoped_here(self, two_leaves):
         # The named exception open_column_order documents: unlike
         # open_overview_order's pre-AOI structural roster, this one shrinks

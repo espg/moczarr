@@ -252,7 +252,10 @@ def open_column_order(
     ``open_overview_order`` keep its candidates unscoped for free) and then
     rows exactly, per group. An AOI that excludes every column-carried cell
     returns the issue-#4 schema-correct empty dataset with a
-    ``UserWarning``; ``None``
+    ``UserWarning`` — which names WHICH of the two empties it is: the AOI
+    missing the column coverage, or the AOI's own stamped columns carrying
+    no group ``r`` (under-coverage, the schema then coming from the
+    fallback probe's out-of-AOI leaf); ``None``
     is returned — with a warning — only when NO stamped column anywhere
     carries this group (not yet written, or a declaration that never
     carried it), or when the root ``coverage.moc`` is unusable (candidates
@@ -361,6 +364,7 @@ def open_column_order(
     domain = None
     moc_dim = "cells"
     schema_rel = None
+    admitted = 0  # candidates that classified, group membership aside
     for dec, rel, meta in zip(shards, rels, metas):
         stamp = _stamp_from_meta(meta)
         if stamp is None:
@@ -369,6 +373,7 @@ def open_column_order(
         entry = _column_entry(attrs or {}, dec, window, shard_order)
         if entry is None:
             continue  # malformed artifact, warned and dropped
+        admitted += 1
         if str(r) not in (entry[COLUMN_ATTR].get("groups") or {}):
             continue  # this leaf's declaration carried no group r: under-coverage
         entries.append(entry)
@@ -431,9 +436,25 @@ def open_column_order(
         )
         return None
     if not opened:
+        # Two distinguishable states land here, and conflating them misreads
+        # the store: the AOI really missed the column coverage, OR it
+        # selected stamped columns that simply do not carry group r (the
+        # §4.6 under-coverage the docstring describes — the schema then came
+        # from the fallback probe's out-of-AOI leaf). `entries` is the
+        # admitted-AND-carrying list, `admitted` the admitted count.
+        if entries or not admitted:
+            reason = (
+                f"the given AOI intersects no column coverage at {store_root} (column order {r})"
+            )
+        else:
+            reason = (
+                f"the given AOI selected {admitted} stamped column(s) at {store_root}, "
+                f"none of which carries resolution group {r}: the level UNDER-COVERS "
+                f"those leaves rather than the AOI missing coverage (the declaration "
+                f"MAY lag the fleet — zagg spec §4.6)"
+            )
         warnings.warn(
-            f"the given AOI intersects no column coverage at {store_root} (column "
-            f"order {r}); returning a schema-correct empty dataset (0 cells)",
+            f"{reason}; returning a schema-correct empty dataset (0 cells)",
             UserWarning,
             stacklevel=2,
         )
