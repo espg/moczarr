@@ -16,6 +16,7 @@ sets in BOTH directions; helpers over source-order SETS; computed-compose
 never a node; zero chunk GETs at open (the counting-store pattern).
 """
 
+import dataclasses
 import json
 import shutil
 import warnings
@@ -39,6 +40,7 @@ from moczarr.convention import morton_word
 from moczarr.pyramid import (
     OBJECTS_ATTR,
     OrderPresence,
+    PyramidInfo,
     open_overview_order,
     overview_cell_orders,
     overview_declaration,
@@ -1167,3 +1169,43 @@ class TestReadPyramid:
         rp = read_pyramid(root, product="atl06")
         assert rp.declaration["orders"] == [4, 2]
         assert rp.presence[2].stamped == 1
+
+
+class TestRecordSemantics:
+    """The two return records' hash/equality/frozen posture."""
+
+    def test_order_presence_is_hashable(self):
+        # All-int fields, so the frozen dataclass's generated __hash__ is
+        # honest: equal records hash equal and the type is set/dict-key usable.
+        assert hash(OrderPresence(1, 0)) == hash(OrderPresence(nodes=1, stamped=0))
+        assert len({OrderPresence(1, 0), OrderPresence(nodes=1, stamped=0)}) == 1
+        assert len({OrderPresence(1, 0), OrderPresence(1, 1)}) == 2
+
+    def test_pyramid_info_is_explicitly_unhashable(self):
+        # Both fields are dicts, so a generated __hash__ would advertise
+        # hashable and raise TypeError on the contained dict at call time.
+        # None refuses up front, dict-style.
+        assert PyramidInfo.__hash__ is None
+        with pytest.raises(TypeError, match="unhashable"):
+            hash(PyramidInfo({"orders": [2]}, None))
+
+    def test_pyramid_info_equality_survives(self):
+        # Refusing the hash costs nothing on value equality — including the
+        # None-presence arm (probe=False / un-nameable candidates).
+        assert PyramidInfo({"orders": [2]}, None) == PyramidInfo({"orders": [2]}, None)
+        assert PyramidInfo({"orders": [2]}, None) != PyramidInfo({"orders": [4]}, None)
+        assert PyramidInfo({"orders": [2]}, {2: OrderPresence(1, 1)}) == PyramidInfo(
+            {"orders": [2]}, {2: OrderPresence(1, 1)}
+        )
+        assert PyramidInfo({"orders": [2]}, {2: OrderPresence(1, 1)}) != PyramidInfo(
+            {"orders": [2]}, None
+        )
+
+    def test_frozen_is_shallow(self):
+        # Rebinding an attribute is refused; the contained dicts are ordinary
+        # mutable dicts, which is what the docstring promises.
+        rp = PyramidInfo({"orders": [2]}, {2: OrderPresence(1, 1)})
+        with pytest.raises(dataclasses.FrozenInstanceError):
+            rp.presence = None
+        rp.declaration["orders"] = [4]
+        assert rp.declaration["orders"] == [4]

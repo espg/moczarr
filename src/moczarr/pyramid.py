@@ -367,6 +367,11 @@ class PyramidInfo:
     computed half and is typed, per the :class:`~moczarr.ragged.RaggedElement`
     posture for API returns.
 
+    ``frozen`` here is SHALLOW, as it always is: rebinding an attribute is
+    refused, while the two contained dicts stay ordinary mutable dicts and
+    are the caller's to treat as read-only. Both fields being dicts also
+    makes the record unhashable -- see ``__hash__`` below.
+
     Attributes
     ----------
     declaration : dict
@@ -378,6 +383,14 @@ class PyramidInfo:
 
     declaration: dict
     presence: dict[int, OrderPresence] | None
+
+    # Both fields are dicts, so the ``frozen=True`` generated ``__hash__``
+    # would advertise hashable and then raise TypeError on the contained dict
+    # at call time. ``None`` is dict's own posture -- set/dict-key use is
+    # refused up front instead of exploding later -- and leaves value
+    # equality untouched. :class:`OrderPresence` (all-int fields) is
+    # genuinely hashable and keeps its generated hash.
+    __hash__ = None  # type: ignore[assignment]
 
 
 def read_pyramid(
