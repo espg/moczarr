@@ -20,6 +20,7 @@ the read+evaluate timing the issue's performance posture asks for.
 
 import json
 import os
+import shutil
 import time
 from pathlib import Path
 
@@ -444,6 +445,31 @@ class TestReadLadder:
         assert ladder.declared == (6, 5, 4, 3, 2, 1)
         assert ladder.materialized == (6,)
         assert {lvl.materialized for lvl in ladder.levels if lvl.artifact != "source"} == {None}
+
+    def test_mis_stamped_column_counts_as_absent_not_as_a_raise(self, tmp_path):
+        # _column_entry's wrong-identity severity is a RAISE, which is right
+        # for open_column_order (it is about to read those groups under the
+        # wrong node) and wrong for a presence count: a column declaring
+        # another node is evidence of absence here. The ladder degrades that
+        # leaf to not-carrying and keeps answering for every other rung —
+        # one mis-stamped object must not take the picker's catalog entry
+        # (source and overview rungs included) down.
+        root = tmp_path / "doctored"
+        shutil.copytree(TEMPORAL, root)
+        meta = root / "1" / "1" / "2" / "1" / "3" / "all.pyramid.zarr" / "zarr.json"
+        payload = json.loads(meta.read_text())
+        payload["attributes"]["zagg_column"]["node"] = "11214"  # another leaf entirely
+        meta.write_text(json.dumps(payload))
+        with pytest.warns(UserWarning, match="mis-stamped"):
+            ladder = read_ladder(str(root))
+        by_order = {lvl.cell_order: lvl for lvl in ladder.levels}
+        assert by_order[5].materialized is False
+        assert by_order[5].presence == OrderPresence(nodes=1, stamped=0)
+        assert ladder.declared == (6, 5, 4, 3, 2, 1)
+        assert ladder.materialized == (6,)  # the source rung still answers
+        # …and the strict severity is untouched where a read is about to happen.
+        with pytest.raises(ValueError, match="under the wrong node"):
+            open_level(str(root), 5)
 
     def test_declared_off_store_is_the_one_level_ladder(self):
         ladder = read_ladder(SERC)

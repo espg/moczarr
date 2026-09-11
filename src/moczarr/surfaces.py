@@ -469,10 +469,19 @@ def _column_presence(
     columns' own ``groups`` maps). One batched ``zarr.json`` GET per
     candidate leaf — the same enumeration and classification
     :func:`moczarr.level.open_column_order` runs (:func:`moczarr.level.
-    _column_entry`'s two severities), shared here across every column level
-    so the ladder pays the leaf tier once, not once per level. ``None``
-    (with a warning) when the root coverage is unusable — candidates are
-    named arithmetically, exactly as the openers refuse to walk.
+    _column_entry`), shared here across every column level so the ladder
+    pays the leaf tier once, not once per level. ``None`` (with a warning)
+    when the root coverage is unusable — candidates are named
+    arithmetically, exactly as the openers refuse to walk.
+
+    NEITHER of ``_column_entry``'s severities is fatal here: this is a
+    presence count, not a read. An uninterpretable object is warned and
+    dropped by ``_column_entry`` itself; a mis-stamped one (its wrong-
+    identity ``ValueError``) is caught, warned about by name, and counted
+    as not carrying any declared resolution — a column declaring another
+    node is evidence of absence at this leaf. The severity stays exactly as
+    it is for :func:`moczarr.level.open_column_order`, which would be about
+    to read those groups under the wrong node's identity.
     """
     from moczarr.level import _column_entry
 
@@ -497,7 +506,25 @@ def _column_presence(
         if _stamp_from_meta(meta) is None:
             continue  # no column, or unstamped debris (D4/§4.6) — never an error
         attrs = meta.get("attributes") if isinstance(meta, dict) else None
-        entry = _column_entry(attrs or {}, dec, window, shard_order)
+        try:
+            entry = _column_entry(attrs or {}, dec, window, shard_order)
+        except ValueError as exc:
+            # _column_entry's OTHER severity: a block positively declaring
+            # another leaf's node/order/window. That severity is right for
+            # open_column_order, which is about to read those groups under
+            # the wrong node's identity — a wrong answer. It is not right
+            # for a presence COUNT: a column declaring another node is
+            # evidence of this leaf's ABSENCE, so it counts as not-carrying
+            # and the ladder's other rungs (source, overview) stay
+            # answerable. One mis-stamped object never takes the picker's
+            # whole catalog entry down.
+            warnings.warn(
+                f"column at node {dec} is mis-stamped and counts as not carrying any "
+                f"declared leaf resolution ({exc}); open_column_order still refuses it",
+                UserWarning,
+                stacklevel=3,
+            )
+            continue
         if entry is None:
             continue  # malformed artifact, warned and dropped
         groups = entry[COLUMN_ATTR].get("groups") or {}
@@ -537,7 +564,11 @@ def read_ladder(
     readability, its documented split); column levels are probed from the
     §4.6 columns' own ``groups`` maps (one batched GET per candidate leaf,
     shared across the column levels — see :func:`_column_presence`), since
-    the manifest MAY lag the fleet there. ``None`` marks *unknown*:
+    the manifest MAY lag the fleet there. The probe never raises: a
+    malformed or mis-stamped column is warned about and counted as not
+    carrying, so one bad object cannot take the picker's whole catalog
+    entry — the source and overview rungs included — down with it.
+    ``None`` marks *unknown*:
     ``probe=False`` (declaration only — one manifest GET, no coverage or
     stamp reads), an unusable root coverage, or the grouped-tree overview
     refusal — :attr:`Ladder.materialized` lists ``True`` levels only, so an
