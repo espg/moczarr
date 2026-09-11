@@ -153,8 +153,17 @@ class TestDecodedValues:
             else:
                 exact = record["n_signal"] if field == "h_tdigest_signal" else record["count"]
                 assert total == float(exact)
-            merged_seen = merged_seen or bool(np.any(values[:, 1] > 1))
-        assert merged_seen  # the 300-obs cell merges centroids (weight > 1)
+            # Evidence that centroids merged reads differently per
+            # declaration: under counts a weight IS a member count, but
+            # §2.2 is explicit that under flux "weight identifies nothing"
+            # (every flux weight here is a photoelectron figure well over
+            # 1, including the 1-observation cell's), so there the
+            # partition itself is the evidence — fewer centroids than
+            # observations.
+            merged_seen = merged_seen or (
+                len(values) < record["count"] if flux else bool(np.any(values[:, 1] > 1))
+            )
+        assert merged_seen  # the 300-obs cell merges centroids
 
     def test_empty_chunk_and_fill_cells_decode_empty(self, name):
         """The §1.5 absence sentinel and the §1.1 ``b""`` fill."""
