@@ -68,6 +68,7 @@ from moczarr.hhdc import (
     _tensor_side,
     block_rank,
     cell_index,
+    chunk_z_range,
     has_exact_occupancy,
     rank_to_rowcol,
     read_tensors,
@@ -798,6 +799,192 @@ class TestFitPolicies:
     def test_collapse_bins_cannot_grow(self):
         with pytest.raises(ValueError, match="cannot grow the window"):
             list(read_tensors(_store(), SIGNAL, n_bins=4, resolution=0.5, fit="collapse_bins"))
+
+
+def _sensor_store(tmp_path, fields):
+    """Digest fields sharing one 64-cell morton axis, read chunk 0 populated.
+
+    ``fields`` maps field name → the 16 per-rank centroid means of chunk 0
+    (one weight-1 centroid per cell — :func:`_deep_digest_store`'s
+    exact-algebra recipe). Two fields of the SAME block is issue #54's
+    shape, which the committed strata leaf cannot show: its two strata were
+    written from one population and derive near-identical windows, while
+    the issue's measured failure is two SENSORS whose derived windows share
+    no axis.
+    """
+    from test_ragged import SHARD, _shard_object, _uint64_meta, _vlen_meta, _write
+
+    from moczarr.convention import morton_word
+
+    tails = [a + b + c for a in "1234" for b in "1234" for c in "1234"]
+    attrs = {"ragged": {"spec": "zagg-ragged/1", "element": {"dtype": "float32", "shape": [-1, 2]}}}
+    grid = tmp_path / "sensors"
+    for field, means in fields.items():
+        payload = [
+            [np.array([[mean, 1.0]], dtype="<f4").tobytes() for mean in means],
+            None,
+            None,
+            None,
+        ]
+        _write(grid, f"g/{field}/zarr.json", _vlen_meta(64, 16, sharded=True, attrs=attrs))
+        _write(grid, f"g/{field}/c/0", _shard_object(payload))
+    _write(grid, "g/morton/zarr.json", _uint64_meta(64))
+    words = np.array([morton_word(SHARD + t) for t in tails], dtype="<u8")
+    _write(grid, "g/morton/c/0", words.tobytes())
+    return LocalStore(grid)
+
+
+#: Issue #54's measured failure, in miniature: same block, two sensors. Cell
+#: rank ``r`` carries one weight-1 centroid at ``base + scale * r``, so
+#: "atl03"'s spread (scale 5) overflows the default 64-unit window and
+#: degrades ALONE, while "gedi"'s does not — derived per sensor the windows
+#: differ in origin AND gain (100.0/1.0 vs 40.0/0.5), the case no shift
+#: reconciles.
+SENSORS = {
+    "h_atl03": [DEEP_BASE + 5.0 * rank for rank in range(16)],
+    "h_gedi": [DEEP_BASE - 60.0 + 1.0 * rank for rank in range(16)],
+}
+
+
+class TestExplicitWindowValidation:
+    """``z_window`` misuse raises before any store object is touched, so
+    these run in the core (no-zagg) environment too."""
+
+    @pytest.mark.parametrize(
+        ("bad", "match"),
+        [
+            ((40.0, 128, 0.5), "unpack it"),
+            ((40.0,), r"\(z0, dz\) pair"),
+            ((40.0, 0.0), "dz > 0"),
+            ((40.0, -0.5), "dz > 0"),
+            ((math.nan, 0.5), "finite"),
+            ((40.0, math.inf), "finite"),
+        ],
+    )
+    def test_a_malformed_window_names_the_callers_mistake(self, bad, match):
+        # The 3-tuple case is the natural mistake: chunk_z_range RETURNS a
+        # (z0, n_bins, dz) triple, and the error says how to unpack it.
+        with pytest.raises(ValueError, match=match):
+            list(read_tensors(_store(), SIGNAL, z_window=bad))
+
+    def test_collapse_bins_is_refused_with_an_explicit_window(self):
+        """Collapsing shrinks each block's bin count independently — the
+        blocks would stop sharing the one fixed axis the window pins."""
+        with pytest.raises(ValueError, match="cannot be combined with an explicit z_window"):
+            list(read_tensors(_store(), SIGNAL, z_window=(0.0, 0.5), fit="collapse_bins"))
+
+    def test_an_unknown_fit_mode_raises_on_the_explicit_path_too(self):
+        # The derive path defers this check to chunk_z_range; the explicit
+        # path never gets there, so it must gate the mode itself.
+        with pytest.raises(ValueError, match="unknown fit mode"):
+            list(read_tensors(_store(), SIGNAL, z_window=(0.0, 0.5), fit="clamp"))
+
+
+@needs_zagg
+class TestExplicitWindow:
+    """Issue #54: a caller-supplied z-window co-registers multi-sensor reads."""
+
+    WINDOW = dict(n_bins=128, resolution=0.5, bottom=0.05, top=0.95, fit="degrade_resolution")
+
+    def _digests(self, store, field):
+        return [np.asarray(v) for _w, v in read_ragged(store, field)]
+
+    def test_windows_derived_per_sensor_share_no_axis(self, tmp_path):
+        """The failure the feature replaces, pinned: the no-arg default still
+        derives per block/per call (unchanged), and on the same block the two
+        sensors come back with different origins AND different gains."""
+        store = _sensor_store(tmp_path, SENSORS)
+        got = {
+            f: next(iter(read_tensors(store, f"g/{f}", fit="degrade_resolution")))[2]
+            for f in SENSORS
+        }
+        assert got["h_atl03"] == (100.0, 1.0)  # its own tail overflows: degraded
+        assert got["h_gedi"] == (40.0, 0.5)  # fits alone: as asked
+
+    def test_one_joint_window_co_registers_both_sensors(self, tmp_path):
+        """The headline path: chunk_z_range once over BOTH sensors' digests,
+        then each read rasterizes onto that axis — same origin, same gain,
+        same shape, nothing clipped, and every cell's bin sits where the
+        shared axis says its centroid is."""
+        store = _sensor_store(tmp_path, SENSORS)
+        digests = [d for f in SENSORS for d in self._digests(store, f"g/{f}")]
+        z0, n_bins, dz = chunk_z_range(digests, **self.WINDOW)
+        assert (z0, n_bins, dz) == (40.0, 128, 2.0)  # atl03's tail degrades the pair
+        cubes = {}
+        for f in SENSORS:
+            # fit defaults to "raise": a joint-derived window covers each
+            # sensor by construction, so the no-clip guard must pass.
+            tensor, _mask, (offset, gain), _word = next(
+                iter(read_tensors(store, f"g/{f}", n_bins=n_bins, z_window=(z0, dz)))
+            )
+            assert (offset, gain) == (z0, dz)  # ON the shared axis, not near it
+            assert tensor.shape == (4, 4, n_bins)
+            assert int(tensor.sum()) == 16  # weight-1 per cell: nothing clipped
+            cubes[f] = tensor
+        for row in range(4):
+            for col in range(4):
+                rank = DEPTH2_RANKS[row][col]
+                for f in SENSORS:
+                    expected = int((SENSORS[f][rank] - z0) // dz)
+                    assert int(np.argmax(cubes[f][row, col])) == expected
+
+    def test_the_derived_window_read_back_is_bit_identical(self):
+        """Round-trip on the committed fixture: feeding a block's own derived
+        window back through ``z_window`` reproduces the derived read exactly
+        — the explicit path is the same rasterization, not a sibling."""
+        derived = next(
+            iter(read_tensors(_store(), SIGNAL, block_order=BLOCK_ORDER, fit="degrade_resolution"))
+        )
+        tensor, mask, window, word = derived
+        explicit = next(
+            iter(read_tensors(_store(), SIGNAL, block_order=BLOCK_ORDER, z_window=window))
+        )
+        np.testing.assert_array_equal(explicit[0], tensor)
+        np.testing.assert_array_equal(explicit[1], mask)
+        assert explicit[2] == window
+        assert int(explicit[3]) == int(word)
+
+    def test_a_window_that_would_clip_raises(self, tmp_path):
+        store = _sensor_store(tmp_path, SENSORS)
+        # gedi's trimmed range is [40, 56]; 8 bins × 0.5 from 40 ends at 44.
+        with pytest.raises(ValueError, match="escapes the supplied window"):
+            list(read_tensors(store, "g/h_gedi", n_bins=8, z_window=(40.0, 0.5)))
+
+    def test_a_floor_below_z0_raises_under_every_fit_mode(self, tmp_path):
+        """Bins extend upward from the pinned origin, so degrade_resolution
+        cannot reach weight below it — both modes refuse rather than clip."""
+        store = _sensor_store(tmp_path, SENSORS)
+        for fit in ("raise", "degrade_resolution"):
+            with pytest.raises(ValueError, match="below the supplied window origin"):
+                list(read_tensors(store, "g/h_gedi", z_window=(50.0, 0.5), fit=fit))
+
+    def test_degrade_widens_just_enough_from_the_pinned_origin(self, tmp_path):
+        """Existing degrade semantics against a pinned origin: n_bins and z0
+        hold, dz doubles until the range fits, and the widened gain comes
+        back — the visible record that this block left the supplied axis."""
+        store = _sensor_store(tmp_path, SENSORS)
+        tensor, _mask, (offset, gain), _word = next(
+            iter(
+                read_tensors(
+                    store, "g/h_gedi", n_bins=8, z_window=(40.0, 0.5), fit="degrade_resolution"
+                )
+            )
+        )
+        assert (offset, gain) == (40.0, 2.0)  # 0.5 → 1.0 → 2.0: first fit at 56
+        assert tensor.shape[2] == 8  # n_bins pinned
+        assert int(tensor.sum()) == 16  # widened instead of clipped
+        # "Just enough", with fit="raise" as the oracle: the chosen gain
+        # passes the no-clip guard and half of it does not.
+        assert list(read_tensors(store, "g/h_gedi", n_bins=8, z_window=(40.0, gain)))
+        with pytest.raises(ValueError, match="escapes the supplied window"):
+            list(read_tensors(store, "g/h_gedi", n_bins=8, z_window=(40.0, gain / 2)))
+
+    def test_a_block_with_no_finite_range_still_raises(self, tmp_path):
+        """The explicit path keeps chunk_z_range's finite-range gate: the
+        no-clip guard cannot certify bounds it cannot measure."""
+        store = _sensor_store(tmp_path, {"h_nan": [math.nan] * 16})
+        with pytest.raises(ValueError, match="finite quantile range"):
+            list(read_tensors(store, "g/h_nan", z_window=(0.0, 1.0)))
 
 
 @needs_zagg_reader

@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- `read_tensors` takes an explicit `z_window=(z0, dz)`
+  ([#54](https://github.com/espg/moczarr/issues/54)): rasterize every block
+  onto a caller-supplied fixed axis instead of deriving a window per block,
+  so co-registered multi-sensor reads share one axis **by construction** —
+  derive the window ONCE over both sensors' digests with the already-public
+  `chunk_z_range`, then hand its `(z0, n_bins, dz)` to each read as
+  `n_bins=` plus `z_window=(z0, dz)`. Derived per sensor, two tensors of
+  the SAME block land on different axes (measured on the public demo
+  stores: 12 bins apart on one block; different origin AND bin height on
+  another, which no shift reconciles) — the workaround was reimplementing
+  the reader's internals around the ragged decode, losing the tensor path,
+  the occupancy mask and the subtree restriction. The default (no
+  `z_window`) derive-per-block path is unchanged. An explicit window never
+  clips silently: the per-block trimmed range still gates it —
+  `fit="raise"` refuses a block whose range escapes the window,
+  `fit="degrade_resolution"` keeps its meaning against the pinned origin
+  (doubles `dz`, holding `z0` and `n_bins`, until the range fits — visible,
+  since that block's yielded gain then differs from the supplied `dz`), a
+  trimmed floor BELOW `z0` refuses under both modes (bins extend upward
+  from the origin; no widening reaches under it), and `fit="collapse_bins"`
+  is refused up front (per-block reshaping un-shares the axis the window
+  pins). Malformed windows raise before any store object is fetched, with
+  a dedicated unpack hint for `chunk_z_range`'s 3-tuple. A moczarr
+  extension: zagg's reader (the port source) has no explicit-window path,
+  and the parity legs never pass it.
+
 - New `moczarr.hhdc.block_rank(words, block_order)`
   ([#52](https://github.com/espg/moczarr/issues/52)): the block-local nested
   rank of each packed morton word, plus each word's own order — the decode a
