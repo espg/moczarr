@@ -443,10 +443,13 @@ def _fit_supplied_window(
     top: float,
     fit: FitMode,
 ) -> tuple[float, int, float]:
-    """One block's window when the caller supplied it: guard, never silently clip.
+    """One block's window when the caller supplied it: guard the trimmed range.
 
     The explicit-window counterpart of :func:`chunk_z_range`, same trimmed
-    bounds and same return shape. The window is never moved — ``z0`` and
+    bounds and same return shape — so the guard is over the TRIMMED range,
+    not the raw data: weight outside the ``bottom``/``top`` quantiles is
+    dropped by :func:`rasterize_cell` with the guard passing, exactly as on
+    the derive path. The window is never moved — ``z0`` and
     ``n_bins`` are pinned — so the fit policy degenerates to a truncation
     guard: when the block's trimmed range escapes ``[z0, z0 + n_bins*dz]``,
     ``fit="raise"`` refuses, and ``fit="degrade_resolution"`` doubles ``dz``
@@ -730,8 +733,11 @@ def read_tensors(
                                   z_window=(z0, dz), block_order=order))
 
         and the two cubes share one axis by construction. An explicit
-        window never clips silently — see ``fit`` above. This parameter is
-        a moczarr extension: zagg's reader (the port source) has no
+        window never clips the TRIMMED range silently — see ``fit`` above;
+        weight outside the ``bottom``/``top`` quantiles is dropped exactly
+        as on the derive path, which is what the guard measures on both.
+        This parameter is a moczarr extension: zagg's reader (the port
+        source) has no
         explicit-window path, and the parity legs never pass it.
     dtype : {"uint16", "uint32", "float32"}, optional
         Output tensor dtype (default ``"uint32"``). Integer dtypes round
@@ -802,7 +808,8 @@ def read_tensors(
         pointed unpack hint), ``dz <= 0``, ``fit="collapse_bins"``, a block
         whose trimmed floor lies below ``z0`` (under every fit mode), or
         (with ``fit="raise"``) a block whose trimmed range escapes the
-        window — an explicit window refuses loudly rather than clip.
+        window — an explicit window refuses loudly rather than clip the
+        trimmed range.
     ImportError
         When zagg's digest algebra is not installed (``moczarr[zagg]``).
     """

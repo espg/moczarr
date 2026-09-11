@@ -15,7 +15,9 @@
   the reader's internals around the ragged decode, losing the tensor path,
   the occupancy mask and the subtree restriction. The default (no
   `z_window`) derive-per-block path is unchanged. An explicit window never
-  clips silently: the per-block trimmed range still gates it —
+  clips the **trimmed** range silently (weight outside `bottom`/`top` is
+  dropped exactly as on the derive path — the trimmed range is what both
+  paths measure): that range gates it —
   `fit="raise"` refuses a block whose range escapes the window,
   `fit="degrade_resolution"` keeps its meaning against the pinned origin
   (doubles `dz`, holding `z0` and `n_bins`, until the range fits — visible,
