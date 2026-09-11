@@ -339,6 +339,38 @@ class TestParseRaggedAttrs:
         )
         assert inside_only.times is None
 
+    def test_weights_declaration_surfaced_with_the_counts_default(self):
+        """§2.0 (issue #43): an absent ``weights`` key MUST be read as
+        ``counts`` — every pre-declaration store parses verbatim — and a
+        declared value is surfaced on the element."""
+        absent = parse_ragged_attrs({"ragged": {"spec": RAGGED_SPEC, "element": ELEMENT}})
+        assert absent.weights == "counts"
+        for declared in ("counts", "flux"):
+            element = parse_ragged_attrs(
+                {"ragged": {"spec": RAGGED_SPEC, "element": ELEMENT}, "weights": declared}
+            )
+            assert element.weights == declared
+
+    def test_weights_key_is_beside_the_block(self):
+        """§2.0 puts ``weights`` beside the ``ragged`` block (the ``/1``
+        block grammar is unchanged by that revision); a same-named key
+        inside the block is not the declaration."""
+        inside_only = parse_ragged_attrs(
+            {"ragged": {"spec": RAGGED_SPEC, "element": ELEMENT, "weights": "flux"}}
+        )
+        assert inside_only.weights == "counts"
+
+    @pytest.mark.parametrize("value", ["photon-rate", "Flux", None])
+    def test_unknown_weights_declaration_refused(self, value):
+        """§2.0: an unknown declaration is a future revision of that
+        section and MUST be refused, never read as either defined value —
+        the vocabulary is case-sensitive and an explicit ``null`` is not
+        the absent key."""
+        with pytest.raises(ValueError, match="never read as either defined value"):
+            parse_ragged_attrs(
+                {"ragged": {"spec": RAGGED_SPEC, "element": ELEMENT}, "weights": value}
+            )
+
 
 class TestParseCompanionAttrs:
     """The §8/§9 declaration gate: strict when present, silent when absent."""
@@ -583,6 +615,33 @@ class TestReadRagged:
         _write(grid, f"g/{sibling}/zarr.json", meta)
         with pytest.raises(ValueError, match=rf"MUST hold one uint64 word.*{section}"):
             list(read_ragged(LocalStore(grid), "g/field", **{channel: True}))
+
+    def test_unknown_weights_declaration_refused_on_the_read_path(self, tmp_path, sharded):
+        """§2.0's strict-check MUST rides every open (issue #43): a future
+        weights vocabulary refuses before a single cell decodes."""
+        grid, _ = build_store(tmp_path, sharded=sharded)
+        meta = json.loads((grid / "g/field/zarr.json").read_text())
+        meta["attributes"]["weights"] = "photon-rate"
+        _write(grid, "g/field/zarr.json", meta)
+        with pytest.raises(ValueError, match="never read as either defined value"):
+            list(read_ragged(LocalStore(grid), "g/field"))
+
+    def test_flux_declared_store_decodes_and_is_loudly_typed(self, tmp_path, sharded):
+        """§2.0: payload bytes decode identically under either declaration
+        — the gate changes what a consumer may claim, not the values — and
+        ``open_ragged`` surfaces the declaration for exactly that claim."""
+        grid, expected = build_store(tmp_path, sharded=sharded)
+        meta = json.loads((grid / "g/field/zarr.json").read_text())
+        meta["attributes"]["weights"] = "flux"
+        meta["attributes"]["gain"] = {"name": "unit-test-gain", "version": "1"}
+        _write(grid, "g/field/zarr.json", meta)
+        _arr, element = open_ragged(LocalStore(grid), "g/field")
+        assert element.weights == "flux"
+        out = dict(read_ragged(LocalStore(grid), "g/field"))
+        words = {morton_word(SHARD + TAILS[c]): c for c in CELLS}
+        assert set(out) == set(words)
+        for word, values in out.items():
+            np.testing.assert_array_equal(values, expected[words[word]])
 
     def test_payload_without_morton_word_raises(self, tmp_path, sharded):
         words = np.array([morton_word(SHARD + t) for t in TAILS], dtype="<u8")
