@@ -7,10 +7,23 @@
   (espg/mortie#187), so a fresh install against unpinned mortie failed at
   import (`cannot import name 'decimals_to_words'`, seen on a Binder build of
   the zagg reader notebooks). `coverage` now parses label batches through the
-  array form of `decimal_to_word`, `intersect._expand_to` refines through
-  `generate_morton_children`, and `pyproject` requires `mortie>=1.0.0`. No
-  behaviour change: both replacements are the same kernels under the surviving
-  name.
+  array form of `decimal_to_word`, `intersect._expand_to` and `dggs.zoom_to`
+  refine through `generate_morton_children`, and `pyproject` requires
+  `mortie>=1.0.0`. No behaviour change **at these call sites**: both
+  replacements are the same kernels under the surviving name (array-in /
+  array-out, same `max_cells` polarity, same dense `(n, 4**d)` block). This is
+  a claim about the migrated lines, not about mortie 1.0 as a whole — 1.0's
+  other breaks (word-valued scalars becoming `np.uint64`, family-wide strict
+  input validation, `MortonIndexScalar` → `MortonWord`) are absorbed here
+  because `convention.morton_word` `int()`s its result, `coverage.as_moc_words`
+  casts every AOI to `uint64` before any mortie call, and `numpy>=2.0` was
+  already the floor.
+  **Known limitation:** the optional `[zagg]` extra is broken until zagg ships
+  its own mortie 1.0 migration (englacial/zagg#559) — released zagg (0.52.0)
+  still does `from mortie import decimals_to_words` in `grids/morton.py`,
+  which cannot resolve against the `mortie>=1.0.0` this release requires, so
+  `moczarr.hhdc`'s t-digest path raises `ImportError` on `moczarr[zagg]`
+  installs.
 
 - New `moczarr.hhdc.block_rank(words, block_order)`
   ([#52](https://github.com/espg/moczarr/issues/52)): the block-local nested

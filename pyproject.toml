@@ -91,6 +91,10 @@ test = [
 # signed off on the issue #19 thread). The import is lazy (the dggs.py
 # posture), so the core import graph is unchanged. Floor 0.39: the current
 # release at adoption time; the algebra surface itself is far older.
+# BROKEN as shipped (issue #59): released zagg (0.52.0) still imports
+# ``decimals_to_words``, retired by the ``mortie>=1.0.0`` floor above, so the
+# t-digest path raises ``ImportError`` until zagg lands its own 1.0 migration
+# (englacial/zagg#559). The floor moves to that release when it ships.
 zagg = ["zagg>=0.40"]
 
 [project.urls]
