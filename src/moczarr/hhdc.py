@@ -292,15 +292,17 @@ def rasterize_cell(
     resolution: float,
     n_bins: int,
 ) -> np.ndarray:
-    """Rasterize one cell's t-digest into ``n_bins`` per-bin counts.
+    """Rasterize one cell's t-digest into ``n_bins`` per-bin weights.
 
     Bins are evenly spaced in value-space: bin ``i`` covers ``[z_lo +
-    i*resolution, z_lo + (i+1)*resolution)``, and its count is the digest's
+    i*resolution, z_lo + (i+1)*resolution)``, and its value is the digest's
     reconstructed weight in that interval (``cdf(edge_{i+1}) -
-    cdf(edge_i)``). Weight outside the window is dropped — the window is
-    fixed; :func:`chunk_z_range`'s fit policy guards against truncation.
-    Returns float64 counts (not yet cast to the output dtype); an empty
-    digest yields zeros.
+    cdf(edge_i)``) — an observation count only under a ``"counts"`` payload
+    (spec §2.0); under ``"flux"`` it is a photoelectron estimate. Weight
+    outside the window is dropped — the window is fixed;
+    :func:`chunk_z_range`'s fit policy guards against truncation. Returns
+    float64 weights (not yet cast to the output dtype); an empty digest
+    yields zeros.
     """
     cdf_from_tdigest, _ = _tdigest_algebra()
     if len(digest) == 0:
@@ -696,6 +698,14 @@ def read_tensors(
     tensor (``d = cell_order - block_order``) with the z-window and ``fit``
     policy reconciled **block-wide** — one shared offset/gain per block.
 
+    What a per-bin value MEANS is the payload's §2.0 weights declaration
+    (issue #43): an observation count under ``"counts"`` (the default), a
+    photoelectron estimate under ``"flux"``. This is the one moczarr surface
+    that does arithmetic on the weight column, so it gates rather than only
+    surfacing the declaration — an integer ``dtype``, which rounds, is
+    refused over a flux payload (a deliberate divergence from the zagg
+    reader this is ported from, which has no such gate).
+
     The memory bound is per BLOCK: the block's decoded digests plus the
     emitted ``4**block_depth * n_bins`` tensor, which grows 4× per coarser
     order. ``max_block_bytes`` (2 GiB default) refuses the tensor with a
@@ -760,9 +770,12 @@ def read_tensors(
         source) has no
         explicit-window path, and the parity legs never pass it.
     dtype : {"uint16", "uint32", "float32"}, optional
-        Output tensor dtype (default ``"uint32"``). Integer dtypes round
-        counts; ``float32`` keeps fractions. A per-bin count exceeding the
-        dtype's max wraps on cast — keep ``uint32`` for dense cells.
+        Output tensor dtype (default ``"uint32"``). Integer dtypes ROUND the
+        per-bin weight; ``float32`` keeps fractions. A per-bin value
+        exceeding the dtype's max wraps on cast — keep ``uint32`` for dense
+        cells. An integer dtype is refused over a ``weights: "flux"``
+        payload (§2.0), whose rounding would hand back a photoelectron
+        estimate presented as a count (issue #43).
     block_order : int, optional
         HEALPix order of the emitted blocks (default ``None`` — one block
         per read chunk). Must be at or coarser than the chunk order; a block
@@ -819,7 +832,8 @@ def read_tensors(
     Raises
     ------
     ValueError
-        On an unknown ``dtype``/``fit``, the strict ragged attrs gate, a
+        On an unknown ``dtype``/``fit``, the strict ragged attrs gate, an
+        integer ``dtype`` over a §2.0 flux payload, a
         missing ``morton`` sibling, an out-of-range ``block_order``, a block
         tensor over ``max_block_bytes``, a corrupt/misaligned occupancy
         sidecar, a ``subtree`` finer than the read chunks (or malformed /
@@ -840,6 +854,13 @@ def read_tensors(
     window = None if z_window is None else _explicit_window(z_window, fit)
 
     arr, element = open_ragged(store, field, zarr_format=zarr_format)
+    if element.weights != "counts" and not is_float:
+        raise ValueError(
+            f"{field!r} declares weights {element.weights!r} (spec §2.0), so a per-bin "
+            f"value is a calibrated-flux estimate of detected photoelectrons, not an "
+            f"observation count; dtype={dtype!r} rounds it to an integer and would "
+            f'present it as one — read a flux payload with dtype="float32"'
+        )
     morton = _morton_words(store, field, zarr_format)
     side, depth = _tensor_side(arr, field)
     cells_per_chunk = side * side
@@ -916,11 +937,11 @@ def read_tensors(
         tensor = np.zeros((block_side, block_side, n_bins_c), dtype=out_dtype)
         mask = _block_mask(words, occupancy, block_depth)
         for rank, digest in cells:
-            counts = rasterize_cell(digest, z_lo, resolution_c, n_bins_c)
+            binned = rasterize_cell(digest, z_lo, resolution_c, n_bins_c)
             if not is_float:
-                counts = np.rint(counts)
+                binned = np.rint(binned)  # counts only — a flux payload refused above
             row, col = rank_to_rowcol(rank, block_depth)
-            tensor[row, col, :] = counts.astype(out_dtype)
+            tensor[row, col, :] = binned.astype(out_dtype)
             mask[row, col] = 2
 
         yield tensor, mask, (float(z_lo), float(resolution_c)), _chunk_word(words, field, bstart)

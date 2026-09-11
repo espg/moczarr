@@ -44,8 +44,15 @@ section for this advance:
   spec-owned TOP-LEVEL ``weights`` key off every payload array with the
   absent-⇒-``counts`` default, refuses an unknown value — §2.0's "MUST be
   refused, never read as either defined value" — and surfaces the
-  declaration as :attr:`RaggedElement.weights` on every open/read path.
-  Digest payload bytes decode identically under either declaration, so
+  declaration as :attr:`RaggedElement.weights`, which only
+  :func:`open_ragged` returns. The value-yielding paths
+  (:func:`read_ragged`, :func:`read_cell`, :func:`moczarr.hhdc.read_tensors`)
+  carry no element, so they GATE on the declaration rather than surface it:
+  each refuses an unknown value through this same call, and ``read_tensors``
+  — the one surface here that does ARITHMETIC on the weight column —
+  additionally refuses an integer tensor dtype over a ``flux`` payload,
+  whose rounding would hand back a photoelectron estimate presented as a
+  count. Digest payload bytes decode identically under either declaration, so
   the gate changes no values; it changes what a consumer may CLAIM about
   them — under ``flux``, ``sum(weights)`` is a photoelectron estimate,
   never an observation count. §2.0's same-declaration merge rule stays

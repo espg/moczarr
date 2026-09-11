@@ -628,7 +628,7 @@ DEPTH2_RANKS = ((0, 1, 4, 5), (2, 3, 6, 7), (8, 9, 12, 13), (10, 11, 14, 15))
 DEEP_BASE = 100.25
 
 
-def _deep_digest_store(tmp_path, chunks=(0, 2)):
+def _deep_digest_store(tmp_path, chunks=(0, 2), weights=None):
     """A synthetic sharded digest field whose READ CHUNKS hold 16 cells.
 
     The committed fixture's chunks hold 4 cells (depth 1), where the Z-order
@@ -642,6 +642,10 @@ def _deep_digest_store(tmp_path, chunks=(0, 2)):
     ``DEEP_BASE + rank``, so at the default ``resolution=0.5`` the one
     nonzero bin of a tensor position is ``2 * rank`` — the rank that landed
     there, independent of the reader's own kernel.
+
+    ``weights`` stamps the spec §2.0 declaration (with the ``gain`` §2.0
+    requires beside a ``"flux"`` one); ``None`` leaves the key absent, the
+    counts default every other caller here reads.
     """
     from test_ragged import SHARD, _shard_object, _uint64_meta, _vlen_meta, _write
 
@@ -649,6 +653,9 @@ def _deep_digest_store(tmp_path, chunks=(0, 2)):
 
     tails = [a + b + c for a in "1234" for b in "1234" for c in "1234"]
     attrs = {"ragged": {"spec": "zagg-ragged/1", "element": {"dtype": "float32", "shape": [-1, 2]}}}
+    if weights is not None:
+        attrs["weights"] = weights
+        attrs["gain"] = {"name": "unit-test-gain", "version": "1"}
     grid = tmp_path / "deep"
     payload = []
     for chunk in range(4):
@@ -727,6 +734,46 @@ class TestDepth2Placement:
                     counts = tensor[row, col]
                     assert int(counts.sum()) == 1  # one centroid of weight 1
                     assert int(np.argmax(counts)) == 2 * DEPTH2_RANKS[row][col]
+
+
+class TestFluxPayloadTensorDtype:
+    """Issue #43 on the one surface that does arithmetic on the weight column.
+
+    ``read_tensors`` reconstructs per-bin WEIGHT (``rasterize_cell`` is a
+    ``cdf`` difference), and with an integer ``dtype`` it rounds that weight
+    — correct under §2.0 ``"counts"``, a value-destroying mis-presentation
+    of photoelectrons under ``"flux"``. So the flux payload is refused on
+    the counts-presenting dtypes and read on the fractional one.
+    """
+
+    def test_integer_dtype_refused_over_a_flux_payload(self, tmp_path):
+        store = _deep_digest_store(tmp_path, weights="flux")
+        for dtype in ("uint16", "uint32"):
+            with pytest.raises(ValueError, match=r"weights 'flux'.*§2.0"):
+                next(iter(read_tensors(store, "g/h_tdigest", dtype=dtype)))
+
+    @needs_zagg
+    def test_float32_reads_the_same_flux_payload(self, tmp_path):
+        """The declaration changes what may be CLAIMED, not the bytes: the
+        fractional dtype decodes the flux store to the counts store's own
+        tensor (the synthetic digests are identical either way)."""
+        flux = _deep_digest_store(tmp_path / "flux", weights="flux")
+        counts = _deep_digest_store(tmp_path / "counts")
+        for (tensor, _m, window, word), (ref, _rm, ref_window, ref_word) in zip(
+            read_tensors(flux, "g/h_tdigest", dtype="float32"),
+            read_tensors(counts, "g/h_tdigest", dtype="float32"),
+            strict=True,
+        ):
+            assert (window, word) == (ref_window, ref_word)
+            np.testing.assert_array_equal(tensor, ref)
+
+    @needs_zagg
+    def test_counts_payloads_keep_the_integer_default(self, tmp_path):
+        """The gate is scoped to the declaration — an absent key is
+        ``"counts"`` (§2.0) and reads under the ``uint32`` default."""
+        store = _deep_digest_store(tmp_path)
+        tensor, _mask, _window, _word = next(iter(read_tensors(store, "g/h_tdigest")))
+        assert tensor.dtype == np.uint32
 
 
 @needs_zagg
