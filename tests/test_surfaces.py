@@ -66,16 +66,19 @@ def _encode(digest) -> bytes:
 def _level(cells, *, field="h_tdigest", extra=None):
     """A hand-built level-model Dataset: one vlen digest field on ``cells``.
 
-    ``cells`` is a list of centroid lists (``None`` = the absent/empty vlen
-    cell); ``extra`` maps more variable names to either digest cell lists
-    (encoded the same way) or dense arrays (passed through).
+    ``cells`` is a list of centroid lists; the two EMPTY spellings stay
+    distinct in the object array — ``None`` is kept as the ``None`` object
+    (``decode_cell``'s own branch) and ``[]`` encodes to ``b""`` — so a test
+    naming both really covers both. ``extra`` maps more variable names to
+    either digest cell lists (encoded the same way) or dense arrays (passed
+    through).
     """
     n = len(cells)
 
     def _vlen(payloads):
         raw = np.empty(len(payloads), dtype=object)
         for i, d in enumerate(payloads):
-            raw[i] = b"" if d is None else _encode(d)
+            raw[i] = d if d is None else _encode(d)
         return xr.DataArray(raw, dims=("cells",), attrs=dict(_DIGEST_ATTRS))
 
     data = {field: _vlen(cells)}
@@ -138,8 +141,14 @@ class TestQuantileSurface:
         assert meta["attributes"][SURFACE_ATTR]["fill"] == "NaN"
 
     def test_empty_cell_reads_fill(self):
-        # Both empty spellings (b"" via None here, and a zero-length list).
-        surf = quantile_surface(_level([None, [], [[3.0, 2.0]]]), "h_tdigest")
+        # Both empty spellings, kept distinct in the object array: the None
+        # OBJECT (decode_cell's dedicated branch — nothing between
+        # _digest_columns and it normalizes a None) and the b"" zero-length
+        # payload. Both read the caller's fill.
+        level = _level([None, [], [[3.0, 2.0]]])
+        raw = level["h_tdigest"].values
+        assert raw[0] is None and raw[1] == b""
+        surf = quantile_surface(level, "h_tdigest")
         assert np.isnan(surf["h_tdigest"].values[:, 0]).all()
         assert np.isnan(surf["h_tdigest"].values[:, 1]).all()
         assert (surf["h_tdigest"].values[:, 2] == 3.0).all()
