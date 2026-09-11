@@ -39,26 +39,22 @@ section for this advance:
   byte-identical across the delta, as is §1.6.
 - **§2** — three items ride this pin, none of which this layer
   mis-decodes. §2.0 is **new**: a payload declares its weight column as
-  ``counts`` (which an absent key MUST be read as) or ``flux``, a
-  reader-relevant MUST this layer does NOT yet gate on — a known gap
-  tracked as espg/moczarr#43. What stands open there is the gate's
-  *implementation*, not its design: #43 prescribes the scope (read the
-  declaration off payload arrays with the absent-⇒-``counts`` default,
-  surface it on the read API, and mirror zagg's ``check_weights_match``
-  posture across mismatched declarations). This pin advance asserts the
-  narrower thing — the delta review #43's pin bullet calls for, performed
-  and recorded right here — and leaves the gate as #43's scope.
-  Digest payload bytes still decode identically under either
-  declaration, so nothing here mis-decodes, but a consumer summing weights
-  must consult #43's resolution before presenting the sum as an
-  observation count. Un-gated leaves §2.0's other two arms unenforced as
-  well: an **unknown** ``weights`` value — which §2.0 says a reader MUST
-  refuse, "never read as either defined value" — decodes here silently,
-  and #43's gate covers that refusal too; §2.0's same-declaration merge
-  rule is meanwhile vacuous here, since moczarr has no payload-merge entry
-  point at all (:mod:`moczarr.composition` declines a read-side merge by
-  design), which is why the gap is a documentation matter and not a
-  live mis-merge risk. §2.1 **rescopes** its exact-count MUST to ``counts``
+  ``counts`` (which an absent key MUST be read as) or ``flux``, and this
+  layer now gates on it (issue #43): :func:`parse_ragged_attrs` reads the
+  spec-owned TOP-LEVEL ``weights`` key off every payload array with the
+  absent-⇒-``counts`` default, refuses an unknown value — §2.0's "MUST be
+  refused, never read as either defined value" — and surfaces the
+  declaration as :attr:`RaggedElement.weights` on every open/read path.
+  Digest payload bytes decode identically under either declaration, so
+  the gate changes no values; it changes what a consumer may CLAIM about
+  them — under ``flux``, ``sum(weights)`` is a photoelectron estimate,
+  never an observation count. §2.0's same-declaration merge rule stays
+  vacuous here, since moczarr has no payload-merge entry point at all
+  (:mod:`moczarr.composition` declines a read-side merge by design); the
+  surfaced declaration is the value any future combining surface must
+  match on, mirroring zagg's ``check_weights_match`` posture (merges are
+  legal only between matching declarations — an absent key is ``counts``
+  for that rule too). §2.1 **rescopes** its exact-count MUST to ``counts``
   and adds a ``flux`` bullet (``sum(weights)`` is a float32 photoelectron
   estimate: the exact-count recovery is undefined there and no integrality
   holds). §2.2 is **substantially rewritten**, and two of its new clauses
@@ -156,6 +152,8 @@ __all__ = [
     "TIMES_ATTR",
     "TOC_GRAMMAR",
     "TOC_SPEC",
+    "WEIGHTS_ATTR",
+    "WEIGHTS_KINDS",
     "CompanionDeclaration",
     "RaggedElement",
     "decode_cell",
@@ -185,6 +183,15 @@ RAGGED2_DATA_TYPE = "vlen-ndarray"
 #: it: the block is retired wholesale under ``/2`` (§1.6/§6.3), so a key
 #: outside it survives that metadata-only migration untouched.
 TIMES_ATTR = "times"
+#: Spec-owned TOP-LEVEL attrs key of the §2.0 weights declaration — like
+#: :data:`TIMES_ATTR` a sibling of the ``ragged`` block, never a member of it,
+#: so it rides the ``/2`` metadata-only migration untouched (§6.3).
+WEIGHTS_ATTR = "weights"
+#: The two §2.0 weight-column semantics. An absent key MUST be read as
+#: ``"counts"`` — every pre-declaration store is conformant verbatim — and an
+#: unknown value is a future revision of §2.0 that MUST be refused, never
+#: read as either defined value.
+WEIGHTS_KINDS = ("counts", "flux")
 #: Attrs key of the §8 temporal word-typed coordinate declaration, carried by
 #: the array that HOLDS the words (a companion declares itself, never a
 #: neighbour).
@@ -236,12 +243,21 @@ class RaggedElement:
         TOP-LEVEL ``times`` attrs key — a sibling of the ``ragged`` block,
         not a member of it. ``None`` when the field has no temporal
         companion.
+    weights : str
+        The §2.0 weights declaration governing the payload's weight column,
+        read from the spec-owned TOP-LEVEL ``weights`` attrs key (an absent
+        key MUST be read as ``"counts"``): under ``"counts"`` weights are
+        observation counts and ``sum(weights)`` is the cell's exact
+        observation count (§2.1); under ``"flux"`` weights are calibrated
+        flux and ``sum(weights)`` estimates detected photoelectrons —
+        recovering an observation count from it is undefined.
     """
 
     dtype: np.dtype
     inner_shape: tuple[int, ...]
     locations: str | None = None
     times: str | None = None
+    weights: str = "counts"
 
 
 def parse_ragged_attrs(attrs: Mapping | None, *, field: str = "<array>") -> RaggedElement:
@@ -251,7 +267,11 @@ def parse_ragged_attrs(attrs: Mapping | None, *, field: str = "<array>") -> Ragg
     ``ragged`` block is missing (not a ``zagg-ragged/1`` array — pre-spec CSR
     stores are a hard break), when ``spec`` is foreign or a future revision
     (never half-parse), or when the element declaration is malformed
-    (``shape`` must be ``[-1, *inner_shape]``). The missing-block branch
+    (``shape`` must be ``[-1, *inner_shape]``). The §2.0 weights gate rides
+    the same call (issue #43): an unknown TOP-LEVEL ``weights`` value is a
+    future revision of that section and raises — never read as either
+    defined value — while an absent key reads as ``"counts"``, so every
+    pre-declaration store parses verbatim. The missing-block branch
     assumes the caller has already ruled out :data:`RAGGED2_SPEC`, whose
     marker is retired by design — :func:`open_ragged` does that by dtype.
     """
@@ -288,11 +308,19 @@ def parse_ragged_attrs(attrs: Mapping | None, *, field: str = "<array>") -> Ragg
         )
     locations = block.get("locations")
     times = attrs.get(TIMES_ATTR)  # §8.3: beside the block, never inside it
+    weights = attrs.get(WEIGHTS_ATTR, "counts")  # §2.0: absent MUST read as counts
+    if weights not in WEIGHTS_KINDS:
+        raise ValueError(
+            f"{field!r} declares weights {weights!r}; spec §2.0 defines "
+            f"{WEIGHTS_KINDS!r}, and an unknown declaration is a future revision "
+            f"that MUST be refused, never read as either defined value"
+        )
     return RaggedElement(
         dtype=dtype,
         inner_shape=tuple(shape[1:]),
         locations=str(locations) if locations else None,
         times=str(times) if times else None,
+        weights=str(weights),
     )
 
 
@@ -765,7 +793,12 @@ def read_ragged(
     location_words, time_words)`` with both — where ``morton_word`` is the
     cell's own packed ``uint64`` coordinate from the sibling ``morton``
     array and ``values`` is the cell's decoded ``(n, *inner_shape)``
-    payload.
+    payload. What a weight column in ``values`` MEANS is the payload's
+    §2.0 declaration (issue #43), surfaced as :attr:`RaggedElement.weights`
+    by :func:`open_ragged`: under ``"flux"`` a weight sum estimates
+    detected photoelectrons and recovers no observation count. An unknown
+    declaration refuses before any cell decodes
+    (:func:`parse_ragged_attrs`).
 
     Parameters
     ----------
@@ -818,7 +851,9 @@ def read_ragged(
     Raises
     ------
     ValueError
-        On the strict attrs gate (:func:`parse_ragged_attrs`), a missing
+        On the strict attrs gate (:func:`parse_ragged_attrs` — the §1.2
+        element declaration and the §2.0 weights declaration both ride
+        it), a missing
         ``morton`` sibling, a populated cell with no written morton word, a
         companion sibling whose element is not one ``uint64`` word per row
         (the §1.1/§8.3 element MUST, checked before any word is decoded) or
