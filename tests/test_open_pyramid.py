@@ -266,6 +266,27 @@ class TestAllTime:
         with pytest.raises(ValueError, match="declares no all-time folds"):
             open_pyramid(self.WINDOWS, all_time=True, manifest=manifest)
 
+    def test_declaration_gate_is_open_pyramid_s_alone(self):
+        # The split is deliberate: what is DECLARED says nothing about what is
+        # ON DISK (zagg#381 point (11)), so the resolution openers read the
+        # stamped all.zarr folds even under an `all_time: false` declaration.
+        # open_pyramid gates because the whole-ladder alternative is a
+        # childless tree of warnings — see open_level's docstring.
+        from moczarr.pyramid import open_overview_order
+
+        manifest = read_manifest(self.WINDOWS)
+        manifest["pyramid"]["overview"]["all_time"] = False
+        declared = open_level(self.WINDOWS, 6, all_time=True)
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")  # no warning either, just the folds
+            ds = open_level(self.WINDOWS, 6, all_time=True, manifest=manifest)
+            direct = open_overview_order(self.WINDOWS, manifest, 4, all_time=True)
+        assert int(ds["count"].sum()) == int(declared["count"].sum())
+        assert {e["window"] for e in ds.attrs["zagg_objects"]} == {"all"}
+        assert int(direct["count"].sum()) == int(declared["count"].sum())
+        with pytest.raises(ValueError, match="declares no all-time folds"):
+            open_pyramid(self.WINDOWS, all_time=True, manifest=manifest)
+
     def test_open_level_all_time_on_a_source_level_raises(self):
         with pytest.raises(ValueError, match="overview levels"):
             open_level(self.WINDOWS, 8, all_time=True)

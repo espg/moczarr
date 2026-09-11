@@ -238,9 +238,15 @@ opt-in instead: `all_time=True` on `open_overview_order` / `open_level` /
 `open_pyramid` (issue #31, the recorded option-(1) posture) opens the
 cross-window folds as an **overviews-only** view — the source and §4.6
 column levels are absent, honest about what is materialized — mutually
-exclusive with `window=`, refused on an unwindowed store (whose artifacts
-ARE its all-time folds, reached with `window=None`), and refused when the
-declaration never carried `all_time` folds.
+exclusive with `window=` and refused on an unwindowed store (whose artifacts
+ARE its all-time folds, reached with `window=None`). The *declaration* gate
+is `open_pyramid`'s alone: it refuses `all_time=True` on a store whose
+declaration never carried `all_time` folds, because the alternative there is
+a childless tree of per-level warnings rather than a pointed answer. The
+resolution openers keep the ordinary posture — what is *declared* says
+nothing about what is *on disk* (zagg#381 point (11)) — so
+`open_overview_order` / `open_level` read whatever `all.zarr` folds are
+stamped, and degrade to their usual warned `None` when none are.
 
 `aoi=` and `window=` scope **rows**, never the tree's shape and never the
 answers below: an out-of-coverage AOI empties each node schema-correct
