@@ -151,10 +151,14 @@ class TestAssemblyV1:
         with pytest.raises(ValueError, match="multi-product store root"):
             open_pyramid(str(OVERVIEW))
 
-    def test_one_root_moc_read_for_the_whole_ladder(self, monkeypatch):
+    def test_root_moc_reads_do_not_grow_with_the_ladder(self, monkeypatch):
         # issue #5 at the tree layer: the sidecar tier must not grow with the
-        # number of levels — one shared read for the non-source arms, plus
-        # open_hive's own on the source arm.
+        # number of levels. The measured truth on this 3-level store is ONE
+        # manifest GET and TWO root-MOC reads — one shared across the
+        # non-source arms (the threaded `_envelope`) plus open_hive's own on
+        # the source arm, which takes no `_envelope`. Both are constants: a
+        # 2-level store pays the same, so the count is pinned exactly rather
+        # than bounded.
         import obstore
 
         keys: list[str] = []
@@ -165,9 +169,15 @@ class TestAssemblyV1:
             return real_get(store_, key, *args, **kwargs)
 
         monkeypatch.setattr(obstore, "get", record)
-        open_pyramid(self.ATL06)
-        moc_reads = [k for k in keys if k.endswith("coverage.moc") and "/" not in k]
-        assert len(moc_reads) <= 2
+        open_pyramid(self.ATL06)  # levels 8 (source), 6, 4
+        sidecars = [k for k in keys if "/" not in k]
+        assert sidecars.count("morton_hive.json") == 1
+        assert sidecars.count("coverage.moc") == 2
+        keys.clear()
+        open_pyramid(str(OVERVIEW / "atl06_windows"), window="2019")  # levels 8, 6
+        sidecars = [k for k in keys if "/" not in k]
+        assert sidecars.count("morton_hive.json") == 1
+        assert sidecars.count("coverage.moc") == 2
 
     def test_tree_layer_adds_no_reads(self, monkeypatch):
         # Laziness is each level's own (the open_store posture, per level):
