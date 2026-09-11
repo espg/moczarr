@@ -22,6 +22,16 @@ The reader posture is §4.6's, twice over:
   ``.pyramid.zarr`` name seam); classification is the ``role`` /
   ``zagg_column`` root attrs, checked here.
 
+Both readers here are scoped to the **leaf** column — they take a shard id
+and refuse anything else. §4.6's issue-#384 **stage columns** share the
+artifact shape at a staged sweep's *ancestor* dispatch nodes, so
+:func:`moczarr.store.walk_columns` (which classifies by suffix at every
+depth) discovers them, but nothing here reads one: §4.6 makes their
+existence at a given order orchestration rather than contract ("a reader
+binds to the ladder artifacts of §4.4, not to stage columns"), so the
+path-addressed reader is deferred with the rest of the assembly work to
+espg/moczarr#36b.
+
 Reads go through the **normal ragged/dense read path**: :func:`open_column`
 returns the same read-only zarr store shape :func:`moczarr.open.open_leaf`
 does, so a dense field opens with ``zarr.open_array(store,
@@ -111,8 +121,10 @@ def _column_target(
     if order != int(manifest["shard_order"]):
         raise ValueError(
             f"shard {shard!r} is an order-{order} id, but {store_root} shards at order "
-            f"{manifest['shard_order']} — columns are named by SHARD id (a cell id "
-            f"names no column)"
+            f"{manifest['shard_order']} — this reader addresses LEAF columns, named by "
+            f"SHARD id (a cell id names no column; a §4.6 stage column at an ancestor "
+            f"node is discoverable via walk_columns but not addressable here — "
+            f"espg/moczarr#36b)"
         )
     rel = column_path(shard, window, path_grouping=manifest_path_grouping(manifest))
     return store_root, rel
