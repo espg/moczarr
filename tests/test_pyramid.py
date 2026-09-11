@@ -633,9 +633,11 @@ class TestDegradation:
         ("doctor", "match"),
         [
             (lambda a: a.__setitem__("role", "composite"), "closed two-value"),
+            # zagg-overview/2 stopped being unknown with the issue #37 arm
+            # (moczarr.level); a genuinely future revision still drops.
             (
-                lambda a: a["zagg_overview"].__setitem__("spec", "zagg-overview/2"),
-                "zagg-overview/2",
+                lambda a: a["zagg_overview"].__setitem__("spec", "zagg-overview/3"),
+                "zagg-overview/3",
             ),
             (lambda a: a.pop("zagg_overview"), "lacks the 'zagg_overview'"),
             (lambda a: a["zagg_overview"].pop("cell_order"), "no 'cell_order'"),

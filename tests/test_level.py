@@ -377,3 +377,205 @@ class TestOpenLevel:
         cut = open_level(self.ATL06, 6, aoi=np.array([word], dtype=np.uint64))
         assert dict(cut.sizes) == {"cells": 1}
         assert int(cut["morton"].values[0]) == int(word)
+
+
+def _write_stage_artifact(root: Path, *, demotions: list | None = None) -> None:
+    """A /2 ladder-rung artifact at node 1121 (order 3, cells at 4), by hand.
+
+    zagg's staged sweep (issue #384 zagg-side) has no committed fixture
+    generator yet — the same gap englacial/zagg#556 records for its /2
+    validation arm — so the MODEL is pinned against spec-grammar bytes
+    (§4.4: same structure as a leaf group; §4.3/§4.4: ``zagg-overview/2``
+    attrs; D4 stamp last) built from the REAL column's node-order member:
+    the rung at cells 4 is by law a merge of the leaves' order-4 partials,
+    and with one covered leaf that merge IS the column's group-4 arrays,
+    placed at the leaf's nested rank in the node's 4-cell footprint.
+    Writer-bytes parity for stage artifacts stays deferred (PR checklist).
+    """
+    import zarr
+
+    from moczarr import open_column
+
+    col = open_column(TEMPORAL, "11213")
+    node = zarr.open_group(str(root / "1" / "1" / "2" / "1" / "all.zarr"), mode="w", zarr_format=3)
+    rank = 2  # 11213 among 1121's nested children (11211, 11212, 11213, 11214)
+    words = np.array([morton_word(f"1121{d}") for d in "1234"], dtype=np.uint64)
+    fields: dict[str, dict] = {}
+    for name in ("count", "morton", "h_tdigest", "h_tdigest_locations", "h_tdigest_times"):
+        src = zarr.open_array(col, path=f"4/{name}", mode="r", zarr_format=3)
+        cell = src[:][0]  # the partial's one cell (a slice, so vlen yields bytes)
+        if name == "morton":
+            data, dtype, fill = words, "uint64", 0
+        elif src.dtype == object:
+            data = np.empty(4, dtype=object)
+            data[:] = b""
+            data[rank] = cell
+            dtype, fill = "bytes", b""
+        else:
+            data = np.zeros(4, dtype=src.dtype)
+            data[rank] = cell
+            dtype, fill = src.dtype, src.fill_value
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")  # zarr's vlen-bytes v3 stability note
+            arr = node.create_array(
+                f"4/{name}",
+                shape=(4,),
+                dtype=dtype,
+                chunks=(4,),
+                dimension_names=["cells"],
+                fill_value=fill,
+            )
+        arr[:] = data
+        arr.attrs.update(dict(src.attrs))
+    record = json.loads((Path(TEMPORAL) / COLUMN_REL / "zarr.json").read_text())
+    fields = record["attributes"]["zagg_column"]["fields"]
+    block = {
+        "spec": "zagg-overview/2",
+        "node": "1121",
+        "order": 3,
+        "cell_order": 4,
+        "source_shard_order": 4,
+        "source_cell_order": 6,
+        "window": "all",
+        "fields": fields,
+        "regime": "stage-merge",
+        "merges_from_raw": 2,
+        "source_children": {"folded": 1, "missing": 0, "unreadable": 0},
+        "run_id": "stage-20260910T000000Z-test",
+        "generation": {
+            "n_leaves": 1,
+            "max_leaf_timestamp": "2026-08-16T23:20:03+00:00",
+            "run_ids": [],
+        },
+    }
+    if demotions is not None:
+        block["demotions"] = demotions
+    node.attrs["role"] = "overview"
+    node.attrs["zagg_overview"] = block
+    node.attrs["morton_hive_commit"] = {
+        "spec": "morton-hive/1",
+        "complete": True,
+        "cells_with_data": 1,
+        "granule_count": 1,
+        "written_at": "2026-09-10T00:00:00+00:00",
+        "run_id": "stage-20260910T000000Z-test",
+    }
+
+
+class TestV2AncestorArm:
+    """The /2 ladder-rung arm: open_overview_order(cell_order=) via open_level."""
+
+    @pytest.fixture()
+    def swept(self, tmp_path):
+        root = tmp_path / "hive"
+        shutil.copytree(TEMPORAL, root)
+        _write_stage_artifact(root)
+        return str(root)
+
+    def test_rung_opens_by_resolution(self, swept):
+        from moczarr import LEVEL_ATTR
+
+        ds = open_level(swept, 4)
+        assert dict(ds.sizes) == {"cells": 4}
+        assert [morton_decimal(int(w)) for w in ds["morton"].values] == [
+            "11211",
+            "11212",
+            "11213",
+            "11214",
+        ]
+        rec = ds.attrs[LEVEL_ATTR]
+        assert rec["artifact"] == "overview" and rec["order"] == 3
+        assert rec["spec"] == "zagg-pyramid/2"
+        assert ds.attrs["morton_hive"] == {
+            "spec": "morton-hive/1",
+            "cell_order": 4,
+            "shard_order": 3,
+            "dataset": read_manifest(swept).get("dataset"),
+        }
+
+    def test_v2_provenance_rides_verbatim(self, swept):
+        ds = open_level(swept, 4)
+        (entry,) = ds.attrs[OBJECTS_ATTR]
+        assert entry["role"] == "overview"
+        block = entry["zagg_overview"]
+        assert block["spec"] == "zagg-overview/2"
+        assert block["regime"] == "stage-merge"
+        assert block["merges_from_raw"] == 2
+        assert block["source_children"] == {"folded": 1, "missing": 0, "unreadable": 0}
+
+    def test_rung_parity_with_the_column_partial(self, swept):
+        # The rung's bytes ARE the leaf partial's, placed at the leaf's
+        # nested rank: exact class equal, digest bytes decode identical.
+        manifest = read_manifest(swept)
+        rung = open_level(swept, 4)
+        partial = open_column_order(swept, manifest, 4)
+        assert int(rung["count"].values.sum()) == int(partial["count"].values.sum())
+        element = parse_ragged_attrs(rung["h_tdigest"].attrs, field="h_tdigest")
+        np.testing.assert_array_equal(
+            decode_cell(rung["h_tdigest"].values[2], element),
+            decode_cell(partial["h_tdigest"].values[0], element),
+        )
+        assert rung["h_tdigest"].values[0] == b""  # absent leaves keep the fill
+
+    def test_shape_consistent_across_all_three_kinds(self, swept):
+        # The model's one law, all three artifact kinds on one store.
+        native = open_level(swept, 6)
+        column = open_level(swept, 5)
+        rung = open_level(swept, 4)
+        for ds in (native, column, rung):
+            assert list(ds.sizes) == ["cells"]
+            assert set(ds.coords) == {"morton", "cell_ids"}
+            assert isinstance(ds.xindexes["morton"], MortonMocIndex)
+        assert set(rung.data_vars) == set(column.data_vars)
+        assert set(column.data_vars) <= set(native.data_vars)
+
+    def test_undeclared_cell_order_is_refused(self, swept):
+        from moczarr.pyramid import open_overview_order
+
+        manifest = read_manifest(swept)
+        with pytest.raises(ValueError, match="strictly between"):
+            open_overview_order(swept, manifest, 3, cell_order=7)
+
+    def test_off_order_artifact_raises(self, swept, tmp_path):
+        # Interpretable but wrong (§4.3 posture): the artifact's own
+        # cell_order must be the level's — the cross-check that makes
+        # cell_order= safe under either attrs revision.
+        path = Path(swept) / "1" / "1" / "2" / "1" / "all.zarr" / "zarr.json"
+        meta = json.loads(path.read_text())
+        meta["attributes"]["zagg_overview"]["cell_order"] = 5
+        path.write_text(json.dumps(meta))
+        with pytest.raises(ValueError, match="mis-rank"):
+            open_level(swept, 4)
+
+    def test_unswept_rung_degrades_to_none(self):
+        # Declared-but-unmaterialized is a legal recorded state: the rung
+        # at cells 3 (node 2) has no artifact on the unswept fixture.
+        with pytest.warns(UserWarning, match="no stamped overview object"):
+            assert open_level(TEMPORAL, 3) is None
+
+    def test_demotions_ride_and_flatten(self, tmp_path):
+        from moczarr import level_demotions
+
+        root = tmp_path / "hive"
+        shutil.copytree(TEMPORAL, root)
+        recorded = [
+            {
+                "field": "composition",
+                "class": "packed",
+                "reason": "divisor-missing",
+                "contributors": 1,
+                "of": "h_tdigest",
+                "cells": 4,
+            }
+        ]
+        _write_stage_artifact(root, demotions=recorded)
+        ds = open_level(str(root), 4)
+        (entry,) = ds.attrs[OBJECTS_ATTR]
+        assert entry["zagg_overview"]["demotions"] == recorded
+        assert level_demotions(ds) == [{"node": "1121", "window": None, **recorded[0]}]
+
+    def test_clean_level_has_no_demotions(self, swept):
+        from moczarr import level_demotions
+
+        assert level_demotions(open_level(swept, 4)) == []
+        assert level_demotions(open_level(swept, 5)) == []

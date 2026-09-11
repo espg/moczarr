@@ -597,19 +597,12 @@ def open_level(
         if record["artifact"] == "column":
             ds = open_column_order(store_root, manifest, record["cell_order"], **common)
         else:
-            from moczarr.pyramid import PYRAMID_SPEC_V2
-
-            if decl is not None and decl["spec"] == PYRAMID_SPEC_V2:
-                # Phase 3 wires the /2 ladder-rung group naming
-                # (open_overview_order's cell_order=); until then the /2
-                # ancestor arm is refused rather than mis-addressed under
-                # the /1 constant-depth formula.
-                raise ValueError(
-                    f"cell order {cell_order} is a {PYRAMID_SPEC_V2} ladder rung at "
-                    f"node {record['order']}: the /2 ancestor-artifact arm lands in "
-                    f"phase 3 of issue #37"
-                )
-            ds = open_overview_order(store_root, manifest, record["order"], **common)
+            # The declared resolution is threaded, never re-derived: for /1
+            # it EQUALS the constant-depth default, for /2 it is the ladder
+            # entry's cells member (the recorded list is the contract).
+            ds = open_overview_order(
+                store_root, manifest, record["order"], cell_order=record["cell_order"], **common
+            )
     if ds is None:
         return None
     ds.attrs[LEVEL_ATTR] = {
@@ -621,8 +614,38 @@ def open_level(
     return ds
 
 
+def level_demotions(ds) -> list[dict]:
+    """Every stamped ``demotions`` record of one level, node-attributed.
+
+    zagg's packed-class guard rail records each demotion it fires in the
+    affected artifact's ``zagg_overview`` attrs (englacial/zagg#518 — one
+    record per ``(field, reason)``, e.g. ``{"field": "composition",
+    "class": "packed", "reason": "divisor-missing", ...}``), and those
+    blocks ride VERBATIM in this model's ``zagg_objects`` roster. This
+    flattens them across the level's artifacts, each record extended with
+    the carrying object's ``node`` and ``window`` — the zero-decode way to
+    ask "was anything demoted at this level?". Records are surfaced as
+    stamped, never validated: the key's absence everywhere is the clean
+    answer ``[]`` (a pre-#518 writer's attrs are byte-identical to a clean
+    store's, so absence is never evidence the rail stayed quiet), and
+    unknown record keys pass through untouched. Takes an
+    :func:`open_level` / :func:`moczarr.pyramid.open_overview_order` /
+    :func:`open_column_order` result — or a DataTree node wrapping one.
+    """
+    node = ds.ds if hasattr(ds, "ds") else ds
+    from moczarr.pyramid import OBJECTS_ATTR, OVERVIEW_ATTR
+
+    out = []
+    for entry in node.attrs.get(OBJECTS_ATTR) or []:
+        block = entry.get(OVERVIEW_ATTR) or entry.get(COLUMN_ATTR) or {}
+        for record in block.get("demotions") or []:
+            out.append({"node": entry.get("node"), "window": entry.get("window"), **record})
+    return out
+
+
 __all__ = [
     "LEVEL_ATTR",
+    "level_demotions",
     "open_column_order",
     "open_level",
     "pyramid_levels",

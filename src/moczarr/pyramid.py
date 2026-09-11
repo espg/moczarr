@@ -76,11 +76,18 @@ PYRAMID_SPEC = "zagg-pyramid/1"
 #: the block-level ``overviews`` list — the FULLY EXPANDED ``{node, cells}``
 #: level entries, leaf entry first, then every order down to node 0. Bound
 #: by the issue #36 declaration surface (:func:`pyramid_declaration`,
-#: :func:`read_pyramid`); the order-node *open* path stays ``/1``-only until
-#: the #37 data-model ruling (espg/moczarr#36 sequencing).
+#: :func:`read_pyramid`); the order-node *open* path reaches its ladder
+#: rungs through :func:`open_overview_order`'s ``cell_order=`` (the issue
+#: #37 per-level model — :func:`moczarr.level.open_level` dispatches it).
 PYRAMID_SPEC_V2 = "zagg-pyramid/2"
 #: Version string of the per-overview provenance attrs payload (§4.3).
 OVERVIEW_SPEC = "zagg-overview/1"
+#: The §4.4 stage-written revision (issue #384 zagg-side): same keys, with
+#: ``cell_order`` the level entry's own ``cells`` member and the fold pair
+#: replaced by ``regime``/``merges_from_raw``/``source_children`` (+
+#: ``run_id``). Accepted by :func:`_object_entry` alongside ``/1``; the
+#: ``cell_order`` cross-check is the safety either way.
+OVERVIEW_SPEC_V2 = "zagg-overview/2"
 #: Root-group attrs key classifying a zarr (D11: per object, never inferred
 #: from tree position; source zarrs carry no role — absence means source).
 ROLE_ATTR = "role"
@@ -113,8 +120,10 @@ def overview_declaration(manifest: dict) -> dict | None:
     wrongly, and §4 makes overviews derived artifacts a reader MUST NOT
     require, so a ``/2`` store's SOURCE data still opens. The ``/2``
     declaration is readable as METADATA through :func:`pyramid_declaration`
-    (issue #36); opening a ``/2`` order node stays espg/moczarr#36b/#37, not
-    this reader. The degrade is pinned by
+    (issue #36), and its levels open by RESOLUTION through
+    :func:`moczarr.level.open_level` (the issue #37 model), which threads
+    the declared ladder into :func:`open_overview_order`'s ``cell_order=``
+    — never through this ``/1`` schedule key. The degrade is pinned by
     ``tests/test_pyramid.py::TestDeclarationBinding::test_vendored_v2_block_reads_as_no_family``.
     """
     block = manifest.get("pyramid")
@@ -364,10 +373,10 @@ def read_pyramid(
     while :func:`open_overview_order` warns and drops it, and reports the
     order node as absent if it was the only candidate. That is the intended
     split, not an oversight: classification is **revision-bound** (this
-    reader implements :data:`OVERVIEW_SPEC` only, while §4.4 gives ``/2``
-    ladder artifacts ``zagg-overview/2`` attrs), so running it here would
-    report every conformant ``/2`` artifact as unclassifiable on exactly
-    the stores this declaration surface exists for. The shared enumeration
+    reader implements :data:`OVERVIEW_SPEC` and :data:`OVERVIEW_SPEC_V2`;
+    a future revision would be unclassifiable here while its stamp still
+    counts), and a presence probe that classified would stop being the
+    cheap existence answer. The shared enumeration
     pins the candidate **node set** the two agree on; which of those objects
     a ``/1`` reader can surface is the open path's answer, and the open path
     says so loudly. A stamped object is always evidence the sweep ran.
@@ -599,10 +608,11 @@ def _object_entry(attrs: dict, decimal: str, window: str | None, target_order: i
             f"is 'overview'; zagg spec §4.3)",
         )
         return None
-    if block.get("spec") != OVERVIEW_SPEC:
+    if block.get("spec") not in (OVERVIEW_SPEC, OVERVIEW_SPEC_V2):
         _skip(
             decimal,
-            f"declares spec {block.get('spec')!r}; this reader implements {OVERVIEW_SPEC!r} only",
+            f"declares spec {block.get('spec')!r}; this reader implements "
+            f"{OVERVIEW_SPEC!r} and {OVERVIEW_SPEC_V2!r}",
         )
         return None
     if "cell_order" not in block:
@@ -624,6 +634,7 @@ def open_overview_order(
     *,
     aoi=None,
     window: str | None = None,
+    cell_order: int | None = None,
     anonymous: bool = False,
     fabricate_cell_ids: bool | str = "auto",
     decode: bool = False,
@@ -638,7 +649,16 @@ def open_overview_order(
 
     ``order`` is the declared **ancestor** order ``k`` from
     ``pyramid.overview.orders``; the returned dataset holds cells at the
-    §4.4 cell order ``c - (s - k)`` (the node's name in the tree). Candidate
+    §4.4 cell order ``c - (s - k)`` (the node's name in the tree).
+    ``cell_order`` overrides that constant-depth default with the stored
+    resolution to open at the ancestor nodes — a ``zagg-pyramid/2`` ladder
+    entry's ``cells`` member (``k + d``, issue #37; the recorded list is
+    the contract, so the caller passes it rather than this function
+    re-deriving a ladder) — and must sit strictly between ``k`` and the
+    manifest cell order, exactly as §4.5 bounds a level member. The
+    artifact's own attrs cross-check it either way: a stamped object whose
+    ``zagg_overview.cell_order`` disagrees raises (off-order rows would
+    mis-rank under the level's coordinate). Candidate
     objects are named arithmetically — the root MOC's source shards coarsened
     to the order-``k`` prefix, one ``{window}.zarr`` (or ``all.zarr``) per
     ancestor node — and each is admitted by its commit stamp (unstamped
@@ -691,10 +711,20 @@ def open_overview_order(
         )
     if index_kind not in ("pandas", "moc"):
         raise ValueError(f"index_kind={index_kind!r}: expected 'pandas' or 'moc'")
-    cell_order = int(manifest["cell_order"])
+    native_order = int(manifest["cell_order"])
     shard_order = int(manifest["shard_order"])
     k = _ancestor_order(manifest, order)
-    target_order = cell_order - (shard_order - k)
+    if cell_order is None:
+        target_order = native_order - (shard_order - k)
+    else:
+        target_order = int(cell_order)
+        if not (k < target_order < native_order):
+            raise ValueError(
+                f"cell_order {target_order} is not a stored resolution of an order-{k} "
+                f"ancestor artifact: a level member sits strictly between its node "
+                f"order and the native cell order ({k} < r < {native_order}, zagg "
+                f"spec §4.4/§4.5)"
+            )
     grouping = manifest_path_grouping(manifest)
     windowed = manifest["spec"] == HIVE_SPEC_V2
     if window is not None:
@@ -1004,6 +1034,7 @@ __all__ = [
     "OBJECTS_ATTR",
     "OVERVIEW_ATTR",
     "OVERVIEW_SPEC",
+    "OVERVIEW_SPEC_V2",
     "PYRAMID_SPEC",
     "PYRAMID_SPEC_V2",
     "ROLE_ATTR",
