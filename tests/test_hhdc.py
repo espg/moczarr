@@ -979,6 +979,26 @@ class TestExplicitWindow:
         with pytest.raises(ValueError, match="escapes the supplied window"):
             list(read_tensors(store, "g/h_gedi", n_bins=8, z_window=(40.0, gain / 2)))
 
+    def test_a_fractional_window_is_not_quantized_away(self, tmp_path):
+        """The explicit path measures the RAW trimmed bounds. ``chunk_z_range``
+        floors/ceils to CHOOSE an integer origin from the data; reusing that
+        rounding here would refuse a window the data sits well inside (a
+        centroid at 40.7 against ``z0=40.5``, since ``floor(40.7) < 40.5``)
+        and, against a fractional window top, degrade a block that already
+        fits — the silent axis drift this feature exists to prevent."""
+        inside = _sensor_store(tmp_path / "inside", {"h_frac": [40.7] * 16})
+        assert next(iter(read_tensors(inside, "g/h_frac", z_window=(40.5, 0.5))))[2] == (40.5, 0.5)
+        # Window top 9 × 0.51 = 4.59 covers a centroid at 4.4; ceil(4.4) = 5 does not.
+        top = _sensor_store(tmp_path / "top", {"h_top": [4.4] * 16})
+        held = next(
+            iter(
+                read_tensors(
+                    top, "g/h_top", n_bins=9, z_window=(0.0, 0.51), fit="degrade_resolution"
+                )
+            )
+        )[2]
+        assert held == (0.0, 0.51)  # on the supplied axis, not doubled off it
+
     def test_a_block_with_no_finite_range_still_raises(self, tmp_path):
         """The explicit path keeps chunk_z_range's finite-range gate: the
         no-clip guard cannot certify bounds it cannot measure."""

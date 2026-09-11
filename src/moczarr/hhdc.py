@@ -455,30 +455,38 @@ def _fit_supplied_window(
     supplied ``dz``. A trimmed floor BELOW ``z0`` raises under both modes:
     bins extend upward from the pinned origin, so no widening can reach
     under it and rasterizing would silently drop that weight.
+
+    The bounds are compared RAW, unlike :func:`chunk_z_range`'s
+    ``floor``/``ceil``: there the rounding exists to CHOOSE an integer
+    origin from the data, here ``z0`` and ``dz`` are given, so quantizing
+    the measured bounds would refuse windows that fit (a digest at 40.7
+    against ``z0=40.5``) and coarsen against a fractional window top for
+    nothing. For the integer ``z0`` every derived window carries, the two
+    comparisons agree.
     """
     bounds = [b for b in (_cell_tail_bounds(d, bottom, top) for d in digests) if b is not None]
     if not bounds:
         raise ValueError("chunk has no populated cells with a finite quantile range")
-    z_lo = math.floor(min(b[0] for b in bounds))
-    z_hi = math.ceil(max(b[1] for b in bounds))
-    if z_lo < z0:
+    lo_min = float(min(b[0] for b in bounds))
+    hi_max = float(max(b[1] for b in bounds))
+    if lo_min < z0:
         raise ValueError(
-            f"trimmed z-floor {z_lo} lies below the supplied window origin z0={z0}: bins "
+            f"trimmed z-floor {lo_min} lies below the supplied window origin z0={z0}: bins "
             f"extend upward from z0, so that weight would be silently clipped and no fit "
             f'policy can reach it (fit="degrade_resolution" only widens the bins upward). '
             f"Derive the shared window over EVERY sensor's digests (chunk_z_range), or "
             f"lower z0"
         )
-    if z_hi <= z0 + n_bins * dz:
+    if hi_max <= z0 + n_bins * dz:
         return z0, n_bins, dz
     if fit == "degrade_resolution":
         res = dz
-        while z_hi > z0 + n_bins * res:
+        while hi_max > z0 + n_bins * res:
             res *= 2.0
         return z0, n_bins, res
     # fit == "raise" (_explicit_window refused every other mode up front)
     raise ValueError(
-        f"trimmed z-range [{z_lo}, {z_hi}] escapes the supplied window "
+        f"trimmed z-range [{lo_min}, {hi_max}] escapes the supplied window "
         f"[{z0}, {z0 + n_bins * dz}] ({n_bins} bins × {dz}); rasterizing onto it would "
         f'silently clip — pass fit="degrade_resolution" to widen the bins from the '
         f"pinned origin, or supply a window that covers the range"
