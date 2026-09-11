@@ -1,5 +1,12 @@
 """moczarr: sparse-DGGS xarray reader for morton-hive zarr stores."""
 
+from moczarr.column import (
+    COLUMN_ATTR,
+    COLUMN_SPEC,
+    column_orders,
+    open_column,
+    read_column_record,
+)
 from moczarr.composition import (
     COMPOSITION_LANES,
     COMPOSITION_SPEC,
@@ -20,6 +27,9 @@ from moczarr.convention import (
     MORTON_CONVENTION_UUID,
     ROOT_COVERAGE_NAME,
     check_node_invariant,
+    column_name,
+    column_path,
+    is_column_basename,
     is_point_word,
     leaf_path,
     morton_decimal,
@@ -59,6 +69,8 @@ from moczarr.pyramid import (
     overview_declaration,
     overview_nodes,
     overview_orders,
+    pyramid_declaration,
+    read_pyramid,
     source_orders,
 )
 from moczarr.ragged import (
@@ -101,6 +113,7 @@ from moczarr.store import (
     read_leaf_coverage,
     read_leaf_metas,
     read_manifest,
+    walk_columns,
     walk_leaves,
     warn_if_stale,
 )
@@ -111,6 +124,8 @@ except ImportError:  # pragma: no cover - version file is generated at build tim
     __version__ = "0.0.0+unknown"
 
 __all__ = [
+    "COLUMN_ATTR",
+    "COLUMN_SPEC",
     "COMMIT_ATTR",
     "COMPOSITION_LANES",
     "COMPOSITION_SPEC",
@@ -140,6 +155,9 @@ __all__ = [
     "candidate_shards",
     "cell_index",
     "check_node_invariant",
+    "column_name",
+    "column_orders",
+    "column_path",
     "combined_hash",
     "counts_from_composition",
     "coverage_moc",
@@ -150,6 +168,7 @@ __all__ = [
     "finest_source_at",
     "has_exact_occupancy",
     "hash_arrays",
+    "is_column_basename",
     "is_point_word",
     "is_product_name",
     "iter_occupancy_and",
@@ -163,6 +182,7 @@ __all__ = [
     "named_lanes",
     "node_objects",
     "occupancy_and",
+    "open_column",
     "open_hive",
     "open_leaf",
     "open_object_store",
@@ -182,9 +202,11 @@ __all__ = [
     "parse_manifest",
     "parse_ragged_attrs",
     "parse_root_coverage",
+    "pyramid_declaration",
     "ranges_contain",
     "ranges_words",
     "read_cell",
+    "read_column_record",
     "read_commit",
     "read_commits",
     "read_coverage_bitmap",
@@ -193,6 +215,7 @@ __all__ = [
     "read_manifest",
     "read_overview_order_stats",
     "read_overview_stats",
+    "read_pyramid",
     "read_ragged",
     "read_stats",
     "read_stats_rollup",
@@ -208,6 +231,7 @@ __all__ = [
     "validate_product_name",
     "verify_arrays",
     "verify_overview_arrays",
+    "walk_columns",
     "walk_leaves",
     "warn_if_stale",
 ]

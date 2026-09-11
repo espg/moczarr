@@ -72,6 +72,13 @@ from moczarr.store import load_root_coverage, read_leaf_metas
 
 #: Version string of the manifest ``pyramid`` block this reader binds (§4.5).
 PYRAMID_SPEC = "zagg-pyramid/1"
+#: The §4.5 fixed-ladder revision (englacial/zagg#381/#382): the schedule is
+#: the block-level ``overviews`` list — the FULLY EXPANDED ``{node, cells}``
+#: level entries, leaf entry first, then every order down to node 0. Bound
+#: by the issue #36 declaration surface (:func:`pyramid_declaration`,
+#: :func:`read_pyramid`); the order-node *open* path stays ``/1``-only until
+#: the #37 data-model ruling (espg/moczarr#36 sequencing).
+PYRAMID_SPEC_V2 = "zagg-pyramid/2"
 #: Version string of the per-overview provenance attrs payload (§4.3).
 OVERVIEW_SPEC = "zagg-overview/1"
 #: Root-group attrs key classifying a zarr (D11: per object, never inferred
@@ -104,9 +111,10 @@ def overview_declaration(manifest: dict) -> dict | None:
     construction. That is a declared-off **view**, never a mis-parse of a
     ``/1`` block: a ``/2`` schedule has no key this function would bind
     wrongly, and §4 makes overviews derived artifacts a reader MUST NOT
-    require, so a ``/2`` store's SOURCE data still opens. Binding the ``/2``
-    view (and strict-checking it) is espg/moczarr#36/#37, not this reader;
-    the degrade is pinned by
+    require, so a ``/2`` store's SOURCE data still opens. The ``/2``
+    declaration is readable as METADATA through :func:`pyramid_declaration`
+    (issue #36); opening a ``/2`` order node stays espg/moczarr#36b/#37, not
+    this reader. The degrade is pinned by
     ``tests/test_pyramid.py::TestDeclarationBinding::test_vendored_v2_block_reads_as_no_family``.
     """
     block = manifest.get("pyramid")
@@ -155,6 +163,338 @@ def overview_cell_orders(manifest: dict) -> dict[int, int]:
     shard_order = int(manifest["shard_order"])
     orders = sorted({int(k) for k in decl["orders"]}, reverse=True)
     return {k: cell_order - (shard_order - k) for k in orders}
+
+
+def pyramid_declaration(manifest: dict) -> dict | None:
+    """The manifest's declared pyramid ladder, both grammars, or ``None``.
+
+    The issue #36 declaration surface: where :func:`overview_declaration`
+    binds the ``/1`` schedule key for the order-node *open* path (and so
+    reads a ``/2`` block as a declared-off view), this decodes the ``pyramid``
+    block of **either** revision into one normalized record — metadata only,
+    zero I/O. ``None`` means the pyramid is declared off (no block,
+    pre-pyramid manifests, the legacy ``{"orders": []}`` placeholder, or the
+    canonical §4.5 declared-off form — which is always the ``/1`` shape; a
+    ``/2`` ``overviews`` list is never empty). Per §4.5 the reader branches
+    on ``spec`` first, then on the revision's schedule key; an unknown
+    revision fails loudly (the conformance rule), and the ``/2`` list is
+    decoded **verbatim, never re-derived** — the recorded list IS the
+    contract (issue #36 / zagg#381).
+
+    The record's keys:
+
+    - ``spec`` — the block's revision string.
+    - ``orders`` — the declared **ancestor** orders (``< shard_order``),
+      descending: the orders that carry (or will carry) §4.1 overview
+      artifacts, uniform across revisions.
+    - ``cell_orders`` — ``{ancestor order: [stored cell orders]}``: under
+      ``/2`` each entry's ``cells`` verbatim; under ``/1`` the §4.4
+      constant-depth cell as a one-member list.
+    - ``leaf_cells`` — the ``/2`` leaf entry's ``cells`` (the declared leaf
+      resolutions the §4.6 *columns* materialize), ``None`` under ``/1``.
+      ``None`` on a ``/2`` block too when the list carries no ``node ==
+      shard_order`` entry: §4.6's no-leaf-node-levels arm is a legal
+      declaration (the writing run then deletes any column a previous one
+      left), so the sentinel reads "this declaration declares no leaf
+      resolutions" in **both** grammars rather than distinguishing them —
+      and it is deliberately not raised on. Which leaves actually carry
+      columns is a question for the columns (:func:`moczarr.store.walk_columns`).
+    - ``spacing`` — the ``/1`` schedule step; ``None`` under ``/2`` (the key
+      does not exist there).
+    - ``overviews`` — the ``/2`` block-level level entries verbatim
+      (per-entry ``actuals`` riding along); ``None`` under ``/1``.
+    - ``all_time`` / ``exact_levels`` — the family dict's values
+      (``exact_levels`` is ``None`` when unwritten — the ``"leaves"`` regime
+      writes none).
+    - ``fold_source`` — the declared fold regime, defaulted to ``"leaves"``
+      when absent (§4.5: the only regime that existed before zagg#376).
+    - ``fields`` — the all-fields map verbatim, each entry carrying its
+      composability ``class`` (``exact``/``approximate``/``packed``/``none``
+      — an unknown token is surfaced as-is; §4.5 tells readers to treat it
+      as non-composable rather than error).
+    - ``materialized`` — the family-dict sweep actuals verbatim when
+      present (on a ``/2`` store that map is the preserved ``/1``-era
+      inventory; ``/2`` actuals live per entry in ``overviews``).
+
+    What is *declared* says nothing about what is *on disk* — declaring is
+    free, sweeping is the operational decision (zagg#381 point (11)) — so
+    the existence question is :func:`read_pyramid`'s probe, and the manifest
+    MAY even lag the columns the fleet actually wrote (§4.6: a reader that
+    needs to know reads the columns — :func:`moczarr.store.walk_columns`).
+    """
+    block = manifest.get("pyramid")
+    if not isinstance(block, dict):
+        return None
+    spec = block.get("spec")
+    shard_order = int(manifest["shard_order"])
+    cell_order = int(manifest["cell_order"])
+    overview = block.get("overview")
+    if spec == PYRAMID_SPEC_V2:
+        entries = block.get("overviews")
+        if not isinstance(entries, list) or not entries:
+            raise ValueError(
+                f"manifest pyramid block declares {PYRAMID_SPEC_V2!r} but its block-level "
+                f"'overviews' schedule is {entries!r}: a /2 list is never empty — the "
+                f"declared-off form is always the /1 shape (zagg spec §4.5)"
+            )
+        if not isinstance(overview, dict):
+            raise ValueError(
+                f"manifest pyramid block declares {PYRAMID_SPEC_V2!r} without the "
+                f"'overview' family dict (zagg spec §4.5)"
+            )
+        missing = [key for key in ("all_time", "fields") if key not in overview]
+        if missing:
+            raise ValueError(
+                f"manifest pyramid.overview lacks {missing}: with a non-empty schedule, "
+                f"all_time/fields MUST be present (zagg spec §4.5)"
+            )
+        levels: dict[int, list[int]] = {}
+        for entry in entries:
+            if not isinstance(entry, dict) or "node" not in entry or "cells" not in entry:
+                raise ValueError(
+                    f"malformed /2 level entry {entry!r}: every member of 'overviews' is "
+                    f"a {{node, cells}} mapping with cells a list (zagg spec §4.5)"
+                )
+            node = int(entry["node"])
+            cells = [int(r) for r in entry["cells"]]
+            if not (0 <= node <= shard_order) or any(not (node < r < cell_order) for r in cells):
+                raise ValueError(
+                    f"/2 level entry {entry!r} is off the ladder: node must satisfy "
+                    f"0 <= node <= shard_order ({shard_order}) and each cell order "
+                    f"node < r < cell_order ({cell_order}) — STRICTLY between, both "
+                    f"ends: the r == node group is the §4.6 column's node-order member "
+                    f"(a recorded group, never a manifest member) and r == cell_order "
+                    f"would BE the base data (zagg spec §4.4/§4.5)"
+                )
+            if node in levels:
+                # Last-writer-wins would make the record self-inconsistent:
+                # `overviews` is the VERBATIM surface (it carries the #381
+                # point-(7) per-entry `actuals`), so a silently merged
+                # duplicate leaves two consumers of the same declaration
+                # disagreeing. §4.4 has one level entry — one artifact —
+                # per (node, window), so a repeated node is malformed, not
+                # a merge instruction.
+                raise ValueError(
+                    f"/2 'overviews' declares node {node} twice: §4.4 has exactly one "
+                    f"level entry (one artifact) per (node, window) (zagg spec §4.4/§4.5)"
+                )
+            levels[node] = cells
+        orders = sorted((k for k in levels if k < shard_order), reverse=True)
+        return {
+            "spec": spec,
+            "orders": orders,
+            "cell_orders": {k: levels[k] for k in orders},
+            "leaf_cells": levels.get(shard_order),
+            "spacing": None,
+            "overviews": entries,
+            "all_time": overview["all_time"],
+            "fold_source": overview.get("fold_source", "leaves"),
+            "exact_levels": overview.get("exact_levels"),
+            "fields": overview["fields"],
+            "materialized": overview.get("materialized"),
+        }
+    # Unknown revisions fail loudly BEFORE the /1 shape test: a future
+    # /3 block might carry no /1 key at all, and reading it as declared-off
+    # would be a silent wrong answer (§4.5's conformance rule). ``spec:
+    # None`` falls through — the legacy pre-pyramid placeholder carries no
+    # spec, and overview_declaration already handles (or refuses) it.
+    if spec is not None and spec != PYRAMID_SPEC:
+        raise ValueError(
+            f"manifest pyramid block declares spec {spec!r}; this reader implements "
+            f"{PYRAMID_SPEC!r} and {PYRAMID_SPEC_V2!r} (zagg spec §4.5 — strict-check, "
+            f"fail loudly)"
+        )
+    # /1, and every declared-off shape (which never needs the new grammar,
+    # so it is always /1-shaped — including spec-less legacy placeholders).
+    decl = overview_declaration(manifest)
+    if decl is None:
+        return None
+    orders = sorted({int(k) for k in decl["orders"]}, reverse=True)
+    return {
+        "spec": PYRAMID_SPEC,
+        "orders": orders,
+        "cell_orders": {k: [cell_order - (shard_order - k)] for k in orders},
+        "leaf_cells": None,
+        "spacing": int(decl["spacing"]),
+        "overviews": None,
+        "all_time": decl["all_time"],
+        "fold_source": decl.get("fold_source", "leaves"),
+        "exact_levels": decl.get("exact_levels"),
+        "fields": decl["fields"],
+        "materialized": decl.get("materialized"),
+    }
+
+
+def read_pyramid(
+    store_root: str,
+    *,
+    product: str | None = None,
+    manifest: dict | None = None,
+    window: str | None = None,
+    orders=None,
+    probe: bool = True,
+    anonymous: bool = False,
+    store: Any = None,
+    concurrency: int | None = 32,
+    **store_kwargs: Any,
+) -> dict | None:
+    """A store's declared pyramid ladder plus a cheap materialization report.
+
+    The issue #36 store-root surface: one manifest GET decodes the
+    declaration (:func:`pyramid_declaration` — both grammars), and existence
+    **probes** answer which declared ancestor orders actually have D4
+    commit-stamped artifacts on disk today (existence, not readability — see
+    ``stamped`` below). ``None`` when the pyramid is declared off;
+    otherwise ``{"declaration": record, "presence": {order: {"nodes": N,
+    "stamped": M}} | None}``.
+
+    ``presence`` is per declared ancestor order: ``nodes`` counts the
+    candidate ancestor nodes — named *arithmetically* by coarsening the root
+    ``coverage.moc``'s source shards (the zagg#201 ruling-(5) enumeration,
+    shared with :func:`open_overview_order`) — and ``stamped`` how many hold
+    a D4 commit-stamped artifact for this window.
+
+    ``stamped`` is an **existence** count and nothing more: the D4 stamp,
+    revision-agnostic, "the sweep wrote an object here". It deliberately
+    does **not** run §4.3's per-object classification
+    (:func:`_object_entry`: ``role``, the ``zagg_overview`` provenance
+    block, its ``cell_order``), so the two surfaces CAN disagree about one
+    store — an ancestor node carrying a stamped object with a bad ``role``
+    value or a missing/unknown-revision ``zagg_overview`` block counts here
+    while :func:`open_overview_order` warns and drops it, and reports the
+    order node as absent if it was the only candidate. That is the intended
+    split, not an oversight: classification is **revision-bound** (this
+    reader implements :data:`OVERVIEW_SPEC` only, while §4.4 gives ``/2``
+    ladder artifacts ``zagg-overview/2`` attrs), so running it here would
+    report every conformant ``/2`` artifact as unclassifiable on exactly
+    the stores this declaration surface exists for. The shared enumeration
+    pins the candidate **node set** the two agree on; which of those objects
+    a ``/1`` reader can surface is the open path's answer, and the open path
+    says so loudly. A stamped object is always evidence the sweep ran.
+    One batched ``zarr.json``
+    GET per candidate node, never a listing walk and never a data read:
+    declared-but-unmaterialized is a **legal recorded state** (declaring is
+    free, sweeping is the operational decision — zagg#381 point (11)), so
+    ``stamped: 0`` everywhere is an answer, not an error. Presence degrades
+    to ``None`` with a warning when the probes cannot be named — no usable
+    root ``coverage.moc``, or ``path_grouping > 1`` (the grouped
+    ancestor-node path is unsettled writer-side, exactly as
+    :func:`open_overview_order` refuses it) — and silently with
+    ``probe=False`` (declaration only, one GET total).
+
+    The ``/2`` leaf entry (``declaration["leaf_cells"]``) is materialized by
+    the §4.6 **columns**, not by overview artifacts, and the manifest MAY
+    lag what the fleet wrote, so presence deliberately covers ancestor
+    orders only — read the columns for the leaf tier
+    (:func:`moczarr.store.walk_columns`,
+    :func:`moczarr.column.read_column_record`).
+
+    ``window`` follows the overview dialect (D23): a windowed
+    (``morton-hive/2``) store's artifacts are per window, so probing one
+    requires ``window=...``; an unwindowed store refuses the argument (its
+    ancestor artifacts are ``all.zarr``). Only that *requirement* is
+    probe-scoped — it is about naming objects, and ``probe=False`` names
+    none. **Refusals are unconditional**: a label this store has no windows
+    for, and the reserved all-time token (``"all"``, §4.2 — three behaviors
+    for one token is the espg/moczarr#30 trap :func:`validate_window` exists
+    to close), raise at every ``probe``, exactly as
+    :func:`open_overview_order` runs the same seam above its windowed
+    branch. A ``window=`` this call cannot honour is never silently
+    ignored. ``orders`` restricts the
+    probe to a subset of the declared ancestor orders (a bounded-cost check
+    on a wide ladder). ``product`` re-roots on a D19 multi-product subtree,
+    and ``store``/``anonymous``/``store_kwargs`` follow
+    :func:`moczarr.open.open_leaf`'s posture (``store`` is rooted at the
+    subtree actually read — the product's when ``product`` is given).
+    """
+    from moczarr.store import _resolve_store, _stamp_from_meta, read_manifest
+
+    if anonymous:
+        store_kwargs.setdefault("anonymous", True)
+    if product is not None:
+        from moczarr.products import validate_product_name
+
+        validate_product_name(product)
+        store_root = f"{store_root.rstrip('/')}/{product}"
+    handle = _resolve_store(store_root, store, store_kwargs)
+    if manifest is None:
+        manifest = read_manifest(store_root, store=handle)
+        if manifest is None:
+            raise ValueError(f"no morton_hive.json at {store_root} — not a hive store root")
+    else:
+        from moczarr.convention import parse_manifest
+
+        manifest = parse_manifest(manifest)
+    declaration = pyramid_declaration(manifest)
+    if declaration is None:
+        return None
+    windowed = manifest["spec"] == HIVE_SPEC_V2
+    # ABOVE the `probe=False` return, for the reason `open_overview_order`
+    # keeps its own `validate_window` above the windowed branch: a `window=`
+    # argument this call cannot honour is refused UNCONDITIONALLY, so one
+    # store gives one answer about what a window means there. Leaving these
+    # under `probe` made the reserved all-time token (#30's trap) and a
+    # label on an unwindowed store pass silently whenever probing was off —
+    # same argument, same store, two behaviours keyed on an unrelated flag.
+    if window is not None:
+        validate_window(window, where=store_root)
+    if not windowed and window is not None:
+        raise ValueError(
+            f"window={window!r} on a {manifest['spec']} store: unwindowed stores "
+            f"have no window leaves (schedule: none)"
+        )
+    if not probe:
+        return {"declaration": declaration, "presence": None}
+    # Genuinely probe-scoped: this one is about NAMING objects, and
+    # `probe=False` names none.
+    if windowed and window is None:
+        raise ValueError(
+            f"{store_root} is a windowed ({HIVE_SPEC_V2}) store; its pyramid artifacts "
+            f"are per-window (D23 naming) — pass window=... to probe presence, or "
+            f"probe=False for the declaration alone"
+        )
+    probe_orders = declaration["orders"] if orders is None else [int(k) for k in orders]
+    bad = [k for k in probe_orders if k not in declaration["orders"]]
+    if bad:
+        raise ValueError(
+            f"orders {bad} are not declared ancestor orders of this pyramid "
+            f"(declared: {declaration['orders']})"
+        )
+    if manifest_path_grouping(manifest) != 1:
+        warnings.warn(
+            f"{store_root} declares path_grouping > 1: the grouped-tree path of an "
+            f"overview ancestor node is not settled writer-side, so presence cannot be "
+            f"probed and reads None (the declaration is unaffected; overviews are never "
+            f"load-bearing — zagg spec §4.1)",
+            UserWarning,
+            stacklevel=2,
+        )
+        return {"declaration": declaration, "presence": None}
+    envelope = load_root_coverage(store_root, store=handle)
+    if envelope is None:
+        warnings.warn(
+            f"no usable root coverage.moc at {store_root}: candidate ancestor nodes are "
+            f"named by coarsening the source domain, so presence cannot be probed and "
+            f"reads None (regenerate the root coverage; the declaration is unaffected)",
+            UserWarning,
+            stacklevel=2,
+        )
+        return {"declaration": declaration, "presence": None}
+    words = ranges_words(envelope)
+    basename = f"{window}.zarr" if windowed else f"{ALL_TOKEN}.zarr"
+    per_order = [(k, overview_nodes(manifest, words, k)) for k in probe_orders]
+    rels = [f"{_node_rel(dec)}/{basename}" for _k, decs in per_order for dec in decs]
+    metas = read_leaf_metas(store_root, rels, store=handle, concurrency=concurrency)
+    presence: dict[int, dict[str, int]] = {}
+    cursor = 0
+    for k, decs in per_order:
+        chunk = metas[cursor : cursor + len(decs)]
+        cursor += len(decs)
+        presence[k] = {
+            "nodes": len(decs),
+            "stamped": sum(1 for meta in chunk if _stamp_from_meta(meta) is not None),
+        }
+    return {"declaration": declaration, "presence": presence}
 
 
 def _ancestor_order(manifest: dict, order: int) -> int:
@@ -665,6 +1005,7 @@ __all__ = [
     "OVERVIEW_ATTR",
     "OVERVIEW_SPEC",
     "PYRAMID_SPEC",
+    "PYRAMID_SPEC_V2",
     "ROLE_ATTR",
     "finest_source_at",
     "node_objects",
@@ -673,5 +1014,7 @@ __all__ = [
     "overview_declaration",
     "overview_nodes",
     "overview_orders",
+    "pyramid_declaration",
+    "read_pyramid",
     "source_orders",
 ]
