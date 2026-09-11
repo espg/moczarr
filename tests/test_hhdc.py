@@ -951,6 +951,43 @@ class TestExplicitWindow:
         assert explicit[2] == window
         assert int(explicit[3]) == int(word)
 
+    #: The committed fixture's two read chunks derive DIFFERENT origins, so
+    #: a per-chunk sweep (no ``block_order``) is where "every block lands on
+    #: the supplied axis" is actually testable; 22.0 is the coarser chunk's
+    #: own origin, and covers both.
+    SHARED = (22.0, 0.5)
+
+    def test_every_block_of_a_sweep_lands_on_the_supplied_axis(self):
+        """The feature's central claim, which the single-block legs cannot
+        reach: two blocks, two derived origins, one supplied axis for both —
+        and chunk 0 keeps the weight its own narrower window pushed out."""
+        derived = list(read_tensors(_store(), SIGNAL))
+        assert [b[2] for b in derived] == [(23.0, 0.5), self.SHARED]  # two axes
+        explicit = list(read_tensors(_store(), SIGNAL, z_window=self.SHARED))
+        assert [b[2] for b in explicit] == [self.SHARED, self.SHARED]  # one axis
+        assert [int(b[3]) for b in explicit] == [int(b[3]) for b in derived]  # same blocks
+        assert (int(derived[0][0].sum()), int(explicit[0][0].sum())) == (21, 22)
+        # Block 1's derived window IS the supplied one, so that block must
+        # come back bit-identical — the shift is chunk 0's alone.
+        np.testing.assert_array_equal(explicit[1][0], derived[1][0])
+
+    @pytest.mark.parametrize("child", ["1", "4"])
+    def test_a_subtree_read_lands_on_the_supplied_axis_too(self, child):
+        """``subtree=`` and ``z_window`` compose: the restricted read is the
+        shared-axis sweep filtered to that block, bit for bit. Both are
+        reasons to use the reader over a hand-rolled ragged loop (issue
+        #54), and neither costs the other."""
+        sweep = {int(b[3]): b for b in read_tensors(_store(), SIGNAL, z_window=self.SHARED)}
+        got = list(
+            read_tensors(_store(), SIGNAL, subtree=EXPECTED["shard"] + child, z_window=self.SHARED)
+        )
+        assert len(got) == 1
+        tensor, mask, window, word = got[0]
+        assert window == self.SHARED
+        expected = sweep[int(word)]
+        np.testing.assert_array_equal(tensor, expected[0])
+        np.testing.assert_array_equal(mask, expected[1])
+
     def test_a_window_that_would_clip_raises(self, tmp_path):
         store = _sensor_store(tmp_path, SENSORS)
         # gedi's trimmed range is [40, 56]; 8 bins × 0.5 from 40 ends at 44.
