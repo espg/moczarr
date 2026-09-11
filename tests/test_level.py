@@ -371,6 +371,30 @@ class TestOpenLevel:
         with pytest.raises(ValueError, match="pass window="):
             open_level(root, 6)
 
+    def test_every_arm_honors_the_threaded_store_handle(self):
+        # issue #5, uniformly: one handle serves every level of a product,
+        # the native one included. A bogus store_root proves no arm falls
+        # back to constructing its own store from it (before the fold the
+        # source arm did, and FileNotFoundError'd here while the column arm
+        # returned rows).
+        from moczarr import open_object_store
+
+        handle = open_object_store(TEMPORAL)
+        native = open_level("/nonexistent/root", 6, store=handle)
+        column = open_level("/nonexistent/root", 5, store=handle)
+        assert dict(native.sizes) == dict(open_hive(TEMPORAL).sizes)
+        assert dict(column.sizes) == {"cells": 4}
+
+    def test_every_arm_honors_the_threaded_manifest(self):
+        # ... and the manifest passed is the manifest used, on every arm:
+        # the source level used to dispatch from the given manifest while
+        # reading the on-disk one, so the two could disagree about identity.
+        manifest = read_manifest(TEMPORAL)
+        manifest["dataset"] = {"short_name": "THREADED"}
+        for r in (6, 5):
+            ds = open_level(TEMPORAL, r, manifest=manifest)
+            assert ds.attrs["morton_hive"]["dataset"] == {"short_name": "THREADED"}
+
     def test_aoi_passes_through(self):
         full = open_level(self.ATL06, 6)
         word = np.uint64(full["morton"].values[0])

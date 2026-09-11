@@ -514,7 +514,11 @@ def open_level(
     ``None`` on a declared-off store, whose one level is the native order.
 
     ``product`` re-roots on a D19 multi-product subtree; ``manifest``
-    threads an already-read manifest (of the subtree actually opened);
+    threads an already-read manifest (of the subtree actually opened) and
+    ``store`` one already-constructed obstore handle — both reach EVERY
+    arm, the native one included (issue #5: one store construction and one
+    manifest GET per open, whichever artifact kind owns the level, so
+    threading a handle across a product's levels behaves uniformly);
     everything else follows :func:`moczarr.open.open_hive`'s posture.
     Deliberately no ``decode=``: new pyramid surfaces are native moczarr
     only (the englacial/zagg#550 ruling) — the returned Dataset is plain
@@ -578,6 +582,15 @@ def open_level(
             index_kind=index_kind,
             concurrency=concurrency,
             xr_kwargs=xr_kwargs,
+            # The same handle and the same manifest the other two arms get
+            # (issue #5). Without them this arm alone re-resolved a store
+            # from store_root and re-GET morton_hive.json, so a caller
+            # threading ONE handle across a product's levels had N-1 shared
+            # reads and one unshared one — and a handle carrying config that
+            # store_kwargs does not (or rooted where store_root is not)
+            # worked on every level EXCEPT the one every store has.
+            store=handle,
+            manifest=manifest,
             _objects_out=objects,
             **store_kwargs,
         )
