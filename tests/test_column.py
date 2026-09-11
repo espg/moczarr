@@ -159,6 +159,18 @@ class TestReadColumnRecord:
                 lambda a: a["zagg_column"].__setitem__("spec", "zagg-column/2"),
                 "zagg-column/2",
             ),
+            # The identity keys the record carries must be the ones asked
+            # for: §4.6 makes `node` the leaf's morton decimal, `order` its
+            # shard order, and `window` the key the basename round-trips
+            # with. A column that disagrees would hand back another node's
+            # cells under this shard's identity — the "interpretable but
+            # wrong" class, not a missing one.
+            (
+                lambda a: a["zagg_column"].__setitem__("node", "11214"),
+                "not this leaf's '11213'/4",
+            ),
+            (lambda a: a["zagg_column"].__setitem__("order", 3), "not this leaf's '11213'/4"),
+            (lambda a: a["zagg_column"].__setitem__("window", "2019"), "round-trip"),
         ],
     )
     def test_stamped_nonconformant_column_raises(self, tmp_path, doctor, match):
