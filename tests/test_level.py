@@ -86,6 +86,142 @@ class TestPyramidLevels:
             pyramid_levels(manifest)
 
 
+SIBLING = "-11213"  # a SOUTHERN order-4 shard: word-after, decimal-string-before
+
+
+def _write_sibling_column(root: Path, node: str = SIBLING, *, doctor=None) -> None:
+    """A second leaf column at a sibling shard, by hand (spec grammar, not writer bytes).
+
+    The vendored §7 fixtures cover exactly ONE leaf (``coverage.moc`` is the
+    single range ``["11213", "11213"]``), which leaves
+    :func:`open_column_order`'s headline job — assembling one resolution
+    ACROSS leaves — unexercised: the multi-way concat, the ``domain.union``,
+    the cross-leaf word order, and any roster longer than one. zagg has no
+    committed multi-leaf ``/2`` fixture generator (the same gap the stage
+    artifact records above), so the sibling is the REAL column's bytes
+    re-headed at another node: its groups and ragged payloads are the
+    fixture's, its ``morton`` words and ``zagg_column.node`` are the
+    sibling's, and its ``count`` is scaled by ten so the two leaves are
+    distinguishable by value while each leaf's own group-5 → group-4 fold
+    parity stays exact (scaling is linear). Hand-built bytes are spec
+    GRAMMAR, never writer bytes — the same caveat and the same deferral as
+    ``_write_stage_artifact``.
+
+    ``node`` defaults to a southern shard on purpose: its packed word sorts
+    AFTER ``11213`` while its decimal string (leading ``"-"``) sorts before,
+    so a decimal-ordered assembly would lay the rows down in an order the
+    §4.4 moc coordinate disagrees with (the invariant ``overview_nodes``
+    documents). The root MOC's new range is prepended, unsorted, for the
+    same reason. ``doctor`` may mutate the sibling's root attrs before the
+    stamp is re-written.
+    """
+    import zarr
+
+    from moczarr.convention import column_path
+
+    src, dst = root / COLUMN_REL, root / column_path(node)
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(src, dst)
+    for r, words in ((5, [morton_word(f"{node}{d}") for d in "1234"]), (4, [morton_word(node)])):
+        morton = zarr.open_array(str(dst), path=f"{r}/morton", mode="r+", zarr_format=3)
+        morton[:] = np.asarray(words, dtype=np.uint64)
+        count = zarr.open_array(str(dst), path=f"{r}/count", mode="r+", zarr_format=3)
+        count[:] = count[:] * 10
+    meta_path = dst / "zarr.json"
+    meta = json.loads(meta_path.read_text())
+    meta["attributes"]["zagg_column"]["node"] = node
+    if doctor is not None:
+        doctor(meta["attributes"])
+    meta_path.write_text(json.dumps(meta))
+    moc_path = root / "coverage.moc"
+    moc = json.loads(moc_path.read_text())
+    moc["ranges"] = [[node, node], *moc["ranges"]]
+    moc_path.write_text(json.dumps(moc))
+
+
+@pytest.fixture()
+def two_leaves(tmp_path):
+    """The temporal fixture plus a sibling leaf column — a two-leaf level."""
+    root = tmp_path / "hive"
+    shutil.copytree(TEMPORAL, root)
+    _write_sibling_column(root)
+    return str(root)
+
+
+class TestMultiLeafColumnLevel:
+    """The assembly tail across leaves: concat, domain union, word order."""
+
+    def test_leaves_concat_in_ascending_word_order(self, two_leaves):
+        manifest = read_manifest(two_leaves)
+        ds = open_column_order(two_leaves, manifest, 5)
+        assert dict(ds.sizes) == {"cells": 8}
+        words = np.asarray(ds["morton"].values, dtype=np.uint64)
+        # Monotonic ACROSS the leaf boundary — the law the §4.4 coordinate
+        # rests on. Decimal-string order would have put the southern leaf
+        # first (a leading "-" sorts before every digit).
+        assert (np.diff(words) > 0).all()
+        decimals = [morton_decimal(int(w)) for w in words]
+        assert decimals[:4] == ["112131", "112132", "112133", "112134"]
+        assert decimals[4:] == [f"{SIBLING}{d}" for d in "1234"]
+
+    def test_domain_union_spans_both_leaves(self, two_leaves):
+        manifest = read_manifest(two_leaves)
+        ds = open_column_order(two_leaves, manifest, 5)
+        index = ds.xindexes["morton"]
+        assert isinstance(index, MortonMocIndex)
+        # Two disjoint shard subtrees: the union is two intervals, 8 cells.
+        assert index.ranges.size == 8
+        np.testing.assert_array_equal(
+            np.asarray(index.ranges.fabricate(), dtype=np.uint64),
+            np.asarray(ds["morton"].values, dtype=np.uint64),
+        )
+
+    def test_roster_carries_every_admitted_leaf(self, two_leaves):
+        manifest = read_manifest(two_leaves)
+        ds = open_column_order(two_leaves, manifest, 5)
+        entries = ds.attrs[OBJECTS_ATTR]
+        assert [e["node"] for e in entries] == ["11213", SIBLING]
+        assert {e["role"] for e in entries} == {"column"}
+
+    def test_fold_parity_holds_leaf_by_leaf_and_in_total(self, two_leaves):
+        # Each leaf's group 5 folds to its own group 4, and the level totals
+        # agree — the §4.6 from-leaves parity, now across more than one leaf.
+        manifest = read_manifest(two_leaves)
+        c5 = open_column_order(two_leaves, manifest, 5)
+        c4 = open_column_order(two_leaves, manifest, 4)
+        assert dict(c4.sizes) == {"cells": 2}
+        assert int(c5["count"].values.sum()) == int(c4["count"].values.sum())
+        native_total = int(open_hive(TEMPORAL)["count"].values.sum())
+        # leaf 11213 verbatim + the sibling's ten-fold copy, per leaf.
+        assert [int(v) for v in c4["count"].values] == [native_total, native_total * 10]
+
+    def test_under_coverage_is_partial_not_absent(self, two_leaves):
+        # The mixed case the under-coverage posture is written for: one leaf
+        # carries group 5, the other does not. The level assembles from the
+        # leaf that has it and simply omits the other's footprint — absent
+        # spans of the morton domain, never an error and never empty.
+        path = Path(two_leaves) / COLUMN_REL / "zarr.json"
+        meta = json.loads(path.read_text())
+        del meta["attributes"]["zagg_column"]["groups"]["5"]
+        path.write_text(json.dumps(meta))
+        manifest = read_manifest(two_leaves)
+        ds = open_column_order(two_leaves, manifest, 5)
+        assert dict(ds.sizes) == {"cells": 4}
+        assert [e["node"] for e in ds.attrs[OBJECTS_ATTR]] == [SIBLING]
+        assert [morton_decimal(int(w)) for w in ds["morton"].values] == [
+            f"{SIBLING}{d}" for d in "1234"
+        ]
+
+    def test_aoi_selecting_one_leaf_cuts_the_other_whole(self, two_leaves):
+        manifest = read_manifest(two_leaves)
+        aoi = np.array([morton_word(SIBLING)], dtype=np.uint64)
+        ds = open_column_order(two_leaves, manifest, 5, aoi=aoi)
+        assert dict(ds.sizes) == {"cells": 4}
+        assert [morton_decimal(int(w)) for w in ds["morton"].values] == [
+            f"{SIBLING}{d}" for d in "1234"
+        ]
+
+
 class TestOpenColumnOrder:
     def test_declared_resolution_assembles(self):
         manifest = read_manifest(TEMPORAL)
