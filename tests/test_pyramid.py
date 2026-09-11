@@ -1146,10 +1146,19 @@ class TestReadPyramid:
             read_pyramid(f"{root}/atl06_windows", window="all")
         # probe=False asks nothing window-shaped, so no window is needed.
         assert read_pyramid(f"{root}/atl06_windows", probe=False)["presence"] is None
+        # ...but a window= this call cannot honour is refused whatever
+        # `probe` says: the reserved-token trap (espg/moczarr#30) must not
+        # be reachable by flipping an unrelated flag.
+        with pytest.raises(ValueError, match="reserved all-time token"):
+            read_pyramid(f"{root}/atl06_windows", window="all", probe=False)
 
     def test_unwindowed_store_refuses_window(self, root):
         with pytest.raises(ValueError, match="unwindowed stores"):
             read_pyramid(f"{root}/atl06", window="2019")
+        with pytest.raises(ValueError, match="unwindowed stores"):
+            read_pyramid(f"{root}/atl06", window="2019", probe=False)
+        with pytest.raises(ValueError, match="reserved all-time token"):
+            read_pyramid(f"{root}/atl06", window="all", probe=False)
 
     def test_product_reroot(self, root):
         rp = read_pyramid(root, product="atl06")
