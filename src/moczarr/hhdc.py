@@ -696,7 +696,9 @@ def read_tensors(
     n_bins : int, optional
         Number of z-bins (default 128).
     resolution : float, optional
-        Bin width in value units (default 0.5).
+        Bin width in value units (default 0.5). Ignored when ``z_window`` is
+        given — the window's ``dz`` IS the bin width, and the derivation
+        this parameter feeds (:func:`chunk_z_range`) is skipped entirely.
     bottom, top : float, optional
         Lower/upper density-trim quantiles (default 0.05 / 0.95).
     fit : {"raise", "degrade_resolution", "collapse_bins"}, optional
