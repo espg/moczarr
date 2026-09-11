@@ -22,15 +22,20 @@ The reader posture is §4.6's, twice over:
   ``.pyramid.zarr`` name seam); classification is the ``role`` /
   ``zagg_column`` root attrs, checked here.
 
-Both readers here are scoped to the **leaf** column — they take a shard id
-and refuse anything else. §4.6's issue-#384 **stage columns** share the
-artifact shape at a staged sweep's *ancestor* dispatch nodes, so
-:func:`moczarr.store.walk_columns` (which classifies by suffix at every
-depth) discovers them, but nothing here reads one: §4.6 makes their
-existence at a given order orchestration rather than contract ("a reader
-binds to the ladder artifacts of §4.4, not to stage columns"), so the
-path-addressed reader is deferred with the rest of the assembly work to
-espg/moczarr#36b.
+Both readers here are **node-addressed**: a SHARD id names the §4.6 leaf
+column, and an ANCESTOR node id names an issue-#384 **stage column** — the
+same artifact shape (``zagg-column/1`` attrs, D4 stamp, `{window
+stem}.pyramid.zarr` under the node's prefix) written at a staged sweep's
+dispatch nodes, whose groups are pure gathers (``regime: "stage-gather"``)
+plus the mandatory relay member at ``shard_order``. Addressing one is a
+DIRECT read of an object the caller already names (espg/moczarr#36b):
+stage-column *existence* at a given order stays orchestration, never
+contract ("a reader binds to the ladder artifacts of §4.4, not to stage
+columns" — §4.6), so nothing here enumerates or requires them — absence is
+the usual ``None`` — and no assembly surface consumes them
+(:func:`moczarr.level.open_level` binds to §4.4 artifacts). Discovery
+remains :func:`moczarr.store.walk_columns`, which classifies by suffix at
+every depth.
 
 Reads go through the **normal ragged/dense read path**: :func:`open_column`
 returns the same read-only zarr store shape :func:`moczarr.open.open_leaf`
@@ -118,15 +123,28 @@ def _column_target(
             f"per-window ({{window}}.pyramid.zarr, D23 naming) — pass window=..."
         )
     order = decimal_order(morton_decimal(shard))
-    if order != int(manifest["shard_order"]):
+    shard_order = int(manifest["shard_order"])
+    if order > shard_order:
         raise ValueError(
             f"shard {shard!r} is an order-{order} id, but {store_root} shards at order "
-            f"{manifest['shard_order']} — this reader addresses LEAF columns, named by "
-            f"SHARD id (a cell id names no column; a §4.6 stage column at an ancestor "
-            f"node is discoverable via walk_columns but not addressable here — "
-            f"espg/moczarr#36b)"
+            f"{shard_order} — a column is named by its NODE id: a shard id (the §4.6 "
+            f"leaf column) or an ancestor node id (an issue-#384 stage column); a cell "
+            f"id names no column"
         )
-    rel = column_path(shard, window, path_grouping=manifest_path_grouping(manifest))
+    grouping = manifest_path_grouping(manifest)
+    if order < shard_order and grouping != 1:
+        # The same unsettled seam open_overview_order refuses: an ancestor
+        # order off the grouping has no directory in a grouped tree, and the
+        # staged sweep writes dispatch nodes per digit regardless — but this
+        # is a POINT query naming one object, so it raises rather than
+        # degrading by omission. Leaf columns are unaffected (a leaf column
+        # path is the leaf's own grammar, grouping included).
+        raise ValueError(
+            f"{store_root} declares path_grouping {grouping}: the grouped-tree path of "
+            f"an ancestor dispatch node is not settled writer-side, so a stage column "
+            f"cannot be addressed there (leaf columns are unaffected)"
+        )
+    rel = column_path(shard, window, path_grouping=grouping)
     return store_root, rel
 
 
@@ -141,21 +159,24 @@ def open_column(
     store: Any = None,
     **store_kwargs: Any,
 ):
-    """Open ONE shard's §4.6 leaf column as a read-only zarr store.
+    """Open ONE node's §4.6 column as a read-only zarr store.
 
     The column twin of :func:`moczarr.open.open_leaf` — same parameters,
     same credential/``anonymous`` handling, same validation (the window
-    seam, the shard-order check, D19 ``product=`` re-rooting), same
+    seam, the node-order check, D19 ``product=`` re-rooting), same
     deliberately bare return: a read-only ``zarr.storage.ObjectStore``
     rooted at the column, for the per-leaf readers at ``"{order}/{field}"``
     paths — ``zarr.open_array`` for dense fields,
     :func:`moczarr.ragged.read_ragged` / :func:`moczarr.ragged.read_cell`
-    for ragged digests (companion channels included). The available group
-    orders and fields come from :func:`read_column_record`, which also
-    answers whether the column exists at all — opening names an object and
-    never checks (§4.6 absence is never an error; the first read misses).
-    ``store=`` shares a handle for the manifest GET only, exactly as
-    ``open_leaf`` does.
+    for ragged digests (companion channels included). ``shard`` is the
+    column's node id: a shard id opens the leaf column, an ancestor node id
+    the issue-#384 stage column at that dispatch node (a direct read — the
+    module docstring's orchestration-not-contract caveat applies). The
+    available group orders and fields come from :func:`read_column_record`,
+    which also answers whether the column exists at all — opening names an
+    object and never checks (§4.6 absence is never an error; the first read
+    misses). ``store=`` shares a handle for the manifest GET only, exactly
+    as ``open_leaf`` does.
     """
     from zarr.storage import ObjectStore
 
@@ -185,7 +206,7 @@ def read_column_record(
     store: Any = None,
     **store_kwargs: Any,
 ) -> dict | None:
-    """One shard's validated ``zagg_column`` provenance block, or ``None``.
+    """One node's validated ``zagg_column`` provenance block, or ``None``.
 
     One ``zarr.json`` GET (after the manifest's, when not threaded).
     ``None`` means *no committed column*: an absent object, or an unstamped
@@ -197,9 +218,17 @@ def read_column_record(
     ``spec`` :data:`COLUMN_SPEC` (strict-check, fail loudly — the
     conformance rule; this call names ONE object and cannot half-trust it),
     and its ``node``/``order``/``window`` must be the ones asked for — a
-    column declaring another leaf's identity is the "interpretable but
+    column declaring another node's identity is the "interpretable but
     wrong" class (:func:`moczarr.pyramid._object_entry`'s posture for an
-    off-order overview), since its groups would be read as this shard's.
+    off-order overview), since its groups would be read as this node's.
+
+    ``shard`` is the column's node id at ITS OWN order: a shard id reads
+    the §4.6 leaf column, an ancestor node id the issue-#384 **stage
+    column** at that dispatch node — whose record rides verbatim too, its
+    stage-side members included (``regime: "stage-gather"`` groups, the
+    ``generation`` skip-gate summary, ``source_children``, ``run_id``).
+    Absence stays the ordinary ``None`` either way: stage-column existence
+    at a given order is orchestration, never contract (§4.6).
 
     The record is the §4.6 block verbatim — ``fields`` (the materialized
     fields with their composability classes: the zero-open way to see the
@@ -262,7 +291,7 @@ def read_column_record(
     if block.get("node") != want_node or block.get("order") != want_order:
         raise ValueError(
             f"column at {rel} declares node {block.get('node')!r}/order "
-            f"{block.get('order')!r}, not this leaf's {want_node!r}/{want_order} — "
+            f"{block.get('order')!r}, not this node's {want_node!r}/{want_order} — "
             f"its groups would be read under the wrong node (zagg spec §4.6)"
         )
     if block.get("window") != want_window:
