@@ -616,6 +616,58 @@ class TestReadRagged:
         with pytest.raises(ValueError, match=rf"MUST hold one uint64 word.*{section}"):
             list(read_ragged(LocalStore(grid), "g/field", **{channel: True}))
 
+    @pytest.mark.parametrize(
+        "channel,sibling,section",
+        [("locations", "geo_words", "§9"), ("times", "t_words", "§8.3")],
+    )
+    def test_sibling_shape_mismatch_refused(self, tmp_path, sharded, channel, sibling, section):
+        """§1.1/§8.3 (issue #46): a companion sibling MUST have the same
+        shape as the payload array — a doctored shape refuses at the open
+        gate, before any word is decoded."""
+        grid, _ = build_store(tmp_path, sharded=sharded, located=True, timed=True)
+        meta = json.loads((grid / f"g/{sibling}/zarr.json").read_text())
+        meta["shape"] = [32]
+        _write(grid, f"g/{sibling}/zarr.json", meta)
+        with pytest.raises(ValueError, match=rf"same shape and chunk geometry.*{section}"):
+            list(read_ragged(LocalStore(grid), "g/field", **{channel: True}))
+
+    @pytest.mark.parametrize(
+        "channel,sibling,section",
+        [("locations", "geo_words", "§9"), ("times", "t_words", "§8.3")],
+    )
+    def test_sibling_chunk_geometry_mismatch_refused(
+        self, tmp_path, sharded, channel, sibling, section
+    ):
+        """§1.1/§8.3 (issue #46): the chunk-geometry half of the MUST. Row
+        alignment cannot catch it — per-row words can still look aligned in
+        the rows a test happens to decode while chunk-boundary rows
+        mis-associate — so only the metadata comparison closes it."""
+        grid, _ = build_store(tmp_path, sharded=sharded, located=True, timed=True)
+        meta = json.loads((grid / f"g/{sibling}/zarr.json").read_text())
+        if sharded:
+            meta["codecs"][0]["configuration"]["chunk_shape"] = [2]
+        else:
+            meta["chunk_grid"]["configuration"]["chunk_shape"] = [2]
+        _write(grid, f"g/{sibling}/zarr.json", meta)
+        with pytest.raises(ValueError, match=rf"same shape and chunk geometry.*{section}"):
+            list(read_ragged(LocalStore(grid), "g/field", **{channel: True}))
+
+    def test_sibling_storage_geometry_is_not_the_gated_geometry(self, tmp_path, sharded):
+        """The deliberate boundary of the issue #46 gate: §1.5's STORAGE
+        geometry (sharded vs per-inner-chunk) is reader-transparent and
+        self-describing per array, so a sibling stored under the opposite
+        packaging with the same shape and read chunks still decodes."""
+        import shutil
+
+        grid, expected = build_store(tmp_path / "a", sharded=sharded, located=True)
+        other, _ = build_store(tmp_path / "b", sharded=not sharded, located=True)
+        shutil.rmtree(grid / "g/geo_words")
+        shutil.copytree(other / "g/geo_words", grid / "g/geo_words")
+        out = list(read_ragged(LocalStore(grid), "g/field", locations=True))
+        assert len(out) == len(CELLS)
+        for _word, values, locations in out:
+            assert len(locations) == len(values)
+
     def test_unknown_weights_declaration_refused_on_the_read_path(self, tmp_path, sharded):
         """§2.0's strict-check MUST rides every open (issue #43): a future
         weights vocabulary refuses before a single cell decodes."""

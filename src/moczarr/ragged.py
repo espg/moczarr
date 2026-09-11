@@ -770,6 +770,34 @@ def _require_word_element(element: RaggedElement, path: str, section: str) -> No
         )
 
 
+def _require_matching_geometry(
+    arr: zarr.Array, sibling: zarr.Array, field: str, path: str, section: str
+) -> None:
+    """The §1.1 companion geometry MUST: same shape and chunk geometry.
+
+    The other half of the sibling gate (issue #46), beside the element check
+    above. Row alignment cannot catch this class either: a sibling with
+    mismatched chunk geometry can still yield per-row words that look
+    aligned within the rows a decode happens to visit, while chunk-boundary
+    rows silently mis-associate words with the wrong cells. So the sibling's
+    own zarr metadata — shape and read-chunk shape — is compared against the
+    payload's at open, before a word is decoded. The §1.5 STORAGE geometry
+    (sharded vs per-inner-chunk) is deliberately not gated: the spec keeps
+    it reader-transparent and self-describing per array, and "chunk
+    geometry" in §1.1/§8.3 is the chunk grid, not the packaging.
+    """
+    if tuple(sibling.shape) != tuple(arr.shape) or tuple(sibling.chunks) != tuple(arr.chunks):
+        raise ValueError(
+            f"{path!r} has shape {tuple(sibling.shape)} and read chunks "
+            f"{tuple(sibling.chunks)}; its payload {field!r} has shape "
+            f"{tuple(arr.shape)} and read chunks {tuple(arr.chunks)} — a companion "
+            f"sibling MUST have the same shape and chunk geometry as the payload "
+            f"array it rides (spec §1.1/{section}): mismatched chunk boundaries can "
+            f"mis-associate words with the wrong cells without breaking per-row "
+            f"alignment, so a reader refuses rather than mis-decodes"
+        )
+
+
 def read_ragged(
     store: Store,
     field: str,
@@ -856,7 +884,10 @@ def read_ragged(
         it), a missing
         ``morton`` sibling, a populated cell with no written morton word, a
         companion sibling whose element is not one ``uint64`` word per row
-        (the §1.1/§8.3 element MUST, checked before any word is decoded) or
+        (the §1.1/§8.3 element MUST, checked before any word is decoded),
+        whose shape or read-chunk geometry disagrees with the payload
+        array's (the §1.1/§8.3 same-shape-and-chunk-geometry MUST, checked
+        at the same gate — issue #46) or
         whose row count disagrees with the payload (the
         §1.1/§8.3 row-alignment MUST), ``locations=True`` on an unlocated
         field, ``times=True`` on a field with no temporal companion or one
@@ -879,6 +910,7 @@ def read_ragged(
         loc_path = _sibling_path(field, element.locations)
         loc_arr, loc_element = open_ragged(store, loc_path, zarr_format=zarr_format)
         _require_word_element(loc_element, loc_path, "§9")
+        _require_matching_geometry(arr, loc_arr, field, loc_path, "§9")
         # §9: strict-check the declaration when present; absence is §2.2
         # verbatim (kitchen_sink, committed before §9, stays conformant).
         parse_companion_attrs(dict(loc_arr.attrs), domain="located", field=loc_path)
@@ -893,6 +925,7 @@ def read_ragged(
         times_path = _sibling_path(field, element.times)
         times_arr, times_element = open_ragged(store, times_path, zarr_format=zarr_format)
         _require_word_element(times_element, times_path, "§8.3")
+        _require_matching_geometry(arr, times_arr, field, times_path, "§8.3")
         # §8.3: the binding carries no declaration of its own — that MUST be
         # read off the sibling, and a bound sibling without it is
         # non-conformant (the binding key exists only under §8.3).
