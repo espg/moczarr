@@ -61,7 +61,7 @@ stays with :func:`moczarr.open_hive` / the coverage MOC.
 from __future__ import annotations
 
 import math
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from itertools import chain, groupby
 from typing import Literal
 
@@ -350,6 +350,11 @@ def chunk_z_range(
     count / resolution. Raises ``ValueError`` when the block has no
     populated cells with a finite quantile range, or on ``fit="raise"``
     overflow.
+
+    This is also how a multi-sensor consumer builds ONE shared axis: call it
+    once over every sensor's digests together, then hand the result to each
+    :func:`read_tensors` as ``n_bins=`` plus ``z_window=(z_lo, resolution)``
+    (issue #54) — derived per sensor, the windows land bins apart.
     """
     bounds = [b for b in (_cell_tail_bounds(d, bottom, top) for d in digests) if b is not None]
     if not bounds:
@@ -391,6 +396,120 @@ def chunk_z_range(
             res *= 2.0
         return float(z_lo), n_bins, res
     raise ValueError(f"unknown fit mode {fit!r}")
+
+
+def _explicit_window(
+    z_window: tuple[float, float] | Sequence[float], fit: FitMode
+) -> tuple[float, float]:
+    """Validate ``read_tensors``' explicit ``(z0, dz)`` window, once per call.
+
+    Returns the window as a float pair. Raises up front — before any store
+    object is fetched — on a malformed pair (with a dedicated message for
+    :func:`chunk_z_range`'s ``(z0, n_bins, dz)`` triple, the natural thing
+    to pipe in), on ``fit="collapse_bins"`` (collapsing reshapes each block
+    independently, and one fixed shared axis is the point of supplying the
+    window), and on an unknown ``fit`` (the derive path defers that check
+    to :func:`chunk_z_range`; the explicit path never gets there).
+
+    Every malformed shape lands on the pair message, including the ones
+    Python would otherwise report from inside the unpack: a bare scalar
+    (``z_window=40.0``) is not iterable, a string iterates into characters,
+    and a non-numeric element does not convert.
+    """
+    pair = f"z_window must be a (z0, dz) pair, got {z_window!r}"
+    if isinstance(z_window, str | bytes):
+        raise ValueError(pair)
+    try:
+        seq = tuple(z_window)
+    except TypeError:
+        raise ValueError(pair) from None
+    if len(seq) == 3:
+        raise ValueError(
+            "z_window is a (z0, dz) pair, not chunk_z_range's (z0, n_bins, dz) triple — "
+            "unpack it: z0, n_bins, dz = chunk_z_range(...); then "
+            "read_tensors(..., n_bins=n_bins, z_window=(z0, dz))"
+        )
+    if len(seq) != 2:
+        raise ValueError(pair)
+    try:
+        z0, dz = float(seq[0]), float(seq[1])
+    except (TypeError, ValueError):
+        raise ValueError(pair) from None
+    if not (math.isfinite(z0) and math.isfinite(dz)) or dz <= 0:
+        raise ValueError(f"z_window (z0, dz) must be finite with dz > 0, got ({z0}, {dz})")
+    if fit == "collapse_bins":
+        raise ValueError(
+            'fit="collapse_bins" cannot be combined with an explicit z_window: collapsing '
+            "shrinks each block's bin count independently, so the blocks would stop "
+            "sharing the one fixed axis the window pins (and a narrower window cannot "
+            'help a range escape it anyway) — use fit="raise" or fit="degrade_resolution"'
+        )
+    if fit not in ("raise", "degrade_resolution"):
+        raise ValueError(f"unknown fit mode {fit!r}")
+    return z0, dz
+
+
+def _fit_supplied_window(
+    digests: list[np.ndarray],
+    z0: float,
+    dz: float,
+    *,
+    n_bins: int,
+    bottom: float,
+    top: float,
+    fit: FitMode,
+) -> tuple[float, int, float]:
+    """One block's window when the caller supplied it: guard the trimmed range.
+
+    The explicit-window counterpart of :func:`chunk_z_range`, same trimmed
+    bounds and same return shape — so the guard is over the TRIMMED range,
+    not the raw data: weight outside the ``bottom``/``top`` quantiles is
+    dropped by :func:`rasterize_cell` with the guard passing, exactly as on
+    the derive path. The window is never moved — ``z0`` and
+    ``n_bins`` are pinned — so the fit policy degenerates to a truncation
+    guard: when the block's trimmed range escapes ``[z0, z0 + n_bins*dz]``,
+    ``fit="raise"`` refuses, and ``fit="degrade_resolution"`` doubles ``dz``
+    (powers of two, keeping ``z0`` and ``n_bins``) until the window covers
+    the range — visibly, since the yielded gain then differs from the
+    supplied ``dz``. A trimmed floor BELOW ``z0`` raises under both modes:
+    bins extend upward from the pinned origin, so no widening can reach
+    under it and rasterizing would silently drop that weight.
+
+    The bounds are compared RAW, unlike :func:`chunk_z_range`'s
+    ``floor``/``ceil``: there the rounding exists to CHOOSE an integer
+    origin from the data, here ``z0`` and ``dz`` are given, so quantizing
+    the measured bounds would refuse windows that fit (a digest at 40.7
+    against ``z0=40.5``) and coarsen against a fractional window top for
+    nothing. For the integer ``z0`` every derived window carries, the two
+    comparisons agree.
+    """
+    bounds = [b for b in (_cell_tail_bounds(d, bottom, top) for d in digests) if b is not None]
+    if not bounds:
+        raise ValueError("chunk has no populated cells with a finite quantile range")
+    lo_min = float(min(b[0] for b in bounds))
+    hi_max = float(max(b[1] for b in bounds))
+    if lo_min < z0:
+        raise ValueError(
+            f"trimmed z-floor {lo_min} lies below the supplied window origin z0={z0}: bins "
+            f"extend upward from z0, so that weight would be silently clipped and no fit "
+            f'policy can reach it (fit="degrade_resolution" only widens the bins upward). '
+            f"Derive the shared window over EVERY sensor's digests (chunk_z_range), or "
+            f"lower z0"
+        )
+    if hi_max <= z0 + n_bins * dz:
+        return z0, n_bins, dz
+    if fit == "degrade_resolution":
+        res = dz
+        while hi_max > z0 + n_bins * res:
+            res *= 2.0
+        return z0, n_bins, res
+    # fit == "raise" (_explicit_window refused every other mode up front)
+    raise ValueError(
+        f"trimmed z-range [{lo_min}, {hi_max}] escapes the supplied window "
+        f"[{z0}, {z0 + n_bins * dz}] ({n_bins} bins × {dz}); rasterizing onto it would "
+        f'silently clip — pass fit="degrade_resolution" to widen the bins from the '
+        f"pinned origin, or supply a window that covers the range"
+    )
 
 
 # --------------------------------------------------------------------------- #
@@ -554,6 +673,7 @@ def read_tensors(
     bottom: float = 0.05,
     top: float = 0.95,
     fit: FitMode = "raise",
+    z_window: tuple[float, float] | None = None,
     dtype: TensorDtype = "uint32",
     block_order: int | None = None,
     subtree: int | str | None = None,
@@ -566,9 +686,10 @@ def read_tensors(
     a t-digest field. Sweeps the field's vlen array one read chunk (one
     square cell block) at a time, visiting only the STORED objects
     (:func:`moczarr.ragged.iter_populated_chunks`). Per block: trim each
-    cell's tails, derive one shared z-window (:func:`chunk_z_range`),
-    rasterize every populated cell (:func:`rasterize_cell`), and place cells
-    by the bit deinterleave of their nested rank (:func:`rank_to_rowcol`).
+    cell's tails, derive one shared z-window (:func:`chunk_z_range`) — or
+    take the caller's ``z_window`` instead — rasterize every populated cell
+    (:func:`rasterize_cell`), and place cells by the bit deinterleave of
+    their nested rank (:func:`rank_to_rowcol`).
 
     ``block_order`` assembles the ``4**(chunk_order - block_order)`` read
     chunks of one block-order subtree into a single ``(2**d, 2**d, n_bins)``
@@ -591,12 +712,53 @@ def read_tensors(
     n_bins : int, optional
         Number of z-bins (default 128).
     resolution : float, optional
-        Bin width in value units (default 0.5).
+        Bin width in value units (default 0.5). Ignored when ``z_window`` is
+        given — the window's ``dz`` IS the bin width, and the derivation
+        this parameter feeds (:func:`chunk_z_range`) is skipped entirely.
     bottom, top : float, optional
         Lower/upper density-trim quantiles (default 0.05 / 0.95).
     fit : {"raise", "degrade_resolution", "collapse_bins"}, optional
         Behaviour when the trimmed range exceeds ``n_bins * resolution``
-        (default ``"raise"``).
+        (default ``"raise"``). With an explicit ``z_window`` the window is
+        pinned, so ``fit`` degenerates to a truncation guard: a block whose
+        trimmed range escapes the window ``"raise"``\\ s rather than clipping
+        silently, ``"degrade_resolution"`` doubles the bin width from the
+        pinned origin until the range fits (a degraded block is back off the
+        shared axis; supplying the window makes that COMPARABLE — the
+        consumer checks the yielded gain against the ``dz`` it passed, which
+        on the derive path there is no baseline to check against — but the
+        comparison is still the caller's to make; no flag records it), and
+        ``"collapse_bins"`` is refused (it reshapes blocks independently,
+        un-sharing the axis the window pins).
+    z_window : (float, float), optional
+        Explicit z-window ``(z0, dz)`` (default ``None`` — derive per
+        block): rasterize EVERY block onto the fixed axis whose bin ``i``
+        covers ``[z0 + i*dz, z0 + (i+1)*dz)``, skipping the per-block
+        :func:`chunk_z_range` (``resolution`` is unused; ``bottom``/``top``
+        still trim the tails the fit guard measures). The co-registration
+        hook (issue #54): windows derived per sensor put two tensors of the
+        SAME block on different axes — different ``z0``, and under
+        ``fit="degrade_resolution"`` possibly different gains, which no
+        shift reconciles. Derive ONE window over both sensors' digests with
+        the already-public :func:`chunk_z_range`, then hand it to each
+        read::
+
+            window = dict(n_bins=128, resolution=0.5, bottom=0.05,
+                          top=0.95, fit="degrade_resolution")
+            z0, n_bins, dz = chunk_z_range(atl03_digests + gedi_digests,
+                                           **window)
+            a = next(read_tensors(atl03_store, atl03_field, n_bins=n_bins,
+                                  z_window=(z0, dz), block_order=order))
+            g = next(read_tensors(gedi_store, gedi_field, n_bins=n_bins,
+                                  z_window=(z0, dz), block_order=order))
+
+        and the two cubes share one axis by construction. An explicit
+        window never clips the TRIMMED range silently — see ``fit`` above;
+        weight outside the ``bottom``/``top`` quantiles is dropped exactly
+        as on the derive path, which is what the guard measures on both.
+        This parameter is a moczarr extension: zagg's reader (the port
+        source) has no
+        explicit-window path, and the parity legs never pass it.
     dtype : {"uint16", "uint32", "float32"}, optional
         Output tensor dtype (default ``"uint32"``). Integer dtypes round
         counts; ``float32`` keeps fractions. A per-bin count exceeding the
@@ -648,8 +810,11 @@ def read_tensors(
         :func:`has_exact_occupancy` before keying on ``mask == 1``).
         ``(offset, gain)`` is the block's shared z-window ``(z_lo,
         resolution)``: bin ``i`` of every cell covers ``[offset + i*gain,
-        offset + (i+1)*gain)``. ``morton_index`` is the block's
-        coverage-cell morton id.
+        offset + (i+1)*gain)``. With an explicit ``z_window`` it echoes the
+        supplied ``(z0, dz)`` — except a block ``fit="degrade_resolution"``
+        widened, whose gain comes back larger than ``dz`` (the visible
+        record that this block is off the shared axis). ``morton_index`` is
+        the block's coverage-cell morton id.
 
     Raises
     ------
@@ -658,7 +823,13 @@ def read_tensors(
         missing ``morton`` sibling, an out-of-range ``block_order``, a block
         tensor over ``max_block_bytes``, a corrupt/misaligned occupancy
         sidecar, a ``subtree`` finer than the read chunks (or malformed /
-        too-deep), or (with ``fit="raise"``) a window overflow.
+        too-deep), or (with ``fit="raise"``) a window overflow. With
+        ``z_window``: a malformed pair (``chunk_z_range``'s 3-tuple gets a
+        pointed unpack hint), ``dz <= 0``, ``fit="collapse_bins"``, a block
+        whose trimmed floor lies below ``z0`` (under every fit mode), or
+        (with ``fit="raise"``) a block whose trimmed range escapes the
+        window — an explicit window refuses loudly rather than clip the
+        trimmed range.
     ImportError
         When zagg's digest algebra is not installed (``moczarr[zagg]``).
     """
@@ -666,6 +837,7 @@ def read_tensors(
         raise ValueError(f"unknown dtype {dtype!r}; expected one of {sorted(_TENSOR_DTYPES)}")
     out_dtype = _TENSOR_DTYPES[dtype]
     is_float = np.issubdtype(out_dtype, np.floating)
+    window = None if z_window is None else _explicit_window(z_window, fit)
 
     arr, element = open_ragged(store, field, zarr_format=zarr_format)
     morton = _morton_words(store, field, zarr_format)
@@ -730,14 +902,15 @@ def read_tensors(
             for start, populated in group
             for pos, raw in populated
         ]
-        z_lo, n_bins_c, resolution_c = chunk_z_range(
-            [digest for _rank, digest in cells],
-            n_bins=n_bins,
-            resolution=resolution,
-            bottom=bottom,
-            top=top,
-            fit=fit,
-        )
+        digests = [digest for _rank, digest in cells]
+        if window is None:
+            z_lo, n_bins_c, resolution_c = chunk_z_range(
+                digests, n_bins=n_bins, resolution=resolution, bottom=bottom, top=top, fit=fit
+            )
+        else:
+            z_lo, n_bins_c, resolution_c = _fit_supplied_window(
+                digests, *window, n_bins=n_bins, bottom=bottom, top=top, fit=fit
+            )
 
         words = np.asarray(morton[bstart : bstart + block_cells])
         tensor = np.zeros((block_side, block_side, n_bins_c), dtype=out_dtype)

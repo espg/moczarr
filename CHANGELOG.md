@@ -2,6 +2,36 @@
 
 ## Unreleased
 
+- `read_tensors` takes an explicit `z_window=(z0, dz)`
+  ([#54](https://github.com/espg/moczarr/issues/54)): rasterize every block
+  onto a caller-supplied fixed axis instead of deriving a window per block,
+  so co-registered multi-sensor reads share one axis **by construction** —
+  derive the window ONCE over both sensors' digests with the already-public
+  `chunk_z_range`, then hand its `(z0, n_bins, dz)` to each read as
+  `n_bins=` plus `z_window=(z0, dz)`. Derived per sensor, two tensors of
+  the SAME block land on different axes (measured on the public demo
+  stores: 12 bins apart on one block; different origin AND bin height on
+  another, which no shift reconciles) — the workaround was reimplementing
+  the reader's internals around the ragged decode, losing the tensor path,
+  the occupancy mask and the subtree restriction. The default (no
+  `z_window`) derive-per-block path is unchanged. An explicit window never
+  clips the **trimmed** range silently (weight outside `bottom`/`top` is
+  dropped exactly as on the derive path — the trimmed range is what both
+  paths measure): that range gates it —
+  `fit="raise"` refuses a block whose range escapes the window,
+  `fit="degrade_resolution"` keeps its meaning against the pinned origin
+  (doubles `dz`, holding `z0` and `n_bins`, until the range fits — which
+  the supplied window makes *comparable*: the yielded gain then differs
+  from the `dz` the caller passed, a baseline the derive path never had.
+  The comparison is still the caller's to make; #54's secondary ask, a
+  degrade the caller sees without comparing, stays open), a
+  trimmed floor BELOW `z0` refuses under both modes (bins extend upward
+  from the origin; no widening reaches under it), and `fit="collapse_bins"`
+  is refused up front (per-block reshaping un-shares the axis the window
+  pins). Malformed windows raise before any store object is fetched, with
+  a dedicated unpack hint for `chunk_z_range`'s 3-tuple. A moczarr
+  extension: zagg's reader (the port source) has no explicit-window path,
+  and the parity legs never pass it.
 - The multi-order assembly
   ([#36](https://github.com/espg/moczarr/issues/36), the #36b slice):
   `open_pyramid(store_root)` opens a pyramid store's whole resolution ladder
