@@ -4,11 +4,12 @@ Parity is pinned two ways against the committed SERC strata fixture
 (``tests/data/strata_hive``, written by zagg's production writer —
 ``tools/generate_strata_fixture.py``):
 
-- **Golden parity** (needs the ``zagg`` extra for the digest algebra): the
-  committed ``tests/data/strata_goldens/*.npy`` were computed by *zagg's*
+- **Golden parity** (runs everywhere — the digest algebra is native,
+  :mod:`moczarr.tdigest`, issue #64): the committed
+  ``tests/data/strata_goldens/*.npy`` were computed by *zagg's*
   ``readers.tdigest_tensor.read_tensors`` at generation time, so they pin
-  bit-identity against a frozen reference even when the installed zagg
-  drifts.
+  bit-identity against a frozen reference in every environment, zagg
+  installed or not.
 - **Live parity** (additionally needs zagg's post-#339 reader surface): the
   two readers run side by side on the same store and must agree exactly —
   end to end and helper by helper, since the reader logic is a port, not
@@ -31,15 +32,14 @@ Parity is pinned two ways against the committed SERC strata fixture
   always-on too; that is a dependency change for sign-off, so the probe
   stays.
 
-The layout kernel, the occupancy predicate and the whole mask channel, the
-``open_hive`` no-choke check, and the missing-extra error hint all run
-WITHOUT zagg — the mask is moczarr-owned (decoded through
-:mod:`moczarr.coverage`), so its contract is pinned in the core leg; the
-hint test runs only in a core (no-zagg) environment, so moczarr-only CI
-exercises it.
+Everything else — the layout kernel, the occupancy predicate, the whole
+mask channel, the ``open_hive`` no-choke check, and every golden-pinned
+``read_tensors`` behavior — runs WITHOUT zagg (issue #64: the algebra is
+:mod:`moczarr.tdigest`, the mask moczarr-owned via :mod:`moczarr.coverage`);
+the subprocess proof that the reader imports and reads with zagg MASKED
+lives in ``tests/test_tdigest.py``.
 """
 
-import importlib.util
 import json
 import math
 import random
@@ -99,9 +99,6 @@ CELL_ORDER = int(EXPECTED["cell_order"])
 #: leg runs wherever the extra installs. The ``subtree=`` leg needs 0.42.0
 #: (englacial/zagg#351) and stays probe-gated above the floor.
 ZAGG_PORT_COMMIT = "3890cb5"
-
-HAS_ZAGG = importlib.util.find_spec("zagg") is not None
-needs_zagg = pytest.mark.skipif(not HAS_ZAGG, reason="needs the moczarr[zagg] extra")
 
 
 def _zagg_reader():
@@ -567,14 +564,6 @@ class TestCellIndexReadPosture:
                 cell_index(store, "g/field", absent, 0, 0)
 
 
-@pytest.mark.skipif(HAS_ZAGG, reason="runs only in a core (no-zagg) environment")
-class TestMissingExtraHint:
-    def test_read_tensors_names_the_extra(self):
-        with pytest.raises(ImportError, match=r"moczarr\[zagg\]"):
-            list(read_tensors(_store(), SIGNAL))
-
-
-@needs_zagg
 class TestGoldenParity:
     """Bit-identity against the committed zagg-computed goldens."""
 
@@ -718,7 +707,6 @@ def _gapped_digest_store(tmp_path, chunks=(0, 4, 5, 6, 7, 12)):
     return LocalStore(grid)
 
 
-@needs_zagg
 class TestDepth2Placement:
     """Cell placement at depth 2, where Z-order and row-major diverge."""
 
@@ -752,7 +740,6 @@ class TestFluxPayloadTensorDtype:
             with pytest.raises(ValueError, match=r"weights 'flux'.*§2.0"):
                 next(iter(read_tensors(store, "g/h_tdigest", dtype=dtype)))
 
-    @needs_zagg
     def test_float32_reads_the_same_flux_payload(self, tmp_path):
         """The declaration changes what may be CLAIMED, not the bytes: the
         fractional dtype decodes the flux store to the counts store's own
@@ -767,7 +754,6 @@ class TestFluxPayloadTensorDtype:
             assert (window, word) == (ref_window, ref_word)
             np.testing.assert_array_equal(tensor, ref)
 
-    @needs_zagg
     def test_counts_payloads_keep_the_integer_default(self, tmp_path):
         """The gate is scoped to the declaration — an absent key is
         ``"counts"`` (§2.0) and reads under the ``uint32`` default."""
@@ -776,7 +762,6 @@ class TestFluxPayloadTensorDtype:
         assert tensor.dtype == np.uint32
 
 
-@needs_zagg
 class TestSymmetricMask:
     def test_both_strata_empty_cell_is_one_on_both_fields(self, tmp_path):
         """End to end through ``read_tensors``: an observed cell that stores no
@@ -789,7 +774,6 @@ class TestSymmetricMask:
             assert mask[0, 1] == 1
 
 
-@needs_zagg
 class TestGetPosture:
     """``read_tensors`` holds the module's one-GET-per-stored-object posture
     on the ``morton`` coordinate too, not just the digest payload: the
@@ -810,7 +794,6 @@ class TestGetPosture:
         assert len([g for g in store.gets if f"{GROUP}/morton/c/" in g[0]]) == 1
 
 
-@needs_zagg
 class TestFitPolicies:
     """All three behaviours when the trimmed range exceeds the window."""
 
@@ -946,7 +929,6 @@ class TestExplicitWindowValidation:
             list(read_tensors(_store(), SIGNAL, z_window=(0.0, 0.5), fit="clamp"))
 
 
-@needs_zagg
 class TestExplicitWindow:
     """Issue #54: a caller-supplied z-window co-registers multi-sensor reads."""
 
@@ -1252,7 +1234,6 @@ class TestSubtreeRefusalsAndWarnings:
         assert [w for w in rec if "outside this axis" in str(w.message)] == []
 
 
-@needs_zagg
 class TestSubtreeReadTensors:
     """Issue #29 ``subtree=`` on :func:`read_tensors`.
 
@@ -1381,7 +1362,6 @@ needs_zagg_subtree = pytest.mark.skipif(
 )
 
 
-@needs_zagg
 class TestSubtreeGetPosture:
     """The issue #29 acceptance pin: only covering stored objects fetched.
 
