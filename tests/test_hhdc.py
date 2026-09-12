@@ -13,24 +13,24 @@ Parity is pinned two ways against the committed SERC strata fixture
 - **Live parity** (additionally needs zagg's post-#339 reader surface): the
   two readers run side by side on the same store and must agree exactly —
   end to end and helper by helper, since the reader logic is a port, not
-  just the imported algebra. **zagg 0.40.0 is the first release carrying
-  that surface, and the extra's declared floor is ``zagg>=0.40``** — so
-  this leg is effectively always-on wherever the extra installs. The gates
-  stay surface probes rather than version compares, because the surface,
-  not the version string, is what the port depends on.
+  just the imported algebra. zagg 0.40.0 was the first release carrying
+  that surface and **the extra's declared floor is ``zagg>=0.53.0``**
+  (issue #59), so this leg is always-on wherever the extra installs. The
+  gates stay surface probes rather than version compares, because the
+  surface, not the version string, is what the port depends on — a rename
+  or retirement upstream must skip the leg loudly, not compare a version
+  and pass.
 - **``cell_index`` parity** (needs zagg's ``cell_index``, the reference
   implementation issue #52 ported): the two resolve every populated cell of
   the fixture to the same axis index, and refuse a coarser block id the same
-  way. Probe-gated for the same reason as the subtree leg — the function
-  post-dates the ``>=0.40`` floor.
+  way. Probe-gated for the same reason as the subtree leg, not because the
+  floor leaves it in doubt — ``cell_index`` predates ``>=0.53.0``.
 - **Subtree parity** (additionally needs zagg's ``subtree=`` read surface,
   englacial/zagg#351 — first released in **zagg 0.42.0**): the same
   side-by-side comparison for span-restricted reads, plus the warn/raise
-  edges. This one is genuinely conditional — ``needs_zagg_subtree`` skips
-  it on 0.40/0.41, where the goldens and the always-on live leg remain the
-  enforcement. Raising the extra's floor to ``>=0.42`` would make it
-  always-on too; that is a dependency change for sign-off, so the probe
-  stays.
+  edges. The ``>=0.53.0`` floor is well past 0.42, so this leg is always-on
+  too wherever the extra installs; ``needs_zagg_subtree`` stays a probe for
+  the same drift-alarm reason as the others.
 
 Everything else — the layout kernel, the occupancy predicate, the whole
 mask channel, the ``open_hive`` no-choke check, and every golden-pinned
@@ -95,9 +95,10 @@ CELL_ORDER = int(EXPECTED["cell_order"])
 #: in :mod:`moczarr.hhdc` mirrors: the englacial/zagg#336 fold. It carries no
 #: tag; zagg **0.40.0** is the first release carrying ``has_exact_occupancy``
 #: and ``rank_to_rowcol``, which is what made the live-parity leg reachable
-#: from PyPI at all — and the extra's declared floor is ``>=0.40``, so that
+#: from PyPI at all — and the extra's declared floor is ``>=0.53.0``, so that
 #: leg runs wherever the extra installs. The ``subtree=`` leg needs 0.42.0
-#: (englacial/zagg#351) and stays probe-gated above the floor.
+#: (englacial/zagg#351), also below the floor; it stays probe-gated as a
+#: drift alarm, not because the floor leaves it in doubt.
 ZAGG_PORT_COMMIT = "3890cb5"
 
 
@@ -1102,8 +1103,8 @@ class TestPortedSurface:
     them. Value parity below can only compare what still EXISTS — a rename or
     retirement upstream would silently reduce this file to self-certification,
     which is what these two checks catch. Gated like :class:`TestLiveParity`:
-    the surface probe passes from zagg 0.40.0 onward, which the extra's
-    ``>=0.40`` floor already guarantees.
+    the surface probe passes from zagg 0.40.0 onward, so the extra's
+    ``>=0.53.0`` floor already guarantees it wherever the extra installs.
     """
 
     PORTED = (
@@ -1486,9 +1487,11 @@ def _zagg_cell_index_reader():
 class TestCellIndexParity:
     """``cell_index`` side by side with the zagg function it was ported from.
 
-    Probe-gated like the ``subtree=`` leg: ``cell_index`` post-dates the
-    extra's declared ``zagg>=0.40`` floor, so the offline
-    :class:`TestCellIndex` class stays the enforcement wherever this skips.
+    Probe-gated like the ``subtree=`` leg — as a drift alarm, not a version
+    doubt: ``cell_index`` predates the extra's declared ``zagg>=0.53.0``
+    floor, so this runs wherever the extra installs, and the offline
+    :class:`TestCellIndex` class stays the enforcement where it does not
+    (no zagg, or a zagg that retired the function).
     """
 
     def test_every_populated_cell_agrees(self):
