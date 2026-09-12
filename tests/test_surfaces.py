@@ -553,6 +553,16 @@ class TestZaggSurfaceParity:
     ``test_tdigest.py``; this pins that ``quantile_surface`` /
     ``open_surface`` compose the kernel identically to a zagg-evaluated
     surface.
+
+    ``_expected`` reaches the union the same way ``surfaces.py`` does, so on
+    the store fixtures it is a mirror, not an oracle: none of their populated
+    cells carries a tied mean across strata, so dropping the ``(mean,
+    weight)`` tie key would not move a byte in the three fixture tests.
+    :meth:`test_hand_built_tie_union_matches_zagg` is the non-tautological
+    arm — a hand-built level whose strata SHARE centroid means, compared
+    against unions written out by hand rather than re-derived by the code
+    under test, so a mean-only sort fails here and not only in
+    ``TestQuantileSurface``.
     """
 
     def _expected(self, ds, fields, quantiles):
@@ -600,6 +610,37 @@ class TestZaggSurfaceParity:
         np.testing.assert_array_equal(
             surf["h_tdigest"].values, self._expected(ds, ["h_tdigest"], qs)
         )
+
+    def test_hand_built_tie_union_matches_zagg(self):
+        # The oracle arm: strata that SHARE centroid means, with the merged
+        # union spelled out by hand instead of re-derived through
+        # surfaces.py's own concatenate-and-lexsort. Cells 0 and 1 each carry
+        # a mean present in both strata with different weights, so a
+        # mean-only (stable) sort would hand the kernel the a-then-b order
+        # and miss these expectations; cell 2 is single-stratum with an
+        # internal tie, cell 3 is the empty/NaN placement.
+        from zagg.stats.tdigest import quantile_from_tdigest as zagg_quantile
+
+        a = [[[1.0, 1.0], [5.0, 10.0]], [[2.0, 5.0], [4.0, 3.0]], None, None]
+        b = [[[5.0, 1.0], [9.0, 1.0]], [[2.0, 1.0], [4.0, 7.0]], [[3.0, 2.0], [3.0, 9.0]], []]
+        unions = [
+            [[1.0, 1.0], [5.0, 1.0], [5.0, 10.0], [9.0, 1.0]],
+            [[2.0, 1.0], [2.0, 5.0], [4.0, 3.0], [4.0, 7.0]],
+            [[3.0, 2.0], [3.0, 9.0]],
+            None,  # both strata absent
+        ]
+        ds = _level(a, field="h_tdigest_a", extra={"h_tdigest_b": b})
+        got = quantile_surface(ds, ("h_tdigest_a", "h_tdigest_b"))["h_tdigest"].values
+
+        expected = np.full((len(DEFAULT_QUANTILES), len(unions)), np.nan, dtype=np.float64)
+        for j, union in enumerate(unions):
+            if union is None:
+                continue
+            arr = np.asarray(union, dtype=np.float32)
+            for i, q in enumerate(DEFAULT_QUANTILES):
+                expected[i, j] = zagg_quantile(arr, q)
+        np.testing.assert_array_equal(got, expected)
+        assert np.isnan(got[:, 3]).all() and np.isfinite(got[:, :3]).all()
 
 
 @pytest.mark.skipif(
