@@ -37,9 +37,15 @@ __all__ = [
     "quantile_from_tdigest",
 ]
 
-#: The compression budget every shipped zagg store is built with
-#: (``zagg.stats.tdigest._DEFAULT_DELTA``); informative per spec §2.3 — a
-#: reader never needs it to decode, only to fold digests it merges itself.
+#: zagg's *writer-library* default compression budget
+#: (``zagg.stats.tdigest._DEFAULT_DELTA``) — a fallback for a caller with no
+#: store to consult, NOT a property of the stores. A store declares the
+#: budget it was actually built with, per field, in the column's attrs at
+#: ``attributes.zagg_column.fields.<field>.delta`` (spec §2.0); every
+#: t-digest fixture in this repo declares ``16``, not 512. Informative per
+#: spec §2.3 — a reader never needs it to decode, only to fold digests it
+#: merges itself, and then it should pass the declared value
+#: (:func:`merge_tdigests_kway`).
 DEFAULT_DELTA = 512
 
 
@@ -125,8 +131,15 @@ def merge_tdigests_kway(digests: list[np.ndarray], delta: int = DEFAULT_DELTA) -
     digests : list of ndarray
         Centroid arrays ``(k, 2)`` per spec §2.1. Empty digests are skipped.
     delta : int, optional
-        Compression budget (default :data:`DEFAULT_DELTA`, every shipped
-        store's build budget).
+        Compression budget (default :data:`DEFAULT_DELTA`, zagg's
+        writer-library default — not a fact about any particular store).
+        **When folding digests read from a store, pass that store's declared
+        budget**: the column's attrs carry it per field at
+        ``attributes.zagg_column.fields.<field>.delta`` (spec §2.0; the
+        in-tree fixtures all declare ``16``). Folding a delta-16 ladder at
+        512 does not error — it silently re-compresses against a budget the
+        writer never used, leaving the folded rung inconsistent with every
+        other level of its own store.
 
     Returns
     -------
