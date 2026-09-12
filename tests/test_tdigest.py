@@ -325,14 +325,29 @@ class TestZaggParity:
 
 class TestReaderWithoutZagg:
     def test_surfaces_and_kernels_work_with_zagg_masked(self, tmp_path):
-        """The issue #64 acceptance: the reader decodes with zagg ABSENT.
+        """The issue #64 acceptance, belt-and-braces: the reader decodes
+        with zagg ABSENT even in an environment where zagg IS installed.
 
-        A subprocess masks zagg via an import hook (raising on any
-        ``zagg``/``zagg.*`` import — stronger than uninstalling, since a
-        stray lazy import fails loudly), then runs the previously
+        A subprocess masks zagg via a meta-path hook (raising on any
+        ``zagg``/``zagg.*`` ``find_spec``), then runs the previously
         zagg-gated paths end to end: ``open_surface`` on the kitchen_sink
-        strata fixture, ``read_tensors`` on the strata leaf, and the
-        kernels themselves.
+        strata fixture, ``read_tensors`` on the strata leaf, and the kernels
+        themselves.
+
+        What the mask is and is not: for the guarded idiom (``try: import
+        zagg / except ImportError``) it is indistinguishable from an absent
+        zagg — both raise, both get swallowed. It differs only for the
+        *probe* idiom, ``importlib.util.find_spec("zagg")``, which returns
+        ``None`` in a real no-zagg env but raises here. That is strictly
+        stricter, so the mask can only raise a FALSE ALARM, never let a
+        false pass through — worth knowing because the probe is exactly the
+        idiom this file's ``needs_zagg`` marker and ``test_surfaces.py``
+        use, and a ``src/`` module adopting it would fail here while working
+        fine in a real no-zagg env.
+
+        The load-bearing proof of reader independence is the no-zagg CI legs
+        running the WHOLE suite (the 3.11 leg, where the extra cannot even
+        install); this subprocess is the local, always-runs backstop.
         """
         kitchen = DATA / "spec" / "kitchen_sink"
         leaf = DATA / "strata_hive" / "4" / "3" / "3" / "1" / "4" / "43314.zarr"
@@ -368,7 +383,18 @@ class TestReaderWithoutZagg:
             assert cdf_from_tdigest(d, 4.0) == 3.0
             assert merge_tdigests_kway([d, d]).shape[1] == 2
 
-            assert not any(m == "zagg" or m.startswith("zagg.") for m in sys.modules)
+            # The mask really was in force for the run above — otherwise
+            # every assertion here would also pass with zagg importable and
+            # nothing would have been proven. (A sys.modules check cannot
+            # say this: the mask raises inside find_spec, so no zagg module
+            # can ever land there, mask working or not.)
+            import importlib.util
+            try:
+                importlib.util.find_spec("zagg")
+            except ImportError:
+                pass
+            else:
+                raise AssertionError("zagg mask never took effect")
             print("NO-ZAGG-OK")
         """)
         proc = subprocess.run(
