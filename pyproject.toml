@@ -7,6 +7,15 @@ name = "moczarr"
 dynamic = ["version"]
 description = "Sparse-DGGS xarray reader for morton-hive zarr stores (MOC domain, lazy dense views)"
 readme = "README.md"
+# Issue #64 dropped the floor to 3.11 so the zagg-free posture is provable
+# on an interpreter zagg cannot even install on. What 3.11 support MEANS is
+# an LTS-ish leg, not "current everything": 3.11 is past zarr's and numpy's
+# own floors, so that CI leg resolves to the last lines that still install
+# there — zarr 3.1.6 (3.2.0 moved to >=3.12) and numpy 2.4.6 (2.5.0 likewise)
+# — while the 3.12/3.13 legs track zarr 3.3+ / numpy 2.5+. The matrix is
+# therefore testing two zarr lines on purpose, and the cost is that any
+# zarr 3.2+ API this reader adopts has to stay behind a 3.1-compatible path
+# until the floor moves.
 requires-python = ">=3.11"
 license = {file = "LICENSE"}
 authors = [
@@ -93,8 +102,10 @@ test = [
 # zagg.stats.tdigest (tests/test_tdigest.py, the golden/live legs in
 # tests/test_hhdc.py, tests/test_surfaces.py's surface parity). Note zagg
 # itself floors at Python >=3.12, so the extra resolves only there — which
-# is exactly why it must never be load-bearing (core floors at 3.11, the
-# real binding constraint: xarray 2026.01 / zarr 3.1.5 / numcodecs 0.14).
+# is exactly why it must never be load-bearing (core floors at 3.11 — see
+# the note on ``requires-python``: the declared core floors are xarray
+# 2026.01 / zarr 3.1.5 / numcodecs 0.14, and on 3.11 the resolver is
+# additionally capped at zarr's last 3.11 line, 3.1.6).
 # Floor 0.53.0 (issue #59): the first zagg on mortie 1.0
 # (englacial/zagg#559); earlier zaggs import mortie names retired by the
 # ``mortie>=1.0.0`` floor above, so pinning past them fails at resolve time
