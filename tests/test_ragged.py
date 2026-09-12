@@ -339,6 +339,38 @@ class TestParseRaggedAttrs:
         )
         assert inside_only.times is None
 
+    def test_weights_declaration_surfaced_with_the_counts_default(self):
+        """§2.0 (issue #43): an absent ``weights`` key MUST be read as
+        ``counts`` — every pre-declaration store parses verbatim — and a
+        declared value is surfaced on the element."""
+        absent = parse_ragged_attrs({"ragged": {"spec": RAGGED_SPEC, "element": ELEMENT}})
+        assert absent.weights == "counts"
+        for declared in ("counts", "flux"):
+            element = parse_ragged_attrs(
+                {"ragged": {"spec": RAGGED_SPEC, "element": ELEMENT}, "weights": declared}
+            )
+            assert element.weights == declared
+
+    def test_weights_key_is_beside_the_block(self):
+        """§2.0 puts ``weights`` beside the ``ragged`` block (the ``/1``
+        block grammar is unchanged by that revision); a same-named key
+        inside the block is not the declaration."""
+        inside_only = parse_ragged_attrs(
+            {"ragged": {"spec": RAGGED_SPEC, "element": ELEMENT, "weights": "flux"}}
+        )
+        assert inside_only.weights == "counts"
+
+    @pytest.mark.parametrize("value", ["photon-rate", "Flux", None])
+    def test_unknown_weights_declaration_refused(self, value):
+        """§2.0: an unknown declaration is a future revision of that
+        section and MUST be refused, never read as either defined value —
+        the vocabulary is case-sensitive and an explicit ``null`` is not
+        the absent key."""
+        with pytest.raises(ValueError, match="never read as either defined value"):
+            parse_ragged_attrs(
+                {"ragged": {"spec": RAGGED_SPEC, "element": ELEMENT}, "weights": value}
+            )
+
 
 class TestParseCompanionAttrs:
     """The §8/§9 declaration gate: strict when present, silent when absent."""
@@ -583,6 +615,93 @@ class TestReadRagged:
         _write(grid, f"g/{sibling}/zarr.json", meta)
         with pytest.raises(ValueError, match=rf"MUST hold one uint64 word.*{section}"):
             list(read_ragged(LocalStore(grid), "g/field", **{channel: True}))
+
+    @pytest.mark.parametrize(
+        "channel,sibling,section",
+        [("locations", "geo_words", "§9"), ("times", "t_words", "§8.3")],
+    )
+    def test_sibling_shape_mismatch_refused(self, tmp_path, sharded, channel, sibling, section):
+        """§1.1/§8.3 (issue #46): a companion sibling MUST have the same
+        shape as the payload array — a doctored shape refuses at the open
+        gate, before any word is decoded."""
+        grid, _ = build_store(tmp_path, sharded=sharded, located=True, timed=True)
+        meta = json.loads((grid / f"g/{sibling}/zarr.json").read_text())
+        meta["shape"] = [32]
+        _write(grid, f"g/{sibling}/zarr.json", meta)
+        with pytest.raises(ValueError, match=rf"same shape and chunk geometry.*{section}"):
+            list(read_ragged(LocalStore(grid), "g/field", **{channel: True}))
+
+    @pytest.mark.parametrize("level", ["chunk_grid", "read_chunks"])
+    @pytest.mark.parametrize(
+        "channel,sibling,section",
+        [("locations", "geo_words", "§9"), ("times", "t_words", "§8.3")],
+    )
+    def test_sibling_chunk_geometry_mismatch_refused(
+        self, tmp_path, sharded, channel, sibling, section, level
+    ):
+        """§1.1/§8.3 (issue #46): the chunk-geometry half of the MUST, at
+        BOTH levels the geometry has. Row alignment cannot catch it —
+        per-row words can still look aligned in the rows a test happens to
+        decode while chunk-boundary rows mis-associate — so only the
+        metadata comparison closes it. Under sharding the levels are
+        distinct metadata (the declared ``chunk_grid`` is the shard span,
+        which ``zarr.Array.shards`` reports; the sharding codec's
+        ``chunk_shape`` is the read chunk, which ``zarr.Array.chunks``
+        reports), so each is doctored on its own; on the flat geometry they
+        are one key and the two cases coincide."""
+        grid, _ = build_store(tmp_path, sharded=sharded, located=True, timed=True)
+        meta = json.loads((grid / f"g/{sibling}/zarr.json").read_text())
+        if sharded and level == "read_chunks":
+            meta["codecs"][0]["configuration"]["chunk_shape"] = [2]
+        else:
+            meta["chunk_grid"]["configuration"]["chunk_shape"] = [8 if sharded else 2]
+        _write(grid, f"g/{sibling}/zarr.json", meta)
+        with pytest.raises(ValueError, match=rf"same shape and chunk geometry.*{section}"):
+            list(read_ragged(LocalStore(grid), "g/field", **{channel: True}))
+
+    def test_sibling_under_the_opposite_storage_geometry_refused(self, tmp_path, sharded):
+        """§1.1 binds the PAIR, so §1.5's two geometries are not
+        interchangeable ACROSS it: a sibling packaged the other way has a
+        different declared chunk grid (shard span vs read chunk) even with
+        matching shape and read chunks, and refuses. §1.5's
+        reader-transparency sentence is about a SINGLE array being
+        self-describing — one reader path over either packaging — not about
+        a bound pair disagreeing."""
+        import shutil
+
+        grid, _expected = build_store(tmp_path / "a", sharded=sharded, located=True)
+        other, _ = build_store(tmp_path / "b", sharded=not sharded, located=True)
+        shutil.rmtree(grid / "g/geo_words")
+        shutil.copytree(other / "g/geo_words", grid / "g/geo_words")
+        with pytest.raises(ValueError, match=r"same shape and chunk geometry.*§9"):
+            list(read_ragged(LocalStore(grid), "g/field", locations=True))
+
+    def test_unknown_weights_declaration_refused_on_the_read_path(self, tmp_path, sharded):
+        """§2.0's strict-check MUST rides every open (issue #43): a future
+        weights vocabulary refuses before a single cell decodes."""
+        grid, _ = build_store(tmp_path, sharded=sharded)
+        meta = json.loads((grid / "g/field/zarr.json").read_text())
+        meta["attributes"]["weights"] = "photon-rate"
+        _write(grid, "g/field/zarr.json", meta)
+        with pytest.raises(ValueError, match="never read as either defined value"):
+            list(read_ragged(LocalStore(grid), "g/field"))
+
+    def test_flux_declared_store_decodes_and_is_loudly_typed(self, tmp_path, sharded):
+        """§2.0: payload bytes decode identically under either declaration
+        — the gate changes what a consumer may claim, not the values — and
+        ``open_ragged`` surfaces the declaration for exactly that claim."""
+        grid, expected = build_store(tmp_path, sharded=sharded)
+        meta = json.loads((grid / "g/field/zarr.json").read_text())
+        meta["attributes"]["weights"] = "flux"
+        meta["attributes"]["gain"] = {"name": "unit-test-gain", "version": "1"}
+        _write(grid, "g/field/zarr.json", meta)
+        _arr, element = open_ragged(LocalStore(grid), "g/field")
+        assert element.weights == "flux"
+        out = dict(read_ragged(LocalStore(grid), "g/field"))
+        words = {morton_word(SHARD + TAILS[c]): c for c in CELLS}
+        assert set(out) == set(words)
+        for word, values in out.items():
+            np.testing.assert_array_equal(values, expected[words[word]])
 
     def test_payload_without_morton_word_raises(self, tmp_path, sharded):
         words = np.array([morton_word(SHARD + t) for t in TAILS], dtype="<u8")
