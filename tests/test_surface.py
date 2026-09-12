@@ -53,6 +53,11 @@ WORKFLOW = [
     "join_coarse",
     "morton_decimal",
     "parent_cells",
+    # the gridlook feeder: dense percentile surfaces + the picker ladder
+    # (issue #21, the gridlook#10 Phase-3 contract)
+    "open_surface",
+    "quantile_surface",
+    "read_ladder",
 ]
 
 

@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+- The gridlook feeder ([#21](https://github.com/espg/moczarr/issues/21)):
+  `quantile_surface` / `open_surface` materialize a level's stored t-digest
+  field into a dense `(quantile, cells)` float surface — the requested
+  quantiles a real xarray dimension (default `[0.02, 0.15, 0.50, 0.85,
+  0.98]`, the STV percentile-slicing conventions), the `morton` coordinate
+  carried, the caller's fill (default NaN) where a cell holds no digest,
+  exact fields riding along un-evaluated via `carry=` (or alone via
+  `field=None`), and strata stores answering per-stratum or merged-total
+  surfaces by argument (the merge is the lossless concatenate-and-sort
+  t-digest union — no re-compression, and order-independent: naming the
+  strata the other way round is the same surface). Evaluation is zagg's
+  `quantile_from_tdigest` per cell through the `moczarr[zagg]` extra, with
+  centroids ordered by `(mean, weight)` first — by mean for the
+  unsorted-concatenation trap, by weight within a mean because the kernel's
+  cumulative-weight walk reads tied centroids in the order it is handed
+  them.
+  `read_ladder` types the picker contract (espg/gridlook#10 Phase 3):
+  declared orders, materialized orders (overview presence via
+  `read_pyramid`, column presence from the §4.6 columns' own `groups`
+  maps — declared ≠ materialized is a legal recorded state the picker must
+  see), and per-order resolution via `mortie.order2res`.
 - The multi-order assembly
   ([#36](https://github.com/espg/moczarr/issues/36), the #36b slice):
   `open_pyramid(store_root)` opens a pyramid store's whole resolution ladder
