@@ -1,9 +1,11 @@
 """Percentile surfaces + the picker ladder: the gridlook feeder (issue #21).
 
 Two acceptance laws under test. (1) Evaluation parity: every value in a
-``(quantile, cells)`` surface IS ``zagg.stats.tdigest.quantile_from_tdigest``
-on that cell's stored digest — per cell, per quantile, on the shared spec
-fixtures — with the standing digest traps covered by hand-built bytes (the
+``(quantile, cells)`` surface IS ``moczarr.tdigest.quantile_from_tdigest``
+(the native kernel, issue #64 — itself pinned value-exact against zagg's in
+``test_tdigest.py``) on that cell's stored digest — per cell, per quantile,
+on the shared spec fixtures — with the standing digest traps covered by
+hand-built bytes (the
 empty cell, the single-centroid digest, the 0/1 endpoints, and the
 unsorted-concatenation guard: centroids ordered by ``(mean, weight)``
 before the interp-based kernel, the second key canonicalizing the ties the
@@ -21,6 +23,7 @@ the read+evaluate timing the issue's performance posture asks for.
 """
 
 import copy
+import importlib.util
 import json
 import os
 import shutil
@@ -32,6 +35,7 @@ import pytest
 import xarray as xr
 
 from moczarr import open_level, read_manifest
+from moczarr import tdigest as mz_tdigest
 from moczarr.pyramid import OrderPresence
 from moczarr.ragged import RAGGED_ATTR, RAGGED_SPEC, decode_cell, parse_ragged_attrs
 from moczarr.surfaces import (
@@ -42,10 +46,6 @@ from moczarr.surfaces import (
     open_surface,
     quantile_surface,
     read_ladder,
-)
-
-zagg_tdigest = pytest.importorskip(
-    "zagg.stats.tdigest", reason="surfaces evaluate through the moczarr[zagg] extra"
 )
 
 DATA = Path(__file__).parent / "data"
@@ -96,7 +96,7 @@ def _level(cells, *, field="h_tdigest", extra=None):
 
 
 class TestQuantileSurface:
-    def test_values_are_the_zagg_kernel_per_cell(self):
+    def test_values_are_the_native_kernel_per_cell(self):
         # The issue #21 acceptance: dense output matches quantile_from_tdigest
         # per cell on a shared fixture — here the temporal store's native
         # level, whose digests are real writer bytes.
@@ -115,7 +115,7 @@ class TestQuantileSurface:
                     assert np.isnan(got)
                 else:
                     populated += 1
-                    assert got == zagg_tdigest.quantile_from_tdigest(digest, q)
+                    assert got == mz_tdigest.quantile_from_tdigest(digest, q)
         assert populated > 0  # the fixture holds real digests
         # morton is carried verbatim, as plain values.
         np.testing.assert_array_equal(
@@ -207,9 +207,7 @@ class TestQuantileSurface:
             union = np.concatenate(parts, axis=0)
             union = union[np.lexsort((union[:, 1], union[:, 0]))]
             for i, q in enumerate(DEFAULT_QUANTILES):
-                assert surf["h_tdigest"].values[i, j] == zagg_tdigest.quantile_from_tdigest(
-                    union, q
-                )
+                assert surf["h_tdigest"].values[i, j] == mz_tdigest.quantile_from_tdigest(union, q)
 
     def test_merged_total_is_order_independent_under_mean_ties(self):
         # The tie case the flipped-argument law actually turns on: two strata
@@ -226,7 +224,7 @@ class TestQuantileSurface:
         # …and the canonical order is the one the kernel is handed.
         union = np.asarray([[1.0, 1.0], [5.0, 1.0], [5.0, 10.0], [9.0, 1.0]], dtype=np.float32)
         for i, q in enumerate(DEFAULT_QUANTILES):
-            assert ab["h_tdigest"].values[i, 0] == zagg_tdigest.quantile_from_tdigest(union, q)
+            assert ab["h_tdigest"].values[i, 0] == mz_tdigest.quantile_from_tdigest(union, q)
 
     def test_per_stratum_vs_merged_parity(self):
         # kitchen_sink's real writer bytes: per-stratum surfaces are the
@@ -537,6 +535,71 @@ class TestReadLadder:
         assert isinstance(ladder, Ladder) and isinstance(ladder.levels[0], LadderLevel)
         with pytest.raises(AttributeError):
             ladder.levels = ()  # frozen — the PyramidInfo posture
+
+
+@pytest.mark.skipif(
+    importlib.util.find_spec("zagg") is None,
+    reason="native-vs-zagg surface parity needs the moczarr[zagg] extra",
+)
+class TestZaggSurfaceParity:
+    """The issue #64 gate at surface granularity: whole-array equality.
+
+    The production path evaluates through the NATIVE kernel
+    (``moczarr.tdigest``); these tests recompute every cell through
+    ``zagg.stats.tdigest.quantile_from_tdigest`` on the same decoded digests
+    (same ``(mean, weight)`` canonical order) and assert the whole
+    ``(quantile, cells)`` arrays equal — exact values, NaN placement
+    included. Kernel-level parity (fixtures, merges, fuzz) lives in
+    ``test_tdigest.py``; this pins that ``quantile_surface`` /
+    ``open_surface`` compose the kernel identically to a zagg-evaluated
+    surface.
+    """
+
+    def _expected(self, ds, fields, quantiles):
+        from zagg.stats.tdigest import quantile_from_tdigest as zagg_quantile
+
+        columns = [np.asarray(ds[f].values, dtype=object) for f in fields]
+        elements = [parse_ragged_attrs(ds[f].attrs, field=f) for f in fields]
+        n = ds.sizes["cells"]
+        out = np.full((len(quantiles), n), np.nan, dtype=np.float64)
+        for j in range(n):
+            parts = [
+                d
+                for column, element in zip(columns, elements)
+                if len(d := decode_cell(column[j], element))
+            ]
+            if not parts:
+                continue
+            union = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
+            if len(union) > 1:
+                union = union[np.lexsort((union[:, 1], union[:, 0]))]
+            for i, q in enumerate(quantiles):
+                out[i, j] = zagg_quantile(union, q)
+        return out
+
+    @pytest.mark.parametrize("field", ["h_tdigest_signal", "h_tdigest_noise"])
+    def test_kitchen_sink_per_stratum_surface_matches_zagg(self, field):
+        ds = open_level(KITCHEN, 6)
+        surf = quantile_surface(ds, field)
+        np.testing.assert_array_equal(
+            surf[field].values, self._expected(ds, [field], DEFAULT_QUANTILES)
+        )
+
+    def test_kitchen_sink_merged_surface_matches_zagg(self):
+        fields = ("h_tdigest_signal", "h_tdigest_noise")
+        surf = open_surface(KITCHEN, 6, fields)
+        ds = open_level(KITCHEN, 6)
+        np.testing.assert_array_equal(
+            surf["h_tdigest"].values, self._expected(ds, fields, DEFAULT_QUANTILES)
+        )
+
+    def test_temporal_surface_matches_zagg(self):
+        qs = [0.0, 0.25, 0.5, 0.75, 1.0]
+        ds = open_level(TEMPORAL, 6)
+        surf = quantile_surface(ds, "h_tdigest", qs)
+        np.testing.assert_array_equal(
+            surf["h_tdigest"].values, self._expected(ds, ["h_tdigest"], qs)
+        )
 
 
 @pytest.mark.skipif(

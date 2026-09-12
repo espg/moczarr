@@ -68,11 +68,23 @@ def _fixture_digest_fields() -> list[tuple[str, str]]:
 
 def _fixture_digests() -> list[np.ndarray]:
     """Every populated digest stored in the in-tree fixtures."""
-    out = []
+    return [d for group in _fixture_digest_groups().values() for d in group]
+
+
+def _fixture_digest_groups() -> dict[str, list[np.ndarray]]:
+    """Fixture digests grouped per store root — the merge-legal unit.
+
+    Spec §2.0 makes merges legal only between payloads sharing a ``weights``
+    declaration (counts with counts, flux with flux), so the parity gate
+    merges within one store's fields (the reader's real fold: strata of one
+    leaf), never across stores — the flux fixture must not fold into the
+    counts stores' digests.
+    """
+    groups: dict[str, list[np.ndarray]] = {}
     for root, field in _fixture_digest_fields():
         for _word, values in read_ragged(LocalStore(root), field):
-            out.append(np.asarray(values, dtype=np.float32))
-    return out
+            groups.setdefault(root, []).append(np.asarray(values, dtype=np.float32))
+    return groups
 
 
 class TestQuantileNative:
@@ -231,22 +243,23 @@ class TestZaggParity:
     def test_fixture_kway_merges_are_byte_identical(self):
         from zagg.stats import tdigest as zt
 
-        digests = _fixture_digests()
-        assert len(digests) > 1
+        groups = [g for g in _fixture_digest_groups().values() if len(g) > 1]
+        assert groups  # the tree carries multi-digest stores
         rng = np.random.default_rng(17)
-        for delta in (8, 64, DEFAULT_DELTA):
-            for trial in range(3):
-                perm = [digests[i] for i in rng.permutation(len(digests))]
-                np.testing.assert_array_equal(
-                    merge_tdigests_kway(perm, delta=delta),
-                    zt.merge_tdigests_kway(perm, delta=delta),
-                )
+        for digests in groups:
+            for delta in (8, 64, DEFAULT_DELTA):
+                for _trial in range(3):
+                    perm = [digests[i] for i in rng.permutation(len(digests))]
+                    np.testing.assert_array_equal(
+                        merge_tdigests_kway(perm, delta=delta),
+                        zt.merge_tdigests_kway(perm, delta=delta),
+                    )
 
     def test_merged_fixture_strata_evaluate_identically(self):
-        # The reader's real fold: strata unions, then evaluation on the merge.
-        digests = _fixture_digests()
-        merged = merge_tdigests_kway(digests)
-        self._assert_eval_parity([merged])
+        # The reader's real fold: per-store strata unions, then evaluation
+        # on each merge.
+        for digests in _fixture_digest_groups().values():
+            self._assert_eval_parity([merge_tdigests_kway(digests)])
 
     def test_seeded_fuzz_parity(self):
         # Beyond the fixtures: duplicate means, exact (mean, weight) ties,
