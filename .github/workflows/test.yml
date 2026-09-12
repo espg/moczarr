@@ -12,13 +12,18 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        python-version: ['3.12', '3.13']
+        # 3.11 is the floor leg (issue #64): zagg itself needs >=3.12, so it
+        # cannot even install there — the leg exists BECAUSE the reader no
+        # longer needs it (native t-digest kernels), and it runs the whole
+        # suite, surfaces included, with the parity tests skipping.
+        python-version: ['3.11', '3.12', '3.13']
         extras: ['--extra test --extra xdggs']
         include:
-          # moczarr[zagg] live-parity leg (issue #19, espg-approved): with a
-          # real zagg installed, the importorskip("zagg") parity tests run
-          # instead of skipping — the committed goldens remain the base
-          # legs' enforcement.
+          # moczarr[zagg] parity leg (issue #19; demoted to parity/examples
+          # only by issue #64): with a real zagg installed, the parity gates
+          # (test_tdigest.py, the golden/live hhdc legs, the surface parity
+          # class) run instead of skipping — the committed goldens remain
+          # the base legs' enforcement.
           - python-version: '3.12'
             extras: '--extra test --extra xdggs --extra zagg'
 
