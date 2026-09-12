@@ -177,13 +177,20 @@ def quantile_from_tdigest(digest: np.ndarray, q: float) -> float:
     inverse CDF, clamped to ``means[0]`` / ``means[-1]`` at the ends. A
     single-observation interval returns its centroid mean exactly.
 
-    ``digest`` must satisfy spec §2.1's stored order (ascending by mean); a
-    concatenation must be re-sorted first (module docstring, trap 1).
-
     Parameters
     ----------
     digest : ndarray, shape (k, 2)
-        Centroid array per spec §2.1.
+        Centroid array per spec §2.1, in **canonical order**: a stored
+        digest as read is mean-ascending (§2.1's stored order, which is all
+        §2.1 mandates); anything assembled from more than one digest must
+        first be re-sorted ascending by ``(mean, weight)`` (module
+        docstring, trap 1). The weight tie-key is not decoration — the rank
+        walk is ``np.cumsum(weights)``, so two centroids sharing a mean give
+        different answers in different orders, and §2.1 alone leaves that
+        order to the writer. A conforming stored digest that carries tied
+        means therefore still has to be canonicalized before it reaches this
+        kernel; :func:`merge_tdigests_kway` and :mod:`moczarr.surfaces`
+        lexsort on ``(mean, weight)`` for exactly that reason.
     q : float
         Quantile in [0, 1].
 
@@ -228,13 +235,19 @@ def cdf_from_tdigest(digest: np.ndarray, x: float | np.ndarray) -> float | np.nd
     that fills evenly-spaced value bins from a digest
     (:func:`moczarr.hhdc.rasterize_cell`).
 
-    ``digest`` must satisfy spec §2.1's stored order (ascending by mean); a
-    concatenation must be re-sorted first (module docstring, trap 1).
-
     Parameters
     ----------
     digest : ndarray, shape (k, 2)
-        Centroid array per spec §2.1.
+        Centroid array per spec §2.1, in **canonical order** — the same
+        precondition :func:`quantile_from_tdigest` documents: mean-ascending
+        as stored (§2.1), and ascending by ``(mean, weight)`` for anything
+        assembled from more than one digest, since the ``cum_center`` walk
+        is order-sensitive across centroids sharing a mean and §2.1 pins
+        only the mean key. The degenerate all-means-equal digest is the one
+        case the tie key cannot separate: ``np.interp`` sees a constant
+        ``xp`` and steps to the last centroid's position at the shared mean
+        — still monotone, and value-identical to zagg, which evaluates the
+        same degenerate ``np.interp``.
     x : float or ndarray
         Value(s) at which to evaluate.
 
