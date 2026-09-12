@@ -199,6 +199,33 @@ class TestKwayNative:
         b = _digest([[5.0, 1.0], [9.0, 1.0]])
         np.testing.assert_array_equal(merge_tdigests_kway([a, b]), merge_tdigests_kway([b, a]))
 
+    @pytest.mark.parametrize(
+        "bad",
+        [
+            [[1.0, 0.0], [2.0, 3.0]],  # zero -> total 0 -> NaN means
+            [[1.0, -1.0], [2.0, 3.0]],  # negative -> cumw non-monotonic
+            [[1.0, float("nan")], [2.0, 3.0]],  # NaN -> every comparison False
+        ],
+        ids=["zero", "negative", "nan"],
+    )
+    def test_non_positive_weights_are_refused_not_silently_misfolded(self, bad):
+        # Spec §2.0/§2.1 make weights strictly positive; _compress assumes it
+        # and fails SILENTLY when it does not hold (NaN means, or every
+        # sub-centroid emitted as its own row with the delta budget
+        # abandoned). Flux payloads are writer-computed float32, so the
+        # reader has no writer-side guarantee — it refuses the bytes.
+        d = _digest(bad)
+        ok = _digest([[1.0, 1.0], [2.0, 1.0]])
+        with pytest.raises(ValueError, match="strictly positive"):
+            merge_tdigests_kway([d, ok])
+        with pytest.raises(ValueError, match="strictly positive"):
+            merge_tdigests_kway([d])  # the pass-through path is guarded too
+
+    def test_empty_inputs_are_not_weight_checked(self):
+        # The (0, 2) absent-cell payload has no weights to be positive.
+        out = merge_tdigests_kway([np.empty((0, 2), dtype=np.float32)] * 2)
+        assert out.shape == (0, 2)
+
     def test_weight_conserved_means_sorted_delta_capped(self):
         rng = np.random.default_rng(13)
         digests = self._random_digests(rng, 40)

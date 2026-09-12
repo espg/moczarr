@@ -130,6 +130,17 @@ def merge_tdigests_kway(digests: list[np.ndarray], delta: int = DEFAULT_DELTA) -
     ----------
     digests : list of ndarray
         Centroid arrays ``(k, 2)`` per spec §2.1. Empty digests are skipped.
+        **Weights must be strictly positive.** Spec §2.0/§2.1 make them so,
+        but the reader has no writer-side guarantee for a float ``weights:
+        "flux"`` payload, and the failure is silent rather than loud: a zero
+        weight drives the rank denominator ``cumw[-1]`` to 0 and NaNs every
+        output mean, a negative one breaks the cumulative-weight
+        monotonicity ``_compress``'s ``searchsorted`` walk assumes and
+        splits every sub-centroid into its own output row. Weight is
+        conserved either way, the means are not, and the delta budget is
+        quietly abandoned — so non-conformant bytes are refused here (one
+        vectorized pass over data already in cache) rather than folded into
+        a wrong digest.
     delta : int, optional
         Compression budget (default :data:`DEFAULT_DELTA`, zagg's
         writer-library default — not a fact about any particular store).
@@ -147,11 +158,23 @@ def merge_tdigests_kway(digests: list[np.ndarray], delta: int = DEFAULT_DELTA) -
         Merged, re-compressed centroid array; ``(0, 2)`` when every input is
         empty. A single non-empty input is returned as-is (float32 copy, no
         re-compression — already a valid digest).
+
+    Raises
+    ------
+    ValueError
+        If any non-empty input carries a weight that is not strictly
+        positive (zero, negative, or NaN).
     """
     arrs = [np.asarray(d, dtype=np.float64) for d in digests]
     arrs = [d for d in arrs if d.size]
     if not arrs:
         return np.empty((0, 2), dtype=np.float32)
+    for d in arrs:
+        if not (d[:, 1] > 0.0).all():
+            raise ValueError(
+                "t-digest centroid weights must be strictly positive (spec §2.0/§2.1); "
+                f"got {float(d[:, 1].min())} in a {len(d)}-centroid input"
+            )
     if len(arrs) == 1:
         return arrs[0].astype(np.float32)
 
