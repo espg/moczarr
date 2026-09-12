@@ -18,25 +18,23 @@ Three deliberate seams:
   ``y``, col = ``x``, ``tensor[0, 0]`` at the block subtree's **south
   corner** (gridlook's texture convention, ``bit_combine(j, i)``), matching
   zagg's ``readers/_layout.py`` exactly.
-- **Digest algebra** — rasterization needs zagg's t-digest CDF/quantile
-  (``cdf_from_tdigest``/``quantile_from_tdigest``). It is IMPORTED from
-  zagg, never vendored (vendoring is parity drift by construction): install
-  the extra, ``pip install 'moczarr[zagg]'``. The import is lazy, so
-  everything else in this module (masks, occupancy, the layout kernel)
-  works without it. The seam is the *algebra*, and only that: the reader
-  logic around it (:func:`rasterize_cell`, :func:`chunk_z_range`, the
-  occupancy/mask helpers, the :func:`read_tensors` body) is a **port** of
-  zagg's ``readers/tdigest_tensor.py``, several functions logic-identical.
+- **Digest algebra** — rasterization needs the t-digest CDF/quantile
+  (``cdf_from_tdigest``/``quantile_from_tdigest``). It is moczarr's own,
+  pure numpy (:mod:`moczarr.tdigest`, issue #64): no reader function needs
+  zagg installed. The drift risk that once justified importing it from zagg
+  is held the other way now — by the parity gate (``tests/test_tdigest.py``),
+  exact value equality against ``zagg.stats.tdigest`` under the demoted
+  ``moczarr[zagg]`` extra (parity + examples only, never load-bearing). The
+  reader logic around the algebra (:func:`rasterize_cell`,
+  :func:`chunk_z_range`, the occupancy/mask helpers, the
+  :func:`read_tensors` body) remains a **port** of zagg's
+  ``readers/tdigest_tensor.py``, several functions logic-identical.
   That duplication is deliberate and temporary — zagg's reader is expected to
   retire in moczarr's favour — but until then it is a real drift surface,
   held by the committed goldens plus ``TestLiveParity``. That live leg needs
-  zagg's post-englacial/zagg#339 reader surface: **zagg 0.40.0 is the first
-  release to carry it** (0.39.0's reader predates the deinterleave, so the
-  leg silently skipped against the declared ``zagg>=0.39`` floor — the
-  goldens were the only enforcement). Verified against the 0.40.0 sdist; the
-  extra's floor is still ``>=0.39``, and bumping it to ``>=0.40`` — which
-  turns the parity legs from skip-guarded into always-on — is a dependency
-  change awaiting sign-off, not something this module can assume.
+  zagg's post-englacial/zagg#339 reader surface (zagg 0.40.0 was the first
+  release to carry it; the extra's floor is ``>=0.53``, so wherever the
+  extra installs, the parity legs run).
 - **Occupancy** — the mask channel decodes the hive leaf's ``coverage.moc``
   occupancy sidecar through moczarr's own frozen bitmap convention
   (:func:`moczarr.coverage.decode_bitmap`), never through zagg.
@@ -88,6 +86,7 @@ from moczarr.ragged import (
     open_ragged,
     stored_chunk_spans,
 )
+from moczarr.tdigest import cdf_from_tdigest, quantile_from_tdigest
 
 __all__ = [
     "block_rank",
@@ -269,21 +268,8 @@ def block_rank(words, block_order: int) -> tuple[np.ndarray, np.ndarray]:
 
 
 # --------------------------------------------------------------------------- #
-# digest algebra (zagg-owned; the moczarr[zagg] extra)
+# rasterization (digest algebra: moczarr.tdigest, issue #64)
 # --------------------------------------------------------------------------- #
-
-
-def _tdigest_algebra():
-    """zagg's ``(cdf_from_tdigest, quantile_from_tdigest)``, or a pointed error."""
-    try:
-        from zagg.stats.tdigest import cdf_from_tdigest, quantile_from_tdigest
-    except ImportError as exc:
-        raise ImportError(
-            "HHDC rasterization needs zagg's t-digest algebra "
-            "(cdf_from_tdigest/quantile_from_tdigest) — imported, never vendored. "
-            "Install the extra: pip install 'moczarr[zagg]'"
-        ) from exc
-    return cdf_from_tdigest, quantile_from_tdigest
 
 
 def rasterize_cell(
@@ -304,7 +290,6 @@ def rasterize_cell(
     float64 weights (not yet cast to the output dtype); an empty digest
     yields zeros.
     """
-    cdf_from_tdigest, _ = _tdigest_algebra()
     if len(digest) == 0:
         return np.zeros(n_bins, dtype=np.float64)
     edges = z_lo + resolution * np.arange(n_bins + 1, dtype=np.float64)
@@ -317,7 +302,6 @@ def rasterize_cell(
 
 def _cell_tail_bounds(digest: np.ndarray, bottom: float, top: float) -> tuple[float, float] | None:
     """``(lo, hi)`` = (``bottom``, ``top``) quantiles, or ``None`` if empty."""
-    _, quantile_from_tdigest = _tdigest_algebra()
     if len(digest) == 0:
         return None
     lo = quantile_from_tdigest(digest, bottom)
@@ -844,8 +828,6 @@ def read_tensors(
         (with ``fit="raise"``) a block whose trimmed range escapes the
         window — an explicit window refuses loudly rather than clip the
         trimmed range.
-    ImportError
-        When zagg's digest algebra is not installed (``moczarr[zagg]``).
     """
     if dtype not in _TENSOR_DTYPES:
         raise ValueError(f"unknown dtype {dtype!r}; expected one of {sorted(_TENSOR_DTYPES)}")

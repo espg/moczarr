@@ -29,9 +29,9 @@ Two surfaces:
   column presence via the §4.6 columns' own ``groups`` maps — declared ≠
   materialized is the live-store failure mode the picker must not trip on).
 
-The t-digest algebra is IMPORTED from zagg through the established
-``moczarr[zagg]`` extra seam (:func:`moczarr.hhdc._tdigest_algebra`; issue
-#19 — vendoring is parity drift by construction), and evaluation honours
+The t-digest algebra is moczarr's own (:mod:`moczarr.tdigest`, pure numpy;
+issue #64 — no reader function needs zagg, whose kernels are the PARITY arm
+only, under the demoted ``moczarr[zagg]`` extra), and evaluation honours
 the standing trap: every digest — merged concatenation or single stored
 cell — is ordered by ``(mean, weight)`` before the kernel sees it, because
 the interp-based kernel assumes mean order AND its cumulative-weight walk
@@ -229,9 +229,10 @@ def quantile_surface(
     one call per field), or ``None`` with a non-empty ``carry`` (the
     dense-only arm: no evaluation, no ``quantile`` dimension). The default
     merged name is the fields' common prefix (``h_tdigest``); ``name=``
-    overrides. Evaluation calls zagg's ``quantile_from_tdigest`` per cell —
-    the values are exactly that kernel's, per cell, by construction (the
-    issue #21 acceptance), imported through the ``moczarr[zagg]`` extra.
+    overrides. Evaluation calls :func:`moczarr.tdigest.quantile_from_tdigest`
+    per cell — the values are exactly that kernel's, per cell, by
+    construction (the issue #21 acceptance), and that kernel is pinned
+    value-exact against zagg's by the parity gate (issue #64).
     """
     import xarray as xr
 
@@ -269,10 +270,9 @@ def quantile_surface(
     data_vars: dict[str, Any] = {}
     coords: dict[str, Any] = {}
     if fields:
-        from moczarr.hhdc import _tdigest_algebra
         from moczarr.ragged import parse_ragged_attrs
+        from moczarr.tdigest import quantile_from_tdigest
 
-        _, quantile_from_tdigest = _tdigest_algebra()
         qs = np.atleast_1d(np.asarray(quantiles, dtype=np.float64))
         if qs.ndim != 1 or qs.size == 0:
             raise ValueError(f"quantiles={quantiles!r}: expected a non-empty 1-D sequence")
