@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- Reader independence ([#64](https://github.com/espg/moczarr/issues/64)):
+  the t-digest algebra is now moczarr's own — `moczarr.tdigest`, pure numpy
+  (`cdf_from_tdigest`, `quantile_from_tdigest`, and the order-independent
+  `merge_tdigests_kway` under the k1 delta budget) — so **no reader
+  function needs zagg installed**: `read_tensors` rasterization and the
+  `quantile_surface`/`open_surface` evaluation (which the #21 entry below
+  describes as evaluating through the `moczarr[zagg]` extra — superseded
+  here) run natively, and the previously zagg-gated tests run everywhere.
+  The `moczarr[zagg]` extra is demoted to **parity + examples only**: under
+  it, golden/fuzz parity gates pin the native kernels **value-exact**
+  (never `np.isclose`) against `zagg.stats.tdigest` on every in-tree
+  fixture digest, per-store k-way merges under permutation, and whole
+  `(quantile, cells)` surfaces on the kitchen_sink/temporal fixtures; a
+  subprocess test proves `open_surface` and `read_tensors` work with zagg
+  import-masked. With zagg (Python >=3.12) out of the runtime path,
+  `requires-python` drops to **>=3.11** — the real binding constraint
+  (xarray 2026.01 / zarr 3.1.5 / numcodecs 0.14) — and CI grows a 3.11
+  floor leg, which exists precisely because zagg cannot install there.
 - The gridlook feeder ([#21](https://github.com/espg/moczarr/issues/21)):
   `quantile_surface` / `open_surface` materialize a level's stored t-digest
   field into a dense `(quantile, cells)` float surface — the requested

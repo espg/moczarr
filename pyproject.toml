@@ -7,7 +7,7 @@ name = "moczarr"
 dynamic = ["version"]
 description = "Sparse-DGGS xarray reader for morton-hive zarr stores (MOC domain, lazy dense views)"
 readme = "README.md"
-requires-python = ">=3.12"
+requires-python = ">=3.11"
 license = {file = "LICENSE"}
 authors = [
     {name = "Shane Grigsby", email = "refuge@rocktalus.com"},
@@ -16,6 +16,7 @@ classifiers = [
     "Development Status :: 4 - Beta",
     "Intended Audience :: Science/Research",
     "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
     "Programming Language :: Python :: 3.13",
     "Topic :: Scientific/Engineering :: GIS",
@@ -85,18 +86,22 @@ test = [
     "pytest>=8.0",
     "pytest-cov",
 ]
-# HHDC tensor rasterization (moczarr.hhdc): the t-digest algebra
-# (cdf_from_tdigest / quantile_from_tdigest) is IMPORTED from zagg, never
-# vendored — vendoring is parity drift by construction (issue #19; extra
-# signed off on the issue #19 thread). The import is lazy (the dggs.py
-# posture), so the core import graph is unchanged. Floor 0.39: the current
-# release at adoption time; the algebra surface itself is far older.
-# Floor 0.53.0 (issue #59): the first zagg on mortie 1.0 (englacial/zagg#559).
-# Every earlier zagg still imports ``decimals_to_words``, retired by the
-# ``mortie>=1.0.0`` floor above, so the t-digest path would raise
-# ``ImportError`` at first use; pinning past it makes the extra fail at
-# resolve time instead, which is the honest failure until 0.53.0 is on PyPI.
-zagg = ["zagg>=0.53.0"]
+# PARITY + EXAMPLES ONLY (issue #64) — never a runtime requirement of any
+# reader function. The t-digest algebra is moczarr's own
+# (src/moczarr/tdigest.py, pure numpy); this extra installs zagg so the
+# parity gates can pin the native kernels value-exact against
+# zagg.stats.tdigest (tests/test_tdigest.py, the golden/live legs in
+# tests/test_hhdc.py, tests/test_surfaces.py's surface parity). Note zagg
+# itself floors at Python >=3.12, so the extra resolves only there — which
+# is exactly why it must never be load-bearing (core floors at 3.11, the
+# real binding constraint: xarray 2026.01 / zarr 3.1.5 / numcodecs 0.14).
+# Floor 0.53.0 (issue #59): the first zagg on mortie 1.0
+# (englacial/zagg#559); earlier zaggs import mortie names retired by the
+# ``mortie>=1.0.0`` floor above, so pinning past them fails at resolve time
+# instead of at first use. The python_version marker keeps the extra
+# resolvable under the package's own >=3.11 floor: below 3.12 the extra is
+# EMPTY (zagg cannot install there) and every parity test skips.
+zagg = ["zagg>=0.53.0; python_version >= '3.12'"]
 
 [project.urls]
 Homepage = "https://github.com/espg/moczarr"
@@ -130,7 +135,7 @@ python_files = ["test_*.py"]
 
 [tool.ruff]
 line-length = 100
-target-version = "py312"
+target-version = "py311"
 lint.select = ["E", "F", "W", "I", "N", "RUF022"]
 lint.ignore = ["E501"]
 
@@ -138,7 +143,7 @@ lint.ignore = ["E501"]
 known-first-party = ["moczarr"]
 
 [tool.mypy]
-python_version = "3.12"
+python_version = "3.11"
 ignore_missing_imports = true
 
 [dependency-groups]
