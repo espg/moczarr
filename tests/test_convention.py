@@ -662,6 +662,16 @@ class TestLeafCellWords:
         with pytest.raises(ValueError, match="not the 16 on the leaf's cells axis"):
             convention.leaf_cell_words("1", 29, n_cells=16)
 
+    @pytest.mark.parametrize("cell_order", [8.0, 10.5, True, "8"])
+    def test_a_non_integer_cell_order_is_refused(self, shard, cell_order):
+        with pytest.raises(TypeError, match="not an integer"):
+            convention.leaf_cell_words(shard, cell_order)
+
+    def test_a_numpy_integer_cell_order_is_accepted(self, shard):
+        np.testing.assert_array_equal(
+            convention.leaf_cell_words(shard, np.int64(8)), convention.leaf_cell_words(shard, 8)
+        )
+
     def test_a_point_word_names_no_leaf(self):
         point = convention.area29_to_point(convention.morton_word("1" + "1" * 29))
         with pytest.raises(ValueError, match="POINT"):

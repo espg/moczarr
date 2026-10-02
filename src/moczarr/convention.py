@@ -576,7 +576,8 @@ def leaf_cell_words(shard: str | int, cell_order: int, *, n_cells: int | None = 
     stride is an instance of the law here and never its definition.
 
     ``shard`` is the leaf's id (packed word or decimal string) — an AREA
-    word at or above ``cell_order``. Returns the ``4**(cell_order - order)``
+    word at or above ``cell_order``, which must be an integer (a float or a
+    bool is refused, never truncated). Returns the ``4**(cell_order - order)``
     words in axis order. ``n_cells`` is the length of the cells axis the
     words are for (a leaf-open seam always holds it): an id or cell order
     that disagrees with it is refused before anything is allocated, rather
@@ -585,6 +586,9 @@ def leaf_cell_words(shard: str | int, cell_order: int, *, n_cells: int | None = 
     """
     from mortie import generate_morton_children
 
+    if isinstance(cell_order, bool) or not isinstance(cell_order, (int, np.integer)):
+        raise TypeError(f"cell_order {cell_order!r} is not an integer order, never cast")
+    cell_order = int(cell_order)
     word = morton_word(shard)
     if not 0 <= word < 2**64:
         raise ValueError(f"shard {shard!r} is outside the uint64 range, not a packed morton word")
@@ -594,19 +598,19 @@ def leaf_cell_words(shard: str | int, cell_order: int, *, n_cells: int | None = 
             f"so it names no leaf (spec §2/§6.6)"
         )
     order = decimal_order(morton_decimal(word))  # raises on an invalid packed word
-    if not order <= int(cell_order) <= 29:
+    if not order <= cell_order <= 29:
         raise ValueError(
             f"cell_order {cell_order} is not between shard {morton_decimal(word)}'s own "
             f"order {order} and 29: a leaf's cells are the shard's descendants"
         )
-    if n_cells is not None and 4 ** (int(cell_order) - order) != n_cells:
+    if n_cells is not None and 4 ** (cell_order - order) != n_cells:
         raise ValueError(
-            f"shard {morton_decimal(word)} has {4 ** (int(cell_order) - order)} "
+            f"shard {morton_decimal(word)} has {4 ** (cell_order - order)} "
             f"order-{cell_order} cells, not the {n_cells} on the leaf's cells axis: a "
             f"leaf's cells axis is exactly its shard's subtree, so no cell coordinate "
             f"can be derived for it (spec §1.5)"
         )
-    return np.asarray(generate_morton_children(word, int(cell_order)), dtype=np.uint64)
+    return np.asarray(generate_morton_children(word, cell_order), dtype=np.uint64)
 
 
 def check_node_invariant(rel_path: str, *, path_grouping: int = 1) -> None:
