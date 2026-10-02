@@ -365,3 +365,18 @@ class TestMixedPairing:
             xr.testing.assert_identical(b, ds_pandas)
             assert type(a.xindexes["morton"]) is MortonMocIndex
             assert type(b.xindexes["morton"]) is type(ds_pandas.xindexes["morton"])
+
+    def test_same_class_kind_pair_is_refused_on_identical_domain(self, serc, ds_pandas):
+        # The 2026.9 pass-through keys on differing index CLASSES; a dggs
+        # MortonIndex pandas/moc pair is one class, so it is still refused
+        # over an identical domain on every xarray line (issue #74). The
+        # (pandas, moc) order under inner/outer surfaces a bare AttributeError
+        # from PandasIndex.join (pre-existing), hence the tuple.
+        from moczarr import dggs
+
+        ds_moc_kind = dggs.decode(open_hive(serc), index_kind="moc")
+        refused = (xr.AlignmentError, TypeError, AttributeError)
+        for pair in ((ds_pandas, ds_moc_kind), (ds_moc_kind, ds_pandas)):
+            for join in ("inner", "outer", "exact"):
+                with pytest.raises(refused):
+                    xr.align(*pair, join=join)
