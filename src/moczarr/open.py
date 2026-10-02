@@ -778,11 +778,12 @@ def open_hive(
             # (catching it would cost one GET per versioned leaf; the
             # verifier, which pays it, reports that leaf as debris). The
             # miss is confirmed with one GET on this error path only (the
-            # working open pays nothing), and it WARNS — unlike ordinary debris, a write that never finished, a
-            # stamped pointer over nothing means committed data was removed
-            # out of band. Any other miss raises as it always has: a legacy
-            # leaf, or a stamped version, without the manifest's cell-order
-            # group is a malformed leaf, not debris.
+            # working open pays nothing), and it WARNS — unlike ordinary
+            # debris, a write that never finished, a stamped pointer over
+            # nothing means committed data was removed out of band. Any other
+            # miss raises as it always has: a legacy leaf, or a stamped
+            # version, without the manifest's cell-order group is a malformed
+            # leaf, not debris.
             if not _dangling_pointer(store_root, rel, stamp, obstore_store):
                 raise
             warnings.warn(
