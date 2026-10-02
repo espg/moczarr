@@ -508,7 +508,10 @@ def _open_leaf_group(
     shape. ``derive=False`` skips building that coordinate for a caller
     that would drop it unread (the lazy index fabricates its own). An
     UNWINDOWED leaf without the array is refused either way: there its
-    absence is corruption, not a licence to derive.
+    absence is corruption, not a licence to derive. "Without the array" is
+    read off the opened Dataset, so a caller who drops ``morton`` through
+    ``xr_kwargs={"drop_variables": ...}`` is taken at their word: no
+    refusal, no derivation, no coordinate.
     """
     import xarray as xr
 
@@ -519,7 +522,8 @@ def _open_leaf_group(
         zarr_format=3,
         **(xr_kwargs or {}),
     )
-    if "morton" in ds.variables:
+    dropped = (xr_kwargs or {}).get("drop_variables") or ()
+    if "morton" in ds.variables or "morton" in ([dropped] if isinstance(dropped, str) else dropped):
         return ds
     shard, window = split_leaf_name(rel.rsplit("/", 1)[-1])
     if window is None:
@@ -663,7 +667,9 @@ def open_hive(
         measured in the phase-3 bench; revisit with the lazy-index work).
     xr_kwargs : dict, optional
         Extra keyword arguments for each leaf's ``xarray.open_zarr`` (e.g.
-        ``chunks={}`` for dask-backed laziness).
+        ``chunks={}`` for dask-backed laziness). A ``drop_variables`` naming
+        ``morton`` is honoured on every leaf: a windowed leaf that stores
+        no coordinate gets none derived either (zagg spec §1.5).
     store : obstore store, optional
         An already-constructed object store rooted at the subtree actually
         opened, shared instead of building one from ``store_root`` +
@@ -706,7 +712,8 @@ def open_hive(
 
         Raises ``ValueError`` when the root is not a hive store (no
         manifest) or an UNWINDOWED leaf stores no ``morton`` array (only a
-        windowed leaf may omit it, zagg spec §1.5 — on either index kind),
+        windowed leaf may omit it, zagg spec §1.5 — on either index kind,
+        unless ``xr_kwargs`` drops ``morton``, which skips the check),
         and :class:`moczarr.NoCoverageError` — a ``ValueError``
         subclass — when the store has no stamped coverage anywhere: with
         zero committed leaves there is no schema source at all, whatever

@@ -137,6 +137,24 @@ class TestOpenHive:
         with pytest.raises(ValueError, match="only a windowed leaf"):
             open_hive(str(root), index_kind=index_kind)
 
+    @pytest.mark.parametrize("drop", [["morton"], "morton"])
+    @pytest.mark.parametrize("index_kind", ["moc", "pandas"])
+    def test_a_caller_dropped_coordinate_is_neither_refused_nor_derived(
+        self, derived_windows, index_kind, drop
+    ):
+        # Dropping ``morton`` at open is the caller's choice, not a store
+        # without the array: an unwindowed leaf still opens, and a derived
+        # windowed one comes back without the coordinate, as asked.
+        kwargs = {"index_kind": index_kind, "fabricate_cell_ids": False}
+        serc = open_hive(str(SERC), xr_kwargs={"drop_variables": drop}, **kwargs)
+        assert serc.sizes["cells"] == open_hive(str(SERC), **kwargs).sizes["cells"]
+        derived = open_hive(
+            derived_windows, window="2019", xr_kwargs={"drop_variables": drop}, **kwargs
+        )
+        assert derived.sizes["cells"] == 32
+        if index_kind == "pandas":
+            assert "morton" not in serc.variables and "morton" not in derived.variables
+
     def test_a_cells_axis_that_is_not_the_shard_subtree_is_refused(self, derived_windows):
         # The derivation is the shard's children — all of them. A leaf whose
         # axis is some other length has no coordinate to derive.
