@@ -118,6 +118,7 @@ from moczarr.convention import COMMIT_ATTR, leaf_cell_words, morton_word
 from moczarr.hhdc import cell_index, rank_to_rowcol, read_tensors
 from moczarr.pyramid import overview_declaration
 from moczarr.ragged import (
+    decode_cell,
     open_ragged,
     parse_companion_attrs,
     read_cell,
@@ -656,32 +657,62 @@ class TestDerivedCoordinate:
             assert np.unique(np.diff(words)).tolist() == [int(instance["stride"])] == [4194304]
             assert np.all(words >> np.uint64(63) == instance["bit63"])
 
+    @staticmethod
+    def _contained(cell_order, locations, cell_word) -> bool:
+        """§1.5's containment check for one cell: every location word's
+        ancestor at the cell order IS the cell's word — each word's order
+        decoded from the word by ``clip2order``, never assumed."""
+        from mortie import clip2order
+
+        return bool(np.all(clip2order(cell_order, locations) == np.uint64(cell_word)))
+
     def test_containment_check_on_the_committed_location_words(self):
-        """§1.5 "The containment check": every location word stored in cell
-        ``j`` lies inside cell ``j`` — its ancestor at the cell order IS the
-        derived word — with each word's order decoded from the word, never
-        assumed (the fixture's are heterogeneous: order-29 points beside
-        merged centroids' ancestors, some of them the cell itself). A
-        neighbouring cell's word is not, so the check has teeth."""
-        from mortie import clip2order, orders_of
+        """§1.5 "The containment check", on the pairing a READER makes: the
+        store-rooted ``read_ragged`` (shard from the stamp's coverage box)
+        hands back each populated cell's derived word beside its location
+        rows, and every row lies inside that word. The rows are the
+        record's, and heterogeneous in order — order-29 points beside merged
+        centroids' ancestors, some of them the cell itself."""
+        from mortie import orders_of
 
         _root, store, expected = self._fixture()
         cell_order = expected["cell_order"]
-        derived = leaf_cell_words(expected["shard"], cell_order)
+        recorded = {int(cell["morton"]): cell for cell in expected["cells"]}
         seen_orders = set()
-        for cell in expected["cells"]:
-            j = cell["index"]
-            words = read_cell(store, f"{expected['group']}/h_tdigest_locations", j)
-            assert [str(int(w)) for w in words] == cell["h_tdigest_locations"]
-            orders = [int(o) for o in orders_of(words)]
+        pairs = list(read_ragged(store, f"{expected['group']}/h_tdigest", locations=True))
+        assert sorted(int(word) for word, _v, _locs in pairs) == sorted(recorded)
+        for word, _values, locations in pairs:
+            cell = recorded[int(word)]
+            assert [str(int(w)) for w in locations] == cell["h_tdigest_locations"]
+            orders = [int(o) for o in orders_of(locations)]
             assert orders == cell["location_orders"]
             seen_orders.update(orders)
             assert min(orders) >= cell_order  # none coarser than its cell here
-            ancestors = clip2order(cell_order, words)
-            assert np.all(ancestors == derived[j])
-            neighbour = derived[j + 1 if j + 1 < derived.size else j - 1]
-            assert not np.any(ancestors == neighbour)
+            assert self._contained(cell_order, locations, word)
         assert {29, cell_order} <= seen_orders and len(seen_orders) > 2
+
+    @pytest.mark.parametrize("index_kind", ["moc", "pandas"])
+    def test_containment_check_on_the_open_hive_rows(self, index_kind):
+        """The same check on ``open_hive``'s rows — the coordinate derived
+        from the leaf's NAME — pairing ``ds["morton"]`` with that row's
+        ``h_tdigest_locations``. And it has teeth: against the coordinate
+        rolled by one cell it fails on every populated cell."""
+        root, store, expected = self._fixture()
+        cell_order = expected["cell_order"]
+        _arr, element = open_ragged(store, f"{expected['group']}/h_tdigest_locations")
+        ds = open_hive(str(root), window=expected["window"], index_kind=index_kind).load()
+        words = ds["morton"].values
+        rows = [
+            (i, decode_cell(raw, element))
+            for i, raw in enumerate(ds["h_tdigest_locations"].values)
+            if len(raw)
+        ]
+        assert sorted(int(words[i]) for i, _ in rows) == sorted(
+            int(cell["morton"]) for cell in expected["cells"]
+        )
+        assert all(self._contained(cell_order, locs, words[i]) for i, locs in rows)
+        rolled = np.roll(words, 1)
+        assert not any(self._contained(cell_order, locs, rolled[i]) for i, locs in rows)
 
     def test_the_column_still_stores_its_coordinate(self):
         """§1.5/§4.6: the §4 artifacts are not leaves — every resolution
