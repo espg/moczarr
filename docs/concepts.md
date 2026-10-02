@@ -77,6 +77,49 @@ version whose stamp alone is gone, arrays intact, is still served by
 `open_hive` — only the verifier, which reads that object anyway, calls it
 debris.
 
+### The cell coordinate
+
+A leaf's cells axis is its shard's children at the cell order, in canonical
+nested order, and cell `j` carries the packed word of the `j`-th child
+(zagg spec §1.5). So the per-cell `morton` coordinate is a pure function of
+the leaf's id and the rank, and it comes in two forms:
+
+- An **unwindowed** leaf (`{id}.zarr`) stores it, as `{cell_order}/morton`.
+  The stored array holds the words on the inner chunks that were written
+  and its `0` fill on the ones that were not.
+- A **windowed** leaf (`{id}_{window}.zarr`) written by zagg 0.56.0 or
+  later (englacial/zagg#587) stores **no** such array — every window of a shard
+  would repeat the same 8 bytes per cell — and the reader derives it:
+  `moczarr.convention.leaf_cell_words(shard, cell_order)`. For a cell order
+  up to 27 that is one arithmetic progression across the shard, in both
+  hemispheres, `word[j] = word[0] + j * 2**(60 - 2*c)` (4,194,304 per cell
+  at order 19). Windowed leaves written earlier still store the array and
+  stay valid.
+
+Readers carry one rule — use the stored array where the leaf has it, derive
+it where a windowed leaf does not — and apply it at the leaf-open seam, so
+`open_hive` (either `index_kind`), `open_leaf` and the per-leaf readers
+(`read_ragged`, `read_tensors`, `cell_index`) hand back the same thing
+either way. The store-level open takes the shard from the leaf's name; a
+reader holding only a leaf-rooted store takes it from the leaf's own stamp,
+whose coverage box names the shard. An unwindowed leaf without the array is
+refused: there its absence is corruption. Overview zarrs and leaf columns
+are not leaves and store their coordinate at every revision.
+
+A derived coordinate is **full by construction** — it names every cell of
+the shard, written or not — so it says nothing about occupancy. Wherever
+"was this written?" matters, the answer comes from the data: the stamp's
+coverage (the tiers below) or the payload arrays. The two forms differ to
+a caller on `index_kind="pandas"`, which hands back the coordinate itself:
+a stored coordinate shows `0` across an unwritten inner chunk where a
+derived one shows the cells' real words. That `0` has two further effects
+there, both pre-existing behavior of a stored coordinate rather than
+anything the derived form adds: the default `cell_ids` fabrication refuses
+it (mixed-order area words), and so does every `aoi=` open (an empty or
+invalid word) — so a stored leaf with an unwritten chunk is refused by both
+where its derived twin opens. The lazy `index_kind="moc"` default never
+reads the coordinate and opens the two identically.
+
 ## Coverage tiers
 
 Coverage — *where data exists* — is declared in tiers so a reader can

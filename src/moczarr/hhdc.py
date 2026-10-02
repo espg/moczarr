@@ -78,6 +78,7 @@ from moczarr.convention import (
 from moczarr.coverage import decode_bitmap, parse_leaf_coverage
 from moczarr.ragged import (
     _cells_order,
+    _is_empty,
     _morton_words,
     _refuse_sub_chunk,
     _subtree_span,
@@ -512,17 +513,19 @@ def _read_store_object(store: Store, key: str) -> bytes | None:
     return None if buf is None else buf.to_bytes()
 
 
-def _coverage_occupancy(store: Store) -> tuple[str, dict, bytes] | None:
+def _coverage_occupancy(store: Store, leaf: str = "") -> tuple[str, dict, bytes] | None:
     """``(encoding, coverage, sidecar_bytes)`` when the store has EXACT occupancy.
 
     ``None`` for every store whose mask must degrade to the 2-state
     populated/not channel: no commit stamp (every flat store), a box-only
     envelope, or a bitmap envelope whose sidecar object is gone. Shared by
     :func:`has_exact_occupancy` and the mask build, so the public predicate
-    cannot drift from the mask the reader produces.
+    cannot drift from the mask the reader produces. ``leaf`` is the group
+    whose stamp is read (its sidecar key is relative to it) — the store
+    root unless a caller names the leaf its field path is under.
     """
     try:
-        root = zarr.open_group(store, mode="r", zarr_format=3)
+        root = zarr.open_group(store, path=leaf, mode="r", zarr_format=3)
     except (FileNotFoundError, KeyError):
         return None
     coverage = parse_leaf_coverage(root.attrs.get(COMMIT_ATTR))
@@ -533,7 +536,8 @@ def _coverage_occupancy(store: Store) -> tuple[str, dict, bytes] | None:
         return "full", coverage, b""  # a full subtree needs no sidecar (D14)
     if encoding != "bitmap" or not coverage.get("sidecar"):
         return None
-    payload = _read_store_object(store, str(coverage["sidecar"]))
+    sidecar = str(coverage["sidecar"])
+    payload = _read_store_object(store, f"{leaf}/{sidecar}" if leaf else sidecar)
     if payload is None:
         return None
     return "bitmap", coverage, payload
@@ -562,7 +566,9 @@ def _chunk_word(words: np.ndarray, field: str, start: int) -> int:
     return int(ancestors[0])
 
 
-def _load_occupancy(store: Store, arr, words: np.ndarray, field: str) -> tuple | None:
+def _load_occupancy(
+    store: Store, arr, words: np.ndarray, field: str, *, leaf: str = ""
+) -> tuple | None:
     """The leaf's exact cell occupancy for the mask channel, or ``None``.
 
     Returns ``("full", None)`` for a fully occupied subtree, ``("bitmap",
@@ -573,9 +579,9 @@ def _load_occupancy(store: Store, arr, words: np.ndarray, field: str) -> tuple |
     populated chunk's written morton words: the shard id is their ancestor
     at ``cell_order - log4(n_cells)`` — a leaf's cells axis is exactly one
     shard subtree, which is also what binds the bitmap's bit positions to
-    the axis.
+    the axis. ``leaf`` is :func:`_coverage_occupancy`'s.
     """
-    found = _coverage_occupancy(store)
+    found = _coverage_occupancy(store, leaf)
     if found is None:
         return None
     encoding, coverage, payload = found
@@ -599,6 +605,49 @@ def _load_occupancy(store: Store, arr, words: np.ndarray, field: str) -> tuple |
     written = words[words != 0]
     shard = int(clip2order(cell_order - depth, written[:1])[0])
     return "bitmap", decode_bitmap(payload, shard, cell_order)
+
+
+def _chunk_written(
+    store: Store, arr, words: np.ndarray, field: str, stored_span: tuple[int, int], start: int
+) -> bool:
+    """Whether a read chunk holds data — asked of the data, not the coordinate.
+
+    The occupancy question a stored ``morton`` coordinate answers with its
+    fill, for a leaf whose coordinate is DERIVED and so cannot (zagg spec
+    §1.5: "a reader of a derived coordinate MUST take occupancy from the
+    payload arrays (or the stamp's coverage), never from the coordinate").
+    A stored coordinate's fill records whether ANY field wrote the chunk,
+    so both answers here are the leaf's, not ``field``'s. The stamp's exact
+    coverage is preferred — read off the leaf the field path is under (the
+    group above the cell-order group, as :func:`moczarr.ragged.
+    _derived_morton` locates it), so a hive-rooted call sees the same stamp
+    as a leaf-rooted one — and costs no digest bytes. Without it (a
+    box-only stamp, a missing sidecar) the chunk is read: ``field``'s own
+    payload first, then every other array of the cell-order group.
+    """
+    group, _, name = field.rpartition("/")
+    occupancy = _load_occupancy(store, arr, words, field, leaf=group.rpartition("/")[0])
+    if occupancy is not None:
+        kind, occupied = occupancy
+        return kind == "full" or bool(np.isin(words, occupied).any())
+    chunk = (start, start + len(words))
+    if next(iter_populated_chunks(arr, span=chunk, spans=[stored_span]), None) is not None:
+        return True
+    siblings = zarr.open_group(store, path=group, mode="r", zarr_format=arr.metadata.zarr_format)
+    return any(
+        _holds_data(np.asarray(sibling[chunk[0] : chunk[1]]), sibling.fill_value)
+        for key, sibling in siblings.arrays()
+        if key != name and sibling.shape[:1] == arr.shape[:1]
+    )
+
+
+def _holds_data(values: np.ndarray, fill) -> bool:
+    """Whether a slice of a cells-axis array holds anything but its fill."""
+    if values.dtype.kind == "O":
+        return any(not _is_empty(raw) for raw in values.ravel())
+    if values.dtype.kind == "f" and np.isnan(fill):
+        return bool(np.any(~np.isnan(values)))
+    return bool(np.any(values != fill))
 
 
 def _block_mask(words: np.ndarray, occupancy: tuple | None, block_depth: int) -> np.ndarray:
@@ -818,7 +867,8 @@ def read_tensors(
     ValueError
         On an unknown ``dtype``/``fit``, the strict ragged attrs gate, an
         integer ``dtype`` over a §2.0 flux payload, a
-        missing ``morton`` sibling, an out-of-range ``block_order``, a block
+        missing ``morton`` sibling on anything but a windowed leaf (zagg
+        spec §1.5), an out-of-range ``block_order``, a block
         tensor over ``max_block_bytes``, a corrupt/misaligned occupancy
         sidecar, a ``subtree`` finer than the read chunks (or malformed /
         too-deep), or (with ``fit="raise"``) a window overflow. With
@@ -1023,6 +1073,15 @@ def cell_index(
     readers visit), one small slice of the ``morton`` coordinate per span —
     never the whole axis, and no digest bytes.
 
+    A chunk "carries" an id when it was WRITTEN. A stored coordinate records
+    that itself (it holds its ``0`` fill across an unwritten inner chunk);
+    a windowed leaf's coordinate is derived (zagg spec §1.5) and full by
+    construction, so there the same question is put to the data instead —
+    the leaf's stamp's exact coverage (one sidecar GET, still no digest
+    bytes), or, where the stamp carries none, the matching read chunk of
+    the cell-order group's payload arrays — any of them, since a stored
+    coordinate's fill records a chunk ANY field wrote.
+
     Raises
     ------
     ValueError
@@ -1045,6 +1104,14 @@ def cell_index(
             words = span_words[offset : offset + cells_per_chunk]
             start = span_start + offset
             if not np.any(words) or _chunk_word(words, field, start) != target:
+                continue
+            # A stored coordinate answers "was this chunk written?" by its
+            # fill (the np.any above). A DERIVED one — a windowed leaf, zagg
+            # spec §1.5 — is full by construction and names every chunk of
+            # the span, so there the answer has to come from the data.
+            if isinstance(morton, np.ndarray) and not _chunk_written(
+                store, arr, words, field, (span_start, span_stop), start
+            ):
                 continue
             return start + rank
     raise ValueError(

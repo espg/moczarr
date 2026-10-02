@@ -156,9 +156,12 @@ class TestDeclarationBinding:
             assert overview_declaration(manifest) is None
             assert overview_cell_orders(manifest) == {}
 
-    @pytest.mark.parametrize("fixture", ["minimal", "temporal", "kitchen_sink", "versioned"])
+    @pytest.mark.parametrize(
+        "fixture", ["minimal", "temporal", "kitchen_sink", "versioned", "windowed"]
+    )
     def test_vendored_v2_block_reads_as_no_family(self, fixture):
-        # The vendored §7 fixtures (zagg main d52e3063; versioned/ 2664e742) all declare
+        # The vendored §7 fixtures (zagg main d52e3063; versioned/ 2664e742; windowed/
+        # 6c69c8ce) all declare
         # `zagg-pyramid/2`: §4.5's default flip (englacial/zagg#384) moved the
         # schedule to the block-level `overviews`, so the `overview` family
         # dict carries no legacy `orders`. This /1 order-node reader binds
@@ -919,7 +922,9 @@ class TestPyramidDeclaration:
             "composition": "packed",
         }
 
-    @pytest.mark.parametrize("fixture", ["minimal", "temporal", "kitchen_sink", "versioned"])
+    @pytest.mark.parametrize(
+        "fixture", ["minimal", "temporal", "kitchen_sink", "versioned", "windowed"]
+    )
     def test_v2_fixture_record(self, fixture):
         # The vendored §7 fixtures declare the /2 fixed ladder: leaf entry
         # first, then every order down to node 0 — decoded VERBATIM, never
