@@ -21,6 +21,13 @@ Postures, per the design's D9 discipline:
   is debris and reads ``None``. Presence requires the stamp; absence (a
   clean LIST/GET miss) is trustworthy on its own.
 - A PRESENT-but-corrupt bitmap sidecar raises (see ``moczarr.coverage``).
+- A stamp naming ``current`` is a pointer (zagg spec §1.5, versioned
+  leaves): the arrays and the in-leaf sidecar are under that version
+  subgroup, and :func:`leaf_data_prefix` is the one place that says so. The
+  stamp read itself stays on the stable root, as do the leaf's siblings at
+  its node. A pointer over a missing or unstamped version is debris (the
+  open paths, which never read the version's stamp, catch a missing one
+  only — see :func:`_dangling_pointer`).
 """
 
 from __future__ import annotations
@@ -38,6 +45,8 @@ import numpy as np
 
 from moczarr.convention import (
     COMMIT_ATTR,
+    LEAF_CURRENT_KEY,
+    LEAF_VERSION_PREFIX,
     MANIFEST_NAME,
     PYRAMID_COLUMN_SUFFIX,
     ROOT_COVERAGE_NAME,
@@ -237,6 +246,68 @@ def _stamp_from_meta(meta) -> dict | None:
     return dict(stamp) if isinstance(stamp, dict) else None
 
 
+def leaf_data_prefix(leaf: str, stamp: dict | None) -> str:
+    """Where a leaf's arrays and in-leaf sidecar live, given its ROOT stamp.
+
+    The one reader rule of zagg spec §1.5 ("Versioned leaves"): a root stamp
+    naming ``current`` makes the stable ``{id}.zarr`` prefix a **pointer** —
+    every array, chunk and in-leaf sidecar key is under ``{leaf}/{current}/``
+    — and a stamp without it is a legacy leaf whose arrays sit at the root.
+    No ``spec`` token marks the difference and a store legitimately mixes
+    both, so the question is asked per leaf, of the stamp every reader has
+    already fetched: following the pointer costs no request.
+
+    Pure name arithmetic — nothing is read, so a pointer naming a version
+    that is not there (a corrupted leaf, §1.5) is not detected here; the
+    caller's read under the returned prefix misses, which is its debris
+    answer. ``stamp=None`` (debris, or an absent leaf) returns the root.
+
+    What still lives beside the STABLE root, never under the version: the
+    leaf's siblings at its node (the stats sidecar, ``granules.json``, the
+    §4.6 column) and the root ``zarr.json`` itself — the stamp read stays on
+    the root, which mirrors the version's stamp.
+
+    Raises ``ValueError`` for a ``current`` that is not a version name
+    (§4.2: a single path component beginning ``run-``): that stamp claims a
+    version and cannot be half-trusted, and composing a key from it could
+    address something outside the leaf.
+    """
+    root = leaf.strip("/")
+    current = stamp.get(LEAF_CURRENT_KEY) if isinstance(stamp, dict) else None
+    if current is None:
+        return root
+    if (
+        not isinstance(current, str)
+        or not current.startswith(LEAF_VERSION_PREFIX)
+        or "/" in current
+    ):
+        raise ValueError(
+            f"leaf {root} names an invalid version {current!r}: a stamp's "
+            f"{LEAF_CURRENT_KEY!r} must be one path component beginning "
+            f"{LEAF_VERSION_PREFIX!r} (zagg spec §1.5/§4.2)"
+        )
+    return f"{root}/{current}"
+
+
+def _dangling_pointer(store_root: str, leaf: str, stamp: dict | None, store: Any) -> bool:
+    """Whether ``stamp`` points at a version that is missing or unstamped.
+
+    Zagg spec §1.5: such a leaf is corrupted — the writer lands the pointer
+    only after the version is stamped, so the state arises from out-of-band
+    deletion alone — and a reader treats it as debris. ONE GET (the
+    version's own ``zarr.json``), which is why no open path asks up front:
+    callers ask only once a read under the version has already missed, or
+    (the verifier) where that GET is noise beside the read it gates. So the
+    open paths detect a MISSING version only; an unstamped version whose
+    arrays survive is served by them and is debris to the verifier alone.
+    Always ``False`` for a legacy leaf — its root stamp IS the data's stamp.
+    """
+    prefix = leaf_data_prefix(leaf, stamp)
+    if prefix == leaf.strip("/"):
+        return False
+    return read_commit(store_root, prefix, store=store) is None
+
+
 def _run_coroutine(coro):
     """Run *coro* to completion whether or not an event loop is running.
 
@@ -335,6 +406,7 @@ def read_coverage_bitmap(
     store_root: str,
     leaf: str,
     *,
+    stamp: dict | None = None,
     coverage: dict | None = None,
     store: Any = None,
     **store_kwargs: Any,
@@ -346,20 +418,28 @@ def read_coverage_bitmap(
     id is the exact MOC; :func:`bitmap_and` short-circuits on it), or a
     missing sidecar object. A present-but-corrupt sidecar raises (decoder's
     posture). The shard id comes from the leaf basename via the frozen
-    first-``_`` split; ``cell_order`` from the envelope. Pass an
-    already-read ``coverage`` envelope to skip the stamp GET.
+    first-``_`` split; ``cell_order`` from the envelope.
+
+    The sidecar sits beside the arrays, so on a versioned leaf it is under
+    the version the root stamp names (:func:`leaf_data_prefix`). Pass an
+    already-read root ``stamp`` to skip the stamp GET. ``coverage`` — an
+    already-parsed envelope — still overrides the one read off the stamp,
+    but no longer skips that GET by itself: the envelope does not carry the
+    pointer, the stamp does.
     """
     import obstore
     from obstore.exceptions import NotFoundError
 
+    handle = _resolve_store(store_root, store, store_kwargs)
+    if stamp is None:
+        stamp = read_commit(store_root, leaf, store=handle)
     if coverage is None:
-        coverage = read_leaf_coverage(store_root, leaf, store=store, **store_kwargs)
+        coverage = parse_leaf_coverage(stamp)
     if not coverage or coverage.get("encoding") != "bitmap" or not coverage.get("sidecar"):
         return None
     shard, _window = split_leaf_name(leaf.rstrip("/").rsplit("/", 1)[-1])
-    handle = _resolve_store(store_root, store, store_kwargs)
     try:
-        data = obstore.get(handle, f"{leaf.strip('/')}/{coverage['sidecar']}").bytes()
+        data = obstore.get(handle, f"{leaf_data_prefix(leaf, stamp)}/{coverage['sidecar']}").bytes()
     except (FileNotFoundError, NotFoundError):
         return None
     return decode_bitmap(bytes(data), shard, int(coverage["cell_order"]))
@@ -382,15 +462,15 @@ def bitmap_and(
     from mortie import moc_and
 
     aoi = as_moc_words(aoi)
-    coverage = read_leaf_coverage(store_root, leaf, store=store, **store_kwargs)
+    handle = _resolve_store(store_root, store, store_kwargs)
+    stamp = read_commit(store_root, leaf, store=handle)
+    coverage = parse_leaf_coverage(stamp)
     if not coverage:
         return None
     if coverage.get("encoding") == "full":
         word = morton_word(split_leaf_name(leaf.rstrip("/").rsplit("/", 1)[-1])[0])
         return moc_and(np.asarray([word], dtype=np.uint64), aoi)
-    occupied = read_coverage_bitmap(
-        store_root, leaf, coverage=coverage, store=store, **store_kwargs
-    )
+    occupied = read_coverage_bitmap(store_root, leaf, stamp=stamp, store=handle)
     if occupied is None:
         return None
     return moc_and(occupied, aoi)
@@ -611,6 +691,7 @@ def warn_if_stale(store_root: str, shard: str | int, envelope: dict | None) -> b
 
 __all__ = [
     "bitmap_and",
+    "leaf_data_prefix",
     "load_root_coverage",
     "open_object_store",
     "read_commit",

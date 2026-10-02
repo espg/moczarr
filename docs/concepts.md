@@ -33,6 +33,50 @@ A leaf is *complete* iff its root zarr attrs carry the commit stamp
 worker left behind, and the reader skips it. Presence requires the stamp;
 absence (a clean GET/LIST miss) is trustworthy on its own.
 
+### Versioned leaves
+
+A leaf's stable prefix may be a **pointer** rather than the data itself
+(zagg spec §1.5; what zagg's hive writers produce by default from
+englacial/zagg#585 on). The root stamp then carries one more key,
+`current`, naming a **version subgroup** that holds the arrays, the
+`coverage.moc` sidecar and a stamp of its own:
+
+```
+{full_id}.zarr/zarr.json                         <- stamp + "current": "run-{run_id}-{attempt}"
+{full_id}.zarr/run-{run_id}-{attempt}/zarr.json  <- the version's own stamp (the same, minus current)
+{full_id}.zarr/run-{run_id}-{attempt}/{cell_order}/...   <- the arrays (coverage.moc beside them)
+```
+
+The reader carries one rule — open the root; if its stamp names `current`
+the arrays are under `{leaf}/{current}/`, else under `{leaf}/` — and
+`moczarr.store.leaf_data_prefix` is the one place that applies it. On
+`open_hive` (and `open_level`, which rides it) the stamp is the object the
+open reads anyway, so following the pointer costs no request. `open_leaf`
+and `read_coverage_bitmap` read the root stamp themselves — one GET —
+unless an already-read stamp is threaded with `stamp=` (e.g. from one
+batched `read_commits`). A stamp **without** `current` is a legacy leaf (every
+store written before the revision), so nothing needs migrating and one
+store may hold both kinds. A replacement writes a new version and swaps
+the pointer; a superseded version stays at its keys until zagg's collector
+reclaims it, and is never read through the stable address.
+
+What does *not* move: the stamp read itself (the root mirrors the
+version's stamp, so the coverage box, `window` and `content_hashes` still
+come off the root), and the leaf's siblings at its node — the stats
+sidecar, `granules.json`, the `*.pyramid.zarr` column — which stay beside
+the stable root, unversioned. Columns and overviews are not versioned.
+
+A `current` that is not a version name (one path component beginning
+`run-`) raises. A pointer naming a version that is missing or unstamped is
+a corrupted leaf — the writer lands the pointer only after the version is
+stamped, so it means the version was removed out of band — and is read as
+debris: `open_hive` skips a missing version with a warning, the verifier
+reports no arrays. One gap is deliberate: the open never reads the
+version's own stamp (that would be one more GET per versioned leaf), so a
+version whose stamp alone is gone, arrays intact, is still served by
+`open_hive` — only the verifier, which reads that object anyway, calls it
+debris.
+
 ## Coverage tiers
 
 Coverage — *where data exists* — is declared in tiers so a reader can

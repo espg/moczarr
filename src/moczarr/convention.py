@@ -55,6 +55,14 @@ HIVE_SPEC_V3 = "morton-hive/3"
 MANIFEST_NAME = "morton_hive.json"
 #: Root-group attrs key carrying the commit stamp.
 COMMIT_ATTR = "morton_hive_commit"
+#: Commit-stamp key naming a versioned leaf's current version subgroup (zagg
+#: spec §1.5 "Versioned leaves"): present on the stable root's stamp only —
+#: the pointer — and absent on a legacy leaf and on a version's own stamp.
+LEAF_CURRENT_KEY = "current"
+#: Every version subgroup name begins with this (``run-{run_id}-{attempt}``,
+#: zagg spec §4.2) — never a cell-order digit group, so the two kinds of
+#: child under a leaf root are told apart by name.
+LEAF_VERSION_PREFIX = "run-"
 #: In-leaf occupancy-bitmap sidecar object name; same name at the store root
 #: holds the shard-order ranges MOC (different location, different encoding).
 COVERAGE_SIDECAR = "coverage.moc"

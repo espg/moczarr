@@ -118,6 +118,40 @@ def _array_meta(data_type, length):
     }
 
 
+def version_leaf(
+    root, leaf, version="run-0f1e2d3c4b5a69788796a5b4c3d2e1f0-0a1b2c3d", *, keep_root=False
+):
+    """Rewrite one legacy leaf of a COPIED store as a versioned leaf, in place.
+
+    The zagg spec §1.5 shape, built object-by-object so the tests state it:
+    everything under the stable ``{id}.zarr/`` root — the arrays and the
+    in-leaf ``coverage.moc`` — moves into the ``{version}/`` subgroup, which
+    takes a copy of the root ``zarr.json`` as its own stamp; the root keeps
+    one object, its ``zarr.json``, now naming ``current``. ``keep_root=True``
+    leaves the legacy objects at the root as well: §1.5's *converted* legacy
+    leaf, whose root arrays are the last legacy write and are read only by
+    readers that ignore ``current``. Returns the version name.
+    """
+    import shutil
+
+    leaf_dir = Path(root) / leaf
+    version_dir = leaf_dir / version
+    children = [child for child in leaf_dir.iterdir() if child.name != "zarr.json"]
+    version_dir.mkdir()
+    for child in children:
+        if not keep_root:
+            child.rename(version_dir / child.name)
+        elif child.is_dir():
+            shutil.copytree(child, version_dir / child.name)
+        else:
+            shutil.copy2(child, version_dir / child.name)
+    meta = json.loads((leaf_dir / "zarr.json").read_text())
+    (version_dir / "zarr.json").write_text(json.dumps(meta))
+    meta["attributes"][convention.COMMIT_ATTR][convention.LEAF_CURRENT_KEY] = version
+    (leaf_dir / "zarr.json").write_text(json.dumps(meta))
+    return version
+
+
 def build_many_leaf_store(root, shards, *, cell_order=8, shard_order=6):
     """A synthetic hive store with one real (openable) zarr leaf per shard.
 

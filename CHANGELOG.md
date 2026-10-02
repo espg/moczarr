@@ -2,6 +2,33 @@
 
 ## Unreleased
 
+- Versioned leaves ([#70](https://github.com/espg/moczarr/issues/70)): the
+  reader follows the zagg spec §1.5 pointer. A leaf's stable `{id}.zarr/`
+  prefix may now be a **pointer root** — its commit stamp names `current`,
+  the `run-{run_id}-{attempt}` version subgroup that holds the arrays, the
+  in-leaf `coverage.moc` and a stamp of its own (what zagg's hive writers
+  produce by default from englacial/zagg#585 on). `open_hive`, `open_leaf`
+  (the returned store is rooted at the version, so every per-leaf reader
+  keeps addressing `{cell_order}/{name}`), `read_coverage_bitmap` /
+  `bitmap_and` / the two-store intersection, and the O11 verifier
+  (`hash_arrays`, `verify_arrays` — hashes keyed relative to the version
+  root, superseded and not-yet-swapped `run-…` versions out of scope, also
+  under a legacy root) all resolve it through one new
+  helper, `moczarr.store.leaf_data_prefix(leaf, stamp)`. The stamp is the
+  object `open_hive` already reads, so following the pointer adds **no
+  request** there; a stamp without `current` is a legacy leaf and reads exactly
+  as before, and a store may mix both. A `current` that is not a version
+  name raises `ValueError`; a pointer naming a missing or unstamped version
+  is a corrupted leaf, read as debris (`open_hive` skips a missing one with
+  a `UserWarning`, but serves an unstamped one whose arrays survive — it
+  never reads the version's stamp, which would cost a GET per leaf; the
+  verifier reports it as debris). `open_leaf` now reads the leaf's root
+  stamp (one GET it did not make before) unless the new `stamp=` threads
+  an already-read one (e.g. from `read_commits`), and `read_coverage_bitmap`
+  takes `stamp=` likewise — the already-read stamp that skips its GET;
+  `coverage=` alone no longer does,
+  because the envelope does not carry the pointer. zagg's `versioned/`
+  conformance fixture is vendored and runs the leaf-shaped gates.
 - Dependency drift ([#74](https://github.com/espg/moczarr/issues/74)):
   `moczarr.dggs` works on both xdggs lines — the healpix helpers
   (`center_around_prime_meridian`, `polygons_shapely`, `polygons_geoarrow`)
