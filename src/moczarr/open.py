@@ -531,15 +531,11 @@ def _open_leaf_group(
         )
     if not derive:
         return ds
-    words = leaf_cell_words(shard, int(group))
     dim = (ds.attrs.get("dggs") or {}).get("spatial_dimension", "cells")
-    if ds.sizes.get(dim) != words.size:
-        raise ValueError(
-            f"leaf {rel} has {ds.sizes.get(dim)} cells on its {dim!r} axis, not the "
-            f"{words.size} order-{group} cells of shard {shard}: a leaf's cells axis is "
-            f"exactly its shard's subtree, so no cell coordinate can be derived for it "
-            f"(zagg spec §1.5)"
-        )
+    try:
+        words = leaf_cell_words(shard, int(group), n_cells=ds.sizes.get(dim, 0))
+    except ValueError as exc:
+        raise ValueError(f"leaf {rel}, {dim!r} axis: {exc}") from exc
     return ds.assign_coords(morton=(dim, words))
 
 

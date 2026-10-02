@@ -549,7 +549,7 @@ def leaf_path(shard: str | int, window: str | None = None, *, path_grouping: int
     return rel
 
 
-def leaf_cell_words(shard: str | int, cell_order: int) -> np.ndarray:
+def leaf_cell_words(shard: str | int, cell_order: int, *, n_cells: int | None = None) -> np.ndarray:
     """The per-cell ``morton`` words of a shard's leaf, derived (``uint64``).
 
     The law of zagg spec §1.5 ("The cell coordinate"): a leaf's cells axis is
@@ -577,7 +577,11 @@ def leaf_cell_words(shard: str | int, cell_order: int) -> np.ndarray:
 
     ``shard`` is the leaf's id (packed word or decimal string) — an AREA
     word at or above ``cell_order``. Returns the ``4**(cell_order - order)``
-    words in axis order.
+    words in axis order. ``n_cells`` is the length of the cells axis the
+    words are for (a leaf-open seam always holds it): an id or cell order
+    that disagrees with it is refused before anything is allocated, rather
+    than deriving some other axis — or, for a large order gap, trying to
+    materialize ``4**depth`` words.
     """
     from mortie import generate_morton_children
 
@@ -594,6 +598,13 @@ def leaf_cell_words(shard: str | int, cell_order: int) -> np.ndarray:
         raise ValueError(
             f"cell_order {cell_order} is not between shard {morton_decimal(word)}'s own "
             f"order {order} and 29: a leaf's cells are the shard's descendants"
+        )
+    if n_cells is not None and 4 ** (int(cell_order) - order) != n_cells:
+        raise ValueError(
+            f"shard {morton_decimal(word)} has {4 ** (int(cell_order) - order)} "
+            f"order-{cell_order} cells, not the {n_cells} on the leaf's cells axis: a "
+            f"leaf's cells axis is exactly its shard's subtree, so no cell coordinate "
+            f"can be derived for it (spec §1.5)"
         )
     return np.asarray(generate_morton_children(word, int(cell_order)), dtype=np.uint64)
 

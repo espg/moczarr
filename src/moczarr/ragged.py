@@ -765,7 +765,7 @@ def _derived_morton(store: Store, field: str, zarr_format: Literal[2, 3]) -> np.
             f"implies, so it does not name the leaf's shard (zagg spec §1.5)"
         )
     shard = int(clip2order(cell_order - depth, members[:1])[0])
-    return leaf_cell_words(shard, cell_order)
+    return leaf_cell_words(shard, cell_order, n_cells=n_cells)
 
 
 class _MortonWords:

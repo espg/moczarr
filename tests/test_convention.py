@@ -648,6 +648,20 @@ class TestLeafCellWords:
         with pytest.raises(ValueError, match="descendants"):
             convention.leaf_cell_words(shard, 30)
 
+    def test_an_axis_that_is_not_the_shard_subtree_is_refused(self, shard):
+        np.testing.assert_array_equal(
+            convention.leaf_cell_words(shard, 8, n_cells=16), convention.leaf_cell_words(shard, 8)
+        )
+        for n_cells in (0, 12, 64):
+            with pytest.raises(ValueError, match="exactly its shard's subtree"):
+                convention.leaf_cell_words(shard, 8, n_cells=n_cells)
+
+    def test_a_mismatched_axis_is_refused_before_allocating(self):
+        # An order-0 id at cell order 29 would be 4**29 words (~2.3 EB of
+        # output alone): refused on the count, before mortie is asked.
+        with pytest.raises(ValueError, match="not the 16 on the leaf's cells axis"):
+            convention.leaf_cell_words("1", 29, n_cells=16)
+
     def test_a_point_word_names_no_leaf(self):
         point = convention.area29_to_point(convention.morton_word("1" + "1" * 29))
         with pytest.raises(ValueError, match="POINT"):
