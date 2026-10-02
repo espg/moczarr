@@ -9,6 +9,7 @@ conventions fails the round-trip first.
 """
 
 import json
+import re
 from pathlib import Path
 
 import numpy as np
@@ -487,6 +488,22 @@ def _plant_composition(group_dir, *, fill_value=0):
     meta_path.write_text(json.dumps(meta))
 
 
+def _declared_fill(message):
+    """The fill a gate refusal says the array declares, as an ``int``.
+
+    The gate formats the value with ``repr``, so the clause reads
+    ``np.uint64(7)`` for a numpy 2 scalar and ``7`` for a plain int, and which
+    one arrives is up to the library that supplied it (xarray's encoding, or
+    ``zarr.Array.fill_value``). The clause is parsed rather than either
+    spelling matched, so a correct refusal passes on both. A ``None`` — the
+    issue #76 symptom — is not an integer and fails here.
+    """
+    token = message.split("this array declares ", 1)[1].split(" — ", 1)[0]
+    match = re.fullmatch(r"(?:np\.\w+\()?(-?\d+)\)?", token)
+    assert match, f"the refusal declares {token!r}, not an integer fill"
+    return int(match.group(1))
+
+
 @pytest.fixture(params=["encoding as installed", "encoding without the fill"])
 def encoding_fill(request, monkeypatch):
     """Run a test on both sides of xarray 2026.7.0, whatever is installed.
@@ -555,7 +572,7 @@ class TestFillGateSource:
         with pytest.raises(ValueError, match="non-conforming composition array") as excinfo:
             _check_composition_fill(ds, rel, zarr_store, group_path)
         message = str(excinfo.value)
-        assert f"({fill_value})" in message and "None" not in message
+        assert _declared_fill(message) == fill_value and "None" not in message
 
     def test_encoding_fill_is_used_without_touching_the_store(self, tmp_path):
         # The zero-extra-GET half of the contract: when the encoding carries
@@ -569,7 +586,7 @@ class TestFillGateSource:
         ds["composition"].encoding["fill_value"] = np.uint64(3)
         with pytest.raises(ValueError, match="non-conforming composition array") as excinfo:
             _check_composition_fill(ds, rel, object(), group_path)
-        assert "(3)" in str(excinfo.value)
+        assert _declared_fill(str(excinfo.value)) == 3
 
 
 class TestFillGateOnEveryOpenPath:
@@ -646,4 +663,4 @@ class TestFillGateOnEveryOpenPath:
         with pytest.raises(ValueError, match="non-conforming composition array") as excinfo:
             self._open(kind, tmp_path, 7)
         message = str(excinfo.value)
-        assert "(7)" in message and "None" not in message
+        assert _declared_fill(message) == 7 and "None" not in message
