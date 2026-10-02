@@ -32,9 +32,21 @@ import xarray as xr
 
 try:
     from xdggs.grid import DGGSInfo, translate_parameters
-    from xdggs.healpix import center_around_prime_meridian
     from xdggs.index import DGGSIndex
     from xdggs.utils import _extract_cell_id_variable, register_dggs
+
+    try:  # xdggs >= 0.7 (Python >= 3.12): the healpix helpers live in grid_info
+        from xdggs.healpix.grid_info import (
+            center_around_prime_meridian,
+            polygons_geoarrow,
+            polygons_shapely,
+        )
+    except ImportError:  # xdggs 0.6 (the line the 3.11 leg resolves)
+        from xdggs.healpix import (
+            center_around_prime_meridian,
+            polygons_geoarrow,
+            polygons_shapely,
+        )
 except ImportError as exc:  # pragma: no cover - exercised only in core-only envs
     raise ImportError(
         "moczarr.dggs requires xdggs; install the extra: pip install 'moczarr[xdggs]'"
@@ -239,7 +251,6 @@ class MortonInfo(DGGSInfo):
         the accessor at all.
         """
         from mortie import mort2polygon
-        from xdggs.healpix import polygons_geoarrow, polygons_shapely
 
         backends = {"shapely": polygons_shapely, "geoarrow": polygons_geoarrow}
         backend_func = backends.get(backend)
@@ -381,6 +392,19 @@ class MortonIndex(DGGSIndex):
         if self._kind == "moc":
             return self._index.ranges.fabricate()
         return self._index.index.values
+
+    # xdggs 0.7's DGGSIndex base reads ``name``/``size`` off a PandasIndex
+    # (``self._index.index``), and its ``sel`` calls ``self.name``. Answered
+    # here for both kinds, as upstream HealpixIndex does for its moc kind.
+    @property
+    def name(self) -> str:
+        return self._name
+
+    @property
+    def size(self) -> int:
+        if self._kind == "moc":
+            return self._index.size
+        return self._index.index.size
 
     @classmethod
     def from_variables(cls, variables, *, options) -> "MortonIndex":

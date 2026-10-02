@@ -29,6 +29,15 @@
   `coverage=` alone no longer does,
   because the envelope does not carry the pointer. zagg's `versioned/`
   conformance fixture is vendored and runs the leaf-shaped gates.
+- Dependency drift ([#74](https://github.com/espg/moczarr/issues/74)):
+  `moczarr.dggs` works on both xdggs lines — the healpix helpers
+  (`center_around_prime_meridian`, `polygons_shapely`, `polygons_geoarrow`)
+  import from `xdggs.healpix.grid_info` on 0.7 and `xdggs.healpix` on 0.6,
+  and `MortonIndex` answers `name`/`size` itself so xdggs 0.7's base-class
+  `sel` works on the moc kind. On xarray 2026.9+ the core `MortonMocIndex`
+  against a `MortonIndex` of either kind over an identical domain aligns as
+  a pass-through (different index classes); differing domains, and a
+  `MortonIndex` pandas/moc pair on any domain, are still refused.
 - Reader independence ([#64](https://github.com/espg/moczarr/issues/64)):
   the t-digest algebra is now moczarr's own — `moczarr.tdigest`, pure numpy
   (`cdf_from_tdigest`, `quantile_from_tdigest`, and the order-independent
