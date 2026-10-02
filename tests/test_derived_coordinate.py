@@ -261,18 +261,57 @@ class TestOccupancy:
 
     def test_cell_index_falls_back_to_the_payload_without_exact_coverage(self, derived_strata):
         # A box-only stamp: no cell-exact record, so the chunk itself is
-        # read — written then means THIS field holds a payload there.
-        meta_path = derived_strata / "zarr.json"
-        meta = json.loads(meta_path.read_text())
-        coverage = meta["attributes"][convention.COMMIT_ATTR]["coverage"]
-        for key in ("encoding", "sidecar", "nbytes", "raw_nbytes"):
-            coverage.pop(key)
-        meta_path.write_text(json.dumps(meta))
+        # read — the cell-order group's payload arrays, any of them.
+        _box_only(derived_strata)
         leaf = LocalStore(derived_strata)
         assert not has_exact_occupancy(leaf)
         assert cell_index(leaf, SIGNAL, "433141", 1, 0) == 2
         with pytest.raises(ValueError, match="no stored read chunk"):
             cell_index(leaf, SIGNAL, UNWRITTEN_CHUNK, 0, 0)
+
+    @pytest.mark.parametrize("box_only", [False, True])
+    @pytest.mark.parametrize("hive_rooted", [False, True])
+    def test_a_chunk_another_field_wrote_resolves_as_on_the_stored_twin(
+        self, tmp_path, hive_rooted, box_only
+    ):
+        # Read chunk 433142 holds NOISE at cell 5 and no SIGNAL at all; the
+        # stored twin's coordinate is written there, so SIGNAL resolves —
+        # whether the stamp is exact or box-only, and whether the store is
+        # rooted at the leaf or at the hive (the stamp is the LEAF's, found
+        # off the field path, never the store root's).
+        root = tmp_path / "hive"
+        shutil.copytree(DATA / "strata_hive", root)
+        prefix = f"{STRATA['leaf']}/" if hive_rooted else ""
+        twin = LocalStore(DATA / "strata_hive" if hive_rooted else STRATA_LEAF)
+        stored = cell_index(twin, prefix + SIGNAL, "433142", 0, 1)
+        assert stored == 5
+        strip_morton(root / STRATA["leaf"], GROUP, window="2019")
+        if box_only:
+            _box_only(root / STRATA["leaf"])
+        derived = LocalStore(root if hive_rooted else root / STRATA["leaf"])
+        assert cell_index(derived, prefix + SIGNAL, "433142", 0, 1) == stored
+        with pytest.raises(ValueError, match="no stored read chunk"):
+            cell_index(derived, prefix + SIGNAL, UNWRITTEN_CHUNK, 0, 0)
+
+    def test_a_hive_rooted_call_reads_no_digest_bytes_with_exact_coverage(self, tmp_path):
+        root = tmp_path / "hive"
+        shutil.copytree(DATA / "strata_hive", root)
+        strip_morton(root / STRATA["leaf"], GROUP, window="2019")
+        counting = CountingStore(root)
+        field = f"{STRATA['leaf']}/{SIGNAL}"
+        assert cell_index(counting, field, "433141", 1, 0) == 2
+        assert [g for g in counting.gets if f"{field}/c/" in g[0]] == []
+        assert [g for g in counting.gets if g[0] == f"{STRATA['leaf']}/coverage.moc"]
+
+
+def _box_only(leaf_dir):
+    """Drop a copied leaf stamp's exact coverage, keeping its tier-0 box."""
+    meta_path = Path(leaf_dir) / "zarr.json"
+    meta = json.loads(meta_path.read_text())
+    coverage = meta["attributes"][convention.COMMIT_ATTR]["coverage"]
+    for key in ("encoding", "sidecar", "nbytes", "raw_nbytes"):
+        coverage.pop(key)
+    meta_path.write_text(json.dumps(meta))
 
 
 class TestRefusals:

@@ -23,9 +23,9 @@
   refused (`ValueError`; `open_hive` on the lazy path previously opened
   such a leaf without noticing). A derived coordinate is full by
   construction, so occupancy never comes from it: `cell_index` asks the
-  stamp's exact coverage (or, without one, the payload chunk) whether a
-  read chunk was written, where a stored coordinate answers with its `0`
-  fill. zagg's `windowed/` conformance fixture is vendored from the
+  leaf's stamp's exact coverage (or, without one, the cell-order group's
+  payload arrays over that chunk, any field's) whether a read chunk was
+  written, where a stored coordinate answers with its `0` fill. zagg's `windowed/` conformance fixture is vendored from the
   unmerged englacial/zagg#587 branch (sha `5848c2f4`) and runs the
   leaf-shaped gates plus §1.5's containment check on its location words.
 - Versioned leaves ([#70](https://github.com/espg/moczarr/issues/70)): the
