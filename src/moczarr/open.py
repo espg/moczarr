@@ -769,9 +769,13 @@ def open_hive(
             ds = _open_leaf_group(rel, stamp, group, zarr_store, xr_kwargs)
         except FileNotFoundError:
             # Zagg spec §1.5's corrupted leaf: a pointer naming a version that
-            # is missing or unstamped is debris. Confirmed with one GET on
-            # this error path only (the working open pays nothing), and it
-            # WARNS — unlike ordinary debris, a write that never finished, a
+            # is missing or unstamped is debris. This path detects a MISSING
+            # version only — the open reads arrays, never the version's own
+            # stamp, so an unstamped version whose arrays survive is served
+            # (catching it would cost one GET per versioned leaf; the
+            # verifier, which pays it, reports that leaf as debris). The
+            # miss is confirmed with one GET on this error path only (the
+            # working open pays nothing), and it WARNS — unlike ordinary debris, a write that never finished, a
             # stamped pointer over nothing means committed data was removed
             # out of band. Any other miss raises as it always has: a legacy
             # leaf, or a stamped version, without the manifest's cell-order

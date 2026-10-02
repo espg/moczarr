@@ -25,7 +25,9 @@ Postures, per the design's D9 discipline:
   leaves): the arrays and the in-leaf sidecar are under that version
   subgroup, and :func:`leaf_data_prefix` is the one place that says so. The
   stamp read itself stays on the stable root, as do the leaf's siblings at
-  its node. A pointer over a missing or unstamped version is debris.
+  its node. A pointer over a missing or unstamped version is debris (the
+  open paths, which never read the version's stamp, catch a missing one
+  only — see :func:`_dangling_pointer`).
 """
 
 from __future__ import annotations
@@ -295,8 +297,10 @@ def _dangling_pointer(store_root: str, leaf: str, stamp: dict | None, store: Any
     deletion alone — and a reader treats it as debris. ONE GET (the
     version's own ``zarr.json``), which is why no open path asks up front:
     callers ask only once a read under the version has already missed, or
-    (the verifier) where that GET is noise beside the read it gates. Always
-    ``False`` for a legacy leaf — its root stamp IS the data's stamp.
+    (the verifier) where that GET is noise beside the read it gates. So the
+    open paths detect a MISSING version only; an unstamped version whose
+    arrays survive is served by them and is debris to the verifier alone.
+    Always ``False`` for a legacy leaf — its root stamp IS the data's stamp.
     """
     prefix = leaf_data_prefix(leaf, stamp)
     if prefix == leaf.strip("/"):

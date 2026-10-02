@@ -67,8 +67,12 @@ A `current` that is not a version name (one path component beginning
 `run-`) raises. A pointer naming a version that is missing or unstamped is
 a corrupted leaf — the writer lands the pointer only after the version is
 stamped, so it means the version was removed out of band — and is read as
-debris: `open_hive` skips it with a warning, the verifier reports no
-arrays.
+debris: `open_hive` skips a missing version with a warning, the verifier
+reports no arrays. One gap is deliberate: the open never reads the
+version's own stamp (that would be one more GET per versioned leaf), so a
+version whose stamp alone is gone, arrays intact, is still served by
+`open_hive` — only the verifier, which reads that object anyway, calls it
+debris.
 
 ## Coverage tiers
 

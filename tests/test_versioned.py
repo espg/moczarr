@@ -16,6 +16,7 @@ versioned conformance fixture is exercised in ``test_spec_conformance.py``.
 
 import json
 import shutil
+import warnings
 from pathlib import Path
 
 import numpy as np
@@ -259,6 +260,20 @@ class TestCorruptedLeaf:
         with pytest.warns(UserWarning, match="corrupted leaf"):
             ds = open_hive(versioned_serc)
         assert ds.sizes["cells"] == open_hive(str(SERC)).sizes["cells"] - 16
+
+    def test_unstamped_version_with_its_arrays_is_served_by_open_hive(self, versioned_serc):
+        # The deliberate gap (issue #70 review): the open never reads the
+        # version's own stamp — catching this state would cost one GET per
+        # versioned leaf — so the arrays are served, silently, while the
+        # verifier, which reads that object anyway, reports debris.
+        rel = convention.leaf_path(SERC_SHARD)
+        version = store.read_commit(versioned_serc, rel)["current"]
+        (Path(versioned_serc) / rel / version / "zarr.json").unlink()
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            ds = open_hive(versioned_serc).load()
+        xr.testing.assert_identical(ds, open_hive(str(SERC)).load())
+        assert hash_arrays(versioned_serc, rel) == {}
 
     def test_stamped_version_missing_its_group_still_raises(self, versioned_serc):
         # NOT debris: the version is there and stamped, so a missing

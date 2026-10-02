@@ -19,8 +19,10 @@
   request**; a stamp without `current` is a legacy leaf and reads exactly
   as before, and a store may mix both. A `current` that is not a version
   name raises `ValueError`; a pointer naming a missing or unstamped version
-  is a corrupted leaf, read as debris (`open_hive` skips it with a
-  `UserWarning`). `open_leaf` now reads the leaf's root stamp (one GET it
+  is a corrupted leaf, read as debris (`open_hive` skips a missing one with
+  a `UserWarning`, but serves an unstamped one whose arrays survive — it
+  never reads the version's stamp, which would cost a GET per leaf; the
+  verifier reports it as debris). `open_leaf` now reads the leaf's root stamp (one GET it
   did not make before), and `read_coverage_bitmap` takes `stamp=` — the
   already-read stamp that skips its GET; `coverage=` alone no longer does,
   because the envelope does not carry the pointer. zagg's `versioned/`
