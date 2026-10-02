@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+- Versioned leaves ([#70](https://github.com/espg/moczarr/issues/70)): the
+  reader follows the zagg spec §1.5 pointer. A leaf's stable `{id}.zarr/`
+  prefix may now be a **pointer root** — its commit stamp names `current`,
+  the `run-{run_id}-{attempt}` version subgroup that holds the arrays, the
+  in-leaf `coverage.moc` and a stamp of its own (what zagg's hive writers
+  produce by default from englacial/zagg#585 on). `open_hive`, `open_leaf`
+  (the returned store is rooted at the version, so every per-leaf reader
+  keeps addressing `{cell_order}/{name}`), `read_coverage_bitmap` /
+  `bitmap_and` / the two-store intersection, and the O11 verifier
+  (`hash_arrays`, `verify_arrays` — hashes keyed relative to the version
+  root, superseded versions out of scope) all resolve it through one new
+  helper, `moczarr.store.leaf_data_prefix(leaf, stamp)`. The stamp is the
+  object every open already reads, so following the pointer adds **no
+  request**; a stamp without `current` is a legacy leaf and reads exactly
+  as before, and a store may mix both. A `current` that is not a version
+  name raises `ValueError`; a pointer naming a missing or unstamped version
+  is a corrupted leaf, read as debris (`open_hive` skips it with a
+  `UserWarning`). `open_leaf` now reads the leaf's root stamp (one GET it
+  did not make before), and `read_coverage_bitmap` takes `stamp=` — the
+  already-read stamp that skips its GET; `coverage=` alone no longer does,
+  because the envelope does not carry the pointer. zagg's `versioned/`
+  conformance fixture is vendored and runs the leaf-shaped gates.
 - Reader independence ([#64](https://github.com/espg/moczarr/issues/64)):
   the t-digest algebra is now moczarr's own — `moczarr.tdigest`, pure numpy
   (`cdf_from_tdigest`, `quantile_from_tdigest`, and the order-independent

@@ -74,7 +74,7 @@ class TestColumnNaming:
 
 
 class TestWalkColumns:
-    @pytest.mark.parametrize("fixture", ["minimal", "temporal", "kitchen_sink"])
+    @pytest.mark.parametrize("fixture", ["minimal", "temporal", "kitchen_sink", "versioned"])
     def test_columns_discoverable_leaves_unpolluted(self, fixture):
         # The seam cuts both ways (issue #36): walk_leaves still never
         # yields the column — it is commit-stamped, so read_commit would
