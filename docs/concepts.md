@@ -109,10 +109,16 @@ are not leaves and store their coordinate at every revision.
 A derived coordinate is **full by construction** — it names every cell of
 the shard, written or not — so it says nothing about occupancy. Wherever
 "was this written?" matters, the answer comes from the data: the stamp's
-coverage (the tiers below) or the payload arrays. This is the one place
-the two forms differ to a caller: on `index_kind="pandas"`, a stored
-coordinate shows `0` across an unwritten inner chunk where a derived one
-shows the cells' real words.
+coverage (the tiers below) or the payload arrays. The two forms differ to
+a caller on `index_kind="pandas"`, which hands back the coordinate itself:
+a stored coordinate shows `0` across an unwritten inner chunk where a
+derived one shows the cells' real words. That `0` has two further effects
+there, both pre-existing behavior of a stored coordinate rather than
+anything the derived form adds: the default `cell_ids` fabrication refuses
+it (mixed-order area words), and so does every `aoi=` open (an empty or
+invalid word) — so a stored leaf with an unwritten chunk is refused by both
+where its derived twin opens. The lazy `index_kind="moc"` default never
+reads the coordinate and opens the two identically.
 
 ## Coverage tiers
 
