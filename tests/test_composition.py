@@ -590,11 +590,13 @@ class TestFillGateSource:
 
 
 class TestFillGateOnEveryOpenPath:
-    """The gate reaches the right array from each of its five call sites.
+    """The gate reaches an array from each of its five call sites.
 
     Each site names the array's metadata by the group path it opened, so a
-    site that passed the wrong path would fail to find the array (or find a
-    different one) the moment the encoding stopped carrying the fill. Before
+    site that passed a path with no array under it would fail to find one
+    the moment the encoding stopped carrying the fill. Every object here
+    carries the same fill, so these cases cannot tell one object's array
+    from another's: that is :class:`TestFillGateJudgesItsOwnObject`. Before
     issue #76 only ``open_hive``'s main path ever met a composition array in
     this suite. ``encoding_fill`` runs every case on both sides of xarray
     2026.7.0.
@@ -664,3 +666,136 @@ class TestFillGateOnEveryOpenPath:
             self._open(kind, tmp_path, 7)
         message = str(excinfo.value)
         assert _declared_fill(message) == 7 and "None" not in message
+
+
+class TestFillGateJudgesItsOwnObject:
+    """Each opened object is judged by ITS OWN array's fill (issue #76).
+
+    The metadata fallback makes the verdict depend on a path string, and at
+    most call sites another object's path is in scope beside the right one
+    (the schema object's inside a loop, the loop's last one in a schema
+    branch). So every case here gives exactly ONE object a nonzero fill and
+    the rest 0, and asserts the refusal names that object and its fill: a
+    site that named another object's array would read a conforming 0 and
+    open the store. That bites wherever the encoding lacks the fill — the
+    stripped ``encoding_fill`` param on every xarray, both params below
+    2026.7.0.
+
+    Covered: ``open_hive`` and ``open_overview_order``, main loop and schema
+    branch each, and ``open_column_order``'s main loop. Its schema branch is
+    not: there the schema object is the last one its probe loop named, so no
+    second path exists to tell apart.
+    """
+
+    HIVE_SHARDS = ("-5112333", "-5112334")
+    TEMPORAL = TestFillGateOnEveryOpenPath.TEMPORAL
+    OVERVIEW = TestFillGateOnEveryOpenPath.OVERVIEW
+    REFUSED = "non-conforming composition array"
+
+    @staticmethod
+    def _refusal(excinfo):
+        """``(object, declared fill)`` as the gate's refusal names them."""
+        message = str(excinfo.value)
+        return message.split(" at ", 1)[1].split(": spec §3", 1)[0], _declared_fill(message)
+
+    def _two_leaf_hive(self, tmp_path, fills):
+        """Two committed leaves with a composition array each; word order."""
+        from conftest import build_many_leaf_store
+
+        root = tmp_path / "store"
+        shards = sorted(self.HIVE_SHARDS, key=convention.morton_word)
+        build_many_leaf_store(root, shards)
+        rels = [convention.leaf_path(shard) for shard in shards]
+        for rel, fill in zip(rels, fills):
+            _plant_composition(root / rel / "8", fill_value=fill)
+        return root, shards, rels
+
+    def _overview(self, tmp_path, bad):
+        """The four order-6 overview objects, fill 7 in the ``bad``-th by word."""
+        import shutil
+
+        root = tmp_path / "overview"
+        shutil.copytree(self.OVERVIEW, root)
+        groups = sorted(
+            root.glob("*/*/*/*/*/all.zarr/6"),
+            key=lambda g: convention.morton_word("".join(g.relative_to(root).parts[:5])),
+        )
+        assert len(groups) == 4  # the fixture's whole order-6 level
+        for i, group_dir in enumerate(groups):
+            _plant_composition(group_dir, fill_value=7 if i == bad else 0)
+        return str(root), [g.parent.relative_to(root).as_posix() for g in groups]
+
+    def _two_columns(self, tmp_path, bad):
+        """The temporal column plus a sibling, fill 7 in the ``bad``-th by word."""
+        import shutil
+
+        from test_level import COLUMN_REL, SIBLING, _write_sibling_column
+
+        root = tmp_path / "column"
+        shutil.copytree(self.TEMPORAL, root)
+        _write_sibling_column(root)
+        rels = sorted(
+            [COLUMN_REL, convention.column_path(SIBLING)],
+            key=lambda rel: convention.morton_word("".join(rel.split("/")[:5])),
+        )
+        for i, rel in enumerate(rels):
+            _plant_composition(root / rel / "5", fill_value=7 if i == bad else 0)
+        return str(root), rels
+
+    @pytest.mark.parametrize("bad", [0, 1])
+    def test_open_hive_refuses_the_one_nonconforming_leaf(self, bad, tmp_path, encoding_fill):
+        root, _shards, rels = self._two_leaf_hive(tmp_path, [7 if i == bad else 0 for i in (0, 1)])
+        with pytest.raises(ValueError, match=self.REFUSED) as excinfo:
+            open_hive(str(root))
+        assert self._refusal(excinfo) == (rels[bad], 7)
+
+    @pytest.mark.filterwarnings("ignore:.*intersects no coverage.*:UserWarning")
+    def test_open_hive_schema_branch_judges_the_schema_leaf(self, tmp_path, encoding_fill):
+        # The AOI selects only D4 debris: a leaf the root MOC lists, arrays on
+        # disk, no commit stamp. Nothing opens, so the schema comes from the
+        # other, committed leaf — which declares 7, while the debris (the last
+        # path the candidate loop named) declares 0.
+        root, shards, rels = self._two_leaf_hive(tmp_path, [7, 0])
+        debris = {"zarr_format": 3, "node_type": "group", "attributes": {}}
+        (root / rels[1] / "zarr.json").write_text(json.dumps(debris))
+        aoi = np.array([convention.morton_word(shards[1])], dtype=np.uint64)
+        with pytest.raises(ValueError, match=self.REFUSED) as excinfo:
+            open_hive(str(root), aoi=aoi)
+        assert self._refusal(excinfo) == (rels[0], 7)
+
+    @pytest.mark.parametrize("bad", range(4))
+    def test_open_overview_order_refuses_the_one_nonconforming_object(
+        self, bad, tmp_path, encoding_fill
+    ):
+        from moczarr import open_overview_order, read_manifest
+
+        root, rels = self._overview(tmp_path, bad)
+        with pytest.raises(ValueError, match=self.REFUSED) as excinfo:
+            open_overview_order(root, read_manifest(root), 4)
+        assert self._refusal(excinfo) == (rels[bad], 7)
+
+    @pytest.mark.filterwarnings("ignore:.*intersects no coverage.*:UserWarning")
+    def test_open_overview_order_schema_branch_judges_the_schema_object(
+        self, tmp_path, encoding_fill
+    ):
+        # An AOI off the coverage opens nothing, so the schema comes from the
+        # first stamped object — which declares 7, while the last object the
+        # loop named declares 0.
+        from moczarr import open_overview_order, read_manifest
+
+        root, rels = self._overview(tmp_path, 0)
+        aoi = np.array([convention.morton_word(self.HIVE_SHARDS[0])], dtype=np.uint64)
+        with pytest.raises(ValueError, match=self.REFUSED) as excinfo:
+            open_overview_order(root, read_manifest(root), 4, aoi=aoi)
+        assert self._refusal(excinfo) == (rels[0], 7)
+
+    @pytest.mark.parametrize("bad", [0, 1])
+    def test_open_column_order_refuses_the_one_nonconforming_column(
+        self, bad, tmp_path, encoding_fill
+    ):
+        from moczarr import open_column_order, read_manifest
+
+        root, rels = self._two_columns(tmp_path, bad)
+        with pytest.raises(ValueError, match=self.REFUSED) as excinfo:
+            open_column_order(root, read_manifest(root), 5)
+        assert self._refusal(excinfo) == (rels[bad], 7)
