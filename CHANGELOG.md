@@ -15,8 +15,8 @@
   root, superseded and not-yet-swapped `run-…` versions out of scope, also
   under a legacy root) all resolve it through one new
   helper, `moczarr.store.leaf_data_prefix(leaf, stamp)`. The stamp is the
-  object every open already reads, so following the pointer adds **no
-  request**; a stamp without `current` is a legacy leaf and reads exactly
+  object `open_hive` already reads, so following the pointer adds **no
+  request** there; a stamp without `current` is a legacy leaf and reads exactly
   as before, and a store may mix both. A `current` that is not a version
   name raises `ValueError`; a pointer naming a missing or unstamped version
   is a corrupted leaf, read as debris (`open_hive` skips a missing one with
