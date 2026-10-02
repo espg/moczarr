@@ -466,8 +466,12 @@ def _schema_leaf(
     return next((r for r, s in zip(leaves, stamps) if s is not None), None)
 
 
-def _check_composition_fill(ds, rel: str) -> None:
+def _check_composition_fill(ds, rel: str, zarr_store, group_path: str) -> None:
     """Refuse a composition array whose declared ``fill_value`` is not 0 (§3).
+
+    ``ds`` is the dataset ``xarray`` opened from ``group_path`` (the
+    ``group=`` it was given) in ``zarr_store``; ``rel`` names the object in
+    the error.
 
     ``zagg-composition/1`` packs an empty signal stratum to ``0``, and spec §3
     **MUST**s the array's fill value to be the same ``0`` so an *unwritten*
@@ -478,9 +482,17 @@ def _check_composition_fill(ds, rel: str) -> None:
     coverage caches). zagg enforces the same rule writer-side at config
     validation, so a store tripping this is malformed, not merely old.
 
-    Costs nothing: both the attrs and the declared fill come from the leaf
-    metadata ``xarray`` has just read, so there is no extra object GET. The
-    lane algebra stays pure — :mod:`moczarr.composition` takes words and
+    The declared fill is ``zarr.Array.fill_value``. From xarray 2026.7.0 the
+    zarr backend copies exactly that into the variable's encoding on read, so
+    there the check costs nothing: attrs and fill both come from the leaf
+    metadata ``xarray`` has just read, with no extra object GET. Older
+    releases, down to the declared 2026.01.0 floor, leave the fill out of the
+    encoding (issue #76), so there it is read from the array's own
+    ``zarr.json`` — one metadata GET per composition array per opened object.
+    Both branches judge the same value; an encoding without a fill is never
+    taken to mean the array declares none.
+
+    The lane algebra stays pure — :mod:`moczarr.composition` takes words and
     attrs and never sees a ``zarr.Array``, which is why this check lives on
     the open path instead.
     """
@@ -489,6 +501,12 @@ def _check_composition_fill(ds, rel: str) -> None:
         if not isinstance(block, Mapping) or "spec" not in block:
             continue
         fill = var.encoding.get("fill_value")
+        if fill is None:
+            import zarr
+
+            fill = zarr.open_array(
+                zarr_store, path=f"{group_path}/{name}", zarr_format=3, mode="r"
+            ).fill_value
         if fill is None or fill != 0:
             raise ValueError(
                 f"non-conforming composition array {name!r} at {rel}: spec §3 requires "
@@ -733,7 +751,7 @@ def open_hive(
             zarr_format=3,
             **(xr_kwargs or {}),
         )
-        _check_composition_fill(ds, rel)
+        _check_composition_fill(ds, rel, zarr_store, f"{rel}/{group}")
         coords = [name for name in ("morton", "cell_ids") if name in ds]
         ds = ds.set_coords(coords)
         if index_kind == "moc":
@@ -814,7 +832,7 @@ def open_hive(
             zarr_format=3,
             **(xr_kwargs or {}),
         )
-        _check_composition_fill(ds, schema_rel)
+        _check_composition_fill(ds, schema_rel, zarr_store, f"{schema_rel}/{group}")
         coords = [name for name in ("morton", "cell_ids") if name in ds]
         ds = ds.set_coords(coords)
         empty_dim = ds["morton"].dims[0] if "morton" in ds.coords else "cells"

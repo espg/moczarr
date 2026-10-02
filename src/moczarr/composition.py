@@ -18,7 +18,7 @@ occurrences — a fill of 1 reads as a phantom ``land``. The claims below hold
 That precondition is **enforced on the open path**, not here: ``open_hive``
 raises on any array whose attrs carry a ``composition.spec`` block and whose
 declared fill is not 0 (``moczarr.open._check_composition_fill``), where the
-array metadata is already in hand. So a store reaching these functions through
+array metadata is within reach. So a store reaching these functions through
 ``open_hive`` has been checked, this module stays pure numpy over words and
 attrs, and a caller who opens an array by other means should check
 ``array.fill_value == 0`` itself alongside the §3.3 attrs gate.

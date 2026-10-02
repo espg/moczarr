@@ -397,7 +397,7 @@ class TestOpenHiveFillGate:
     :func:`moczarr.composition.lane_presence` is exact on *unwritten* cells
     only if the array's fill is the same ``0`` an empty stratum packs to, and
     the lane functions take words rather than arrays, so they structurally
-    cannot check it. ``open_hive`` does, on the metadata it already read
+    cannot check it. ``open_hive`` does, on the array's own metadata
     (``moczarr.open._check_composition_fill``). These tests drop the REAL §7
     conformance array (``tests/data/composition/``, 16 cells — exactly the
     16-cell subtree of a ``cell_order=8`` / ``shard_order=6`` leaf) into a
@@ -466,3 +466,184 @@ class TestOpenHiveFillGate:
         message = str(excinfo.value)
         assert "'composition'" in message and self.SHARD in message
         assert "spec §3 requires fill_value 0" in message and "255" in message
+
+
+def _plant_composition(group_dir, *, fill_value=0):
+    """Give a level group a composition array: its ``morton`` re-headed.
+
+    ``morton`` is already a uint64 array on the group's ``cells`` axis, so a
+    copy carrying the fixture's ``composition`` attrs block and the requested
+    fill is a well-formed composition array as far as the fill gate reads it
+    (attrs + declared fill). The words are not lanes; no test here decodes
+    them.
+    """
+    import shutil
+
+    shutil.copytree(group_dir / "morton", group_dir / "composition")
+    meta_path = group_dir / "composition" / "zarr.json"
+    meta = json.loads(meta_path.read_text())
+    meta["attributes"] = json.loads((FIXTURE / "zarr.json").read_text())["attributes"]
+    meta["fill_value"] = fill_value
+    meta_path.write_text(json.dumps(meta))
+
+
+@pytest.fixture(params=["encoding as installed", "encoding without the fill"])
+def encoding_fill(request, monkeypatch):
+    """Run a test on both sides of xarray 2026.7.0, whatever is installed.
+
+    From 2026.7.0 ``xr.open_zarr`` copies a zarr v3 array's ``fill_value``
+    into the variable encoding; older releases, down to the declared
+    2026.01.0 floor, do not (issue #76). The second param strips it after
+    the real open, which is exactly what the older backend hands back, so
+    the gate's metadata fallback is exercised on every xarray this suite
+    runs on rather than only on a floor environment CI does not build.
+    """
+    if request.param == "encoding without the fill":
+        import xarray as xr
+
+        real = xr.open_zarr
+
+        def open_zarr(*args, **kwargs):
+            ds = real(*args, **kwargs)
+            for var in ds.variables.values():
+                var.encoding.pop("fill_value", None)
+            return ds
+
+        monkeypatch.setattr(xr, "open_zarr", open_zarr)
+    return request.param
+
+
+class TestFillGateSource:
+    """Where the gate gets the declared fill (issue #76).
+
+    The value judged is ``zarr.Array.fill_value``: taken from the xarray
+    encoding when xarray put it there, read from the array's own metadata
+    when it did not. An encoding that lacks the fill must never be read as
+    "the array declares none" — that refused every conforming store at the
+    declared xarray floor.
+    """
+
+    SHARD = TestOpenHiveFillGate.SHARD
+
+    def _gate_inputs(self, tmp_path, *, fill_value=0):
+        """``(ds, rel, zarr_store, group_path)`` as an open path hands them over."""
+        import xarray as xr
+        from zarr.storage import LocalStore
+
+        root = TestOpenHiveFillGate()._store_with_composition(tmp_path, fill_value=fill_value)
+        rel = convention.leaf_path(self.SHARD)
+        zarr_store = LocalStore(root, read_only=True)
+        ds = xr.open_zarr(zarr_store, group=f"{rel}/8", consolidated=False, zarr_format=3)
+        return ds, rel, zarr_store, f"{rel}/8"
+
+    def test_missing_encoding_fill_is_read_from_the_array_metadata(self, tmp_path):
+        from moczarr.open import _check_composition_fill
+
+        ds, rel, zarr_store, group_path = self._gate_inputs(tmp_path)
+        ds["composition"].encoding.pop("fill_value", None)
+        assert "fill_value" not in ds["composition"].encoding
+        _check_composition_fill(ds, rel, zarr_store, group_path)  # conforming: no raise
+
+    @pytest.mark.parametrize("fill_value", [1, 255])
+    def test_missing_encoding_fill_still_refuses_a_nonzero_fill(self, tmp_path, fill_value):
+        # The refusal names the fill the ARRAY declares, not the None the
+        # encoding lookup came back with.
+        from moczarr.open import _check_composition_fill
+
+        ds, rel, zarr_store, group_path = self._gate_inputs(tmp_path, fill_value=fill_value)
+        ds["composition"].encoding.pop("fill_value", None)
+        with pytest.raises(ValueError, match="non-conforming composition array") as excinfo:
+            _check_composition_fill(ds, rel, zarr_store, group_path)
+        message = str(excinfo.value)
+        assert f"({fill_value})" in message and "None" not in message
+
+    def test_encoding_fill_is_used_without_touching_the_store(self, tmp_path):
+        # The zero-extra-GET half of the contract: when the encoding carries
+        # the fill, the store is not consulted (a bare object() would fail
+        # any read), and a nonzero encoding fill is refused on its own.
+        from moczarr.open import _check_composition_fill
+
+        ds, rel, _zarr_store, group_path = self._gate_inputs(tmp_path)
+        ds["composition"].encoding["fill_value"] = np.uint64(0)
+        _check_composition_fill(ds, rel, object(), group_path)
+        ds["composition"].encoding["fill_value"] = np.uint64(3)
+        with pytest.raises(ValueError, match="non-conforming composition array") as excinfo:
+            _check_composition_fill(ds, rel, object(), group_path)
+        assert "(3)" in str(excinfo.value)
+
+
+class TestFillGateOnEveryOpenPath:
+    """The gate reaches the right array from each of its five call sites.
+
+    Each site names the array's metadata by the group path it opened, so a
+    site that passed the wrong path would fail to find the array (or find a
+    different one) the moment the encoding stopped carrying the fill. Before
+    issue #76 only ``open_hive``'s main path ever met a composition array in
+    this suite. ``encoding_fill`` runs every case on both sides of xarray
+    2026.7.0.
+    """
+
+    SHARD = TestOpenHiveFillGate.SHARD
+    TEMPORAL = Path(__file__).parent / "data" / "spec" / "temporal"
+    OVERVIEW = Path(__file__).parent / "data" / "overview_hive" / "atl06"
+    COLUMN_GROUP = "1/1/2/1/3/all.pyramid.zarr/5"
+
+    def _hive(self, tmp_path, fill_value):
+        return TestOpenHiveFillGate()._store_with_composition(tmp_path, fill_value=fill_value)
+
+    def _column_store(self, tmp_path, fill_value):
+        import shutil
+
+        root = tmp_path / "column"
+        shutil.copytree(self.TEMPORAL, root)
+        _plant_composition(root / self.COLUMN_GROUP, fill_value=fill_value)
+        return str(root)
+
+    def _overview_store(self, tmp_path, fill_value):
+        import shutil
+
+        root = tmp_path / "overview"
+        shutil.copytree(self.OVERVIEW, root)
+        planted = 0
+        for morton in sorted(root.glob("**/all.zarr/*/morton")):
+            _plant_composition(morton.parent, fill_value=fill_value)
+            planted += 1
+        assert planted  # the fixture really has overview groups to plant in
+        return str(root)
+
+    def _open(self, kind, tmp_path, fill_value):
+        """Open one path; the ``-empty`` kinds take the schema-leaf branch."""
+        from moczarr import open_column_order, open_overview_order, read_manifest
+        from moczarr.convention import morton_word
+
+        # An AOI over a shard neither store covers: the hive leaf is southern
+        # (-5112333), the overview fixture northern (433...).
+        off_hive = np.array([morton_word("1121333")], dtype=np.uint64)
+        off_overview = np.array([morton_word(self.SHARD)], dtype=np.uint64)
+        if kind == "hive":
+            return open_hive(self._hive(tmp_path, fill_value))
+        if kind == "hive-empty":
+            return open_hive(self._hive(tmp_path, fill_value), aoi=off_hive)
+        if kind == "column":
+            root = self._column_store(tmp_path, fill_value)
+            return open_column_order(root, read_manifest(root), 5)
+        root = self._overview_store(tmp_path, fill_value)
+        aoi = off_overview if kind == "overview-empty" else None
+        return open_overview_order(root, read_manifest(root), 4, aoi=aoi)
+
+    KINDS = ["hive", "hive-empty", "column", "overview", "overview-empty"]
+
+    @pytest.mark.parametrize("kind", KINDS)
+    @pytest.mark.filterwarnings("ignore:.*intersects no coverage.*:UserWarning")
+    def test_conforming_fill_opens(self, kind, tmp_path, encoding_fill):
+        ds = self._open(kind, tmp_path, 0)
+        assert "composition" in ds
+        assert (ds.sizes["cells"] == 0) == kind.endswith("-empty")
+
+    @pytest.mark.parametrize("kind", KINDS)
+    @pytest.mark.filterwarnings("ignore:.*intersects no coverage.*:UserWarning")
+    def test_nonzero_fill_is_refused_by_its_declared_value(self, kind, tmp_path, encoding_fill):
+        with pytest.raises(ValueError, match="non-conforming composition array") as excinfo:
+            self._open(kind, tmp_path, 7)
+        message = str(excinfo.value)
+        assert "(7)" in message and "None" not in message
