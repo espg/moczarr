@@ -543,3 +543,118 @@ class TestSubtreeCellSpan:
     def test_malformed_raises(self):
         with pytest.raises(ValueError):
             self._span("abc")
+
+
+class TestLeafCellWords:
+    """The derived cell coordinate (issue #71; zagg spec §1.5 "The cell
+    coordinate"): a leaf's cells axis is the shard's children at the cell
+    order in canonical nested order, and cell ``j`` carries the ``j``-th
+    child's packed word. Pinned here against string arithmetic on the id —
+    the D1 digit tail of rank ``j`` — which shares no code with mortie's
+    children kernel; the zagg-written golden words are in
+    ``test_spec_conformance.py``."""
+
+    #: One order-9 shard per hemisphere — the instance the spec pins.
+    ORDER9 = ("3232131144", "-5112333142")
+
+    def test_cell_j_is_the_jth_child(self, shard):
+        words = convention.leaf_cell_words(shard, 8)
+        assert words.dtype == np.uint64 and words.shape == (16,)
+        assert [int(w) for w in words] == [
+            convention.morton_word(shard + convention.rank_tail(j, 2)) for j in range(16)
+        ]
+        # Canonical nested order: strictly ascending as unsigned words.
+        assert np.all(words[1:] > words[:-1])
+
+    def test_both_id_currencies_agree(self, shard):
+        from_word = convention.leaf_cell_words(convention.morton_word(shard), 9)
+        np.testing.assert_array_equal(from_word, convention.leaf_cell_words(shard, 9))
+
+    def test_depth_zero_is_the_shard_itself(self, shard):
+        words = convention.leaf_cell_words(shard, 6)
+        assert [int(w) for w in words] == [convention.morton_word(shard)]
+
+    @pytest.mark.parametrize("shard9", ORDER9)
+    def test_order_19_stride_is_pinned(self, shard9):
+        """The spec's measured instance: one order-9 shard at cell order 19
+        is 1,048,576 words in ONE arithmetic progression of stride 4,194,304
+        — in both hemispheres."""
+        words = convention.leaf_cell_words(shard9, 19)
+        assert words.shape == (4**10,) == (1_048_576,)
+        strides = np.unique(np.diff(words))
+        assert strides.tolist() == [4_194_304] == [2 ** (60 - 2 * 19)]
+        first = convention.morton_word(shard9 + "1" * 10)
+        np.testing.assert_array_equal(
+            words, np.uint64(first) + np.arange(4**10, dtype=np.uint64) * np.uint64(4_194_304)
+        )
+        assert int(words[-1]) == convention.morton_word(shard9 + "4" * 10)
+
+    def test_southern_words_set_bit_63_and_the_progression_is_unsigned(self):
+        """A southern word sets bit 63, so the words exceed the int64 range:
+        the progression holds as UNSIGNED arithmetic and would be a
+        descending, wrapped sequence read as signed."""
+        north, south = (convention.leaf_cell_words(s, 19) for s in self.ORDER9)
+        assert not np.any(north >> np.uint64(63))
+        assert np.all(south >> np.uint64(63) == 1)
+        assert int(south[0]) > 2**63 > int(north[-1])
+        assert np.all(south[1:] > south[:-1])
+        assert np.all(south.view(np.int64) < 0)  # what a signed read would see
+        assert int(south[-1]) - int(south[0]) == (4**10 - 1) * 4_194_304
+
+    @pytest.mark.parametrize("cell_order", range(6, 28))
+    def test_stride_law_holds_through_order_27(self, shard, cell_order):
+        """``word[j] = word[0] + j * 2**(60 - 2c)`` for every ``c <= 27``."""
+        shard = shard + "1" * max(0, cell_order - 9)  # keep the leaf at depth <= 3
+        words = convention.leaf_cell_words(shard, cell_order)
+        depth = cell_order - convention.decimal_order(shard)
+        assert words.size == 4**depth
+        if depth:
+            assert np.unique(np.diff(words)).tolist() == [2 ** (60 - 2 * cell_order)]
+
+    @pytest.mark.parametrize("cell_order", range(6, 28))
+    def test_matches_the_lazy_index_fabrication(self, shard, cell_order):
+        """The moc index fabricates the same coordinate from interval
+        arithmetic (``MortonRanges``): the two derivations must agree word
+        for word, or the lazy and eager opens of one leaf would differ."""
+        from moczarr.ranges import MortonRanges
+
+        shard = shard + "1" * max(0, cell_order - 9)
+        fabricated = MortonRanges.from_shards(
+            [convention.morton_word(shard)], cell_order
+        ).fabricate()
+        np.testing.assert_array_equal(convention.leaf_cell_words(shard, cell_order), fabricated)
+
+    @pytest.mark.parametrize("cell_order", [28, 29])
+    def test_orders_28_and_29_follow_the_children_law_not_the_stride(self, shard, cell_order):
+        """Past order 27 the §1 suffix packs the last tuples: the stride is
+        not uniform, and the law — the j-th child's word — is what holds."""
+        from mortie import clip2order
+
+        parent = shard + "1" * 20  # order 26
+        words = convention.leaf_cell_words(parent, cell_order)
+        depth = cell_order - 26
+        assert [int(w) for w in words] == [
+            convention.morton_word(parent + convention.rank_tail(j, depth)) for j in range(4**depth)
+        ]
+        assert len(np.unique(np.diff(words))) > 1
+        assert np.all(words[1:] > words[:-1])
+        assert not np.any(convention.is_point_word(words))  # AREA words, never points
+        ancestors = clip2order(26, words)
+        assert np.all(ancestors == np.uint64(convention.morton_word(parent)))
+
+    def test_a_cell_order_above_the_shard_is_refused(self, shard):
+        with pytest.raises(ValueError, match="descendants"):
+            convention.leaf_cell_words(shard, 5)
+        with pytest.raises(ValueError, match="descendants"):
+            convention.leaf_cell_words(shard, 30)
+
+    def test_a_point_word_names_no_leaf(self):
+        point = convention.area29_to_point(convention.morton_word("1" + "1" * 29))
+        with pytest.raises(ValueError, match="POINT"):
+            convention.leaf_cell_words(point, 29)
+
+    def test_a_non_word_is_refused(self):
+        with pytest.raises(ValueError, match="uint64"):
+            convention.leaf_cell_words(-1, 8)
+        with pytest.raises(ValueError):
+            convention.leaf_cell_words(0, 8)  # the fill word is not a morton word

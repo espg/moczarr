@@ -549,6 +549,55 @@ def leaf_path(shard: str | int, window: str | None = None, *, path_grouping: int
     return rel
 
 
+def leaf_cell_words(shard: str | int, cell_order: int) -> np.ndarray:
+    """The per-cell ``morton`` words of a shard's leaf, derived (``uint64``).
+
+    The law of zagg spec §1.5 ("The cell coordinate"): a leaf's cells axis is
+    the shard's children at the cell order in canonical nested order, and
+    cell ``j`` carries the packed word of the ``j``-th child — so the
+    coordinate is a pure function of the leaf's id and the rank, and a
+    windowed leaf (``{id}_{window}.zarr``) stores no array of it. This is
+    where those words come from; a stored array (every unwindowed leaf, and
+    windowed leaves written before the revision) equals it on each written
+    chunk and holds the ``0`` fill on the unwritten ones — which a derived
+    coordinate never does: it is **full by construction**, so it says
+    nothing about occupancy.
+
+    The law is mortie's children kernel, stated in mortie's terms, and for a
+    cell order ``c <= 27`` it is one arithmetic progression across the whole
+    shard, in both hemispheres (a southern word sets bit 63 and the
+    progression is unsigned)::
+
+        word[j] = word[0] + j * 2**(60 - 2*c)      # 4,194,304 at c = 19
+
+    — the same words :class:`moczarr.ranges.MortonRanges` fabricates for the
+    lazy index. At orders 28 and 29 the §1 suffix packs the last tuples, the
+    stride is not uniform, and only the children law holds; that is why the
+    stride is an instance of the law here and never its definition.
+
+    ``shard`` is the leaf's id (packed word or decimal string) — an AREA
+    word at or above ``cell_order``. Returns the ``4**(cell_order - order)``
+    words in axis order.
+    """
+    from mortie import generate_morton_children
+
+    word = morton_word(shard)
+    if not 0 <= word < 2**64:
+        raise ValueError(f"shard {shard!r} is outside the uint64 range, not a packed morton word")
+    if is_point_word(word):
+        raise ValueError(
+            f"shard {shard!r} is an order-29 POINT word: a point has no children, "
+            f"so it names no leaf (spec §2/§6.6)"
+        )
+    order = decimal_order(morton_decimal(word))  # raises on an invalid packed word
+    if not order <= int(cell_order) <= 29:
+        raise ValueError(
+            f"cell_order {cell_order} is not between shard {morton_decimal(word)}'s own "
+            f"order {order} and 29: a leaf's cells are the shard's descendants"
+        )
+    return np.asarray(generate_morton_children(word, int(cell_order)), dtype=np.uint64)
+
+
 def check_node_invariant(rel_path: str, *, path_grouping: int = 1) -> None:
     """Raise unless ``rel_path`` is a legal hive leaf path.
 
