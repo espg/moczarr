@@ -92,7 +92,7 @@ import zarr
 from zarr.storage import LocalStore
 
 from moczarr import has_exact_occupancy, open_hive, open_leaf, open_level
-from moczarr.convention import COMMIT_ATTR
+from moczarr.convention import COMMIT_ATTR, morton_word
 from moczarr.pyramid import overview_declaration
 from moczarr.ragged import (
     open_ragged,
@@ -101,7 +101,13 @@ from moczarr.ragged import (
     read_ragged,
 )
 from moczarr.stats import combined_hash, hash_arrays
-from moczarr.store import leaf_data_prefix, read_commit, walk_leaves
+from moczarr.store import (
+    bitmap_and,
+    leaf_data_prefix,
+    read_commit,
+    read_coverage_bitmap,
+    walk_leaves,
+)
 
 DATA = Path(__file__).parent / "data"
 #: fixture name -> (store root, expected.json path).
@@ -481,6 +487,22 @@ class TestVersionedLeaf:
         assert zarr.open_group(opened, mode="r").attrs[COMMIT_ATTR] == read_commit(
             root, expected["leaf"]
         )
+
+    def test_the_bitmap_readers_find_the_sidecar_through_the_pointer(self):
+        """The stable-address coverage readers: the root stamp declares the
+        ``coverage.moc`` sidecar that lives only under the version, and
+        :func:`read_coverage_bitmap` (no ``stamp=``, so it reads the pointer
+        itself) and :func:`bitmap_and` find it there — against zagg's bytes,
+        the golden cells and ``minimal/``'s sidecar."""
+        root, expected = self._fixture()
+        _store, minimal = _load("minimal")
+        golden = {int(c["morton"]) for c in expected["cells"]}
+        occupied = read_coverage_bitmap(root, expected["pointer"])
+        assert {int(w) for w in occupied} == golden
+        legacy = read_coverage_bitmap(str(FIXTURES["minimal"][0]), minimal["leaf"])
+        np.testing.assert_array_equal(occupied, legacy)
+        shard = np.asarray([morton_word(expected["shard"])], dtype=np.uint64)
+        assert {int(w) for w in bitmap_and(root, expected["pointer"], shard)} == golden
 
     @pytest.mark.parametrize("index_kind", ["moc", "pandas"])
     def test_open_hive_reads_the_same_dataset_as_the_legacy_twin(self, index_kind):
