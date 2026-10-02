@@ -33,6 +33,7 @@ from moczarr.convention import (
     LEAF_CURRENT_KEY,
     decimal_order,
     is_point_word,
+    leaf_cell_words,
     leaf_path,
     manifest_path_grouping,
     morton_decimal,
@@ -489,23 +490,57 @@ def _first_readable(store_root: str, rels, stamps, store) -> tuple[str, dict] | 
     return None
 
 
-def _open_leaf_group(rel: str, stamp: dict, group: str, zarr_store, xr_kwargs: dict | None):
+def _open_leaf_group(
+    rel: str, stamp: dict, group: str, zarr_store, xr_kwargs: dict | None, *, derive: bool
+):
     """One stamped leaf's cell-order group as a lazy Dataset.
 
     Addressed under the leaf's data prefix — the version its root stamp
     names, or the root itself on a legacy leaf (zagg spec §1.5,
     :func:`moczarr.store.leaf_data_prefix`) — so following the pointer adds
     no request to the open.
+
+    This is also where the leaf gets its cell coordinate (zagg spec §1.5,
+    "The cell coordinate"): the stored ``morton`` array where the leaf has
+    it; where a WINDOWED leaf (``{id}_{window}.zarr``) does not, the words
+    derived from the id in its name (:func:`moczarr.convention.
+    leaf_cell_words`) — so everything above this seam sees one Dataset
+    shape. ``derive=False`` skips building that coordinate for a caller
+    that would drop it unread (the lazy index fabricates its own). An
+    UNWINDOWED leaf without the array is refused either way: there its
+    absence is corruption, not a licence to derive.
     """
     import xarray as xr
 
-    return xr.open_zarr(
+    ds = xr.open_zarr(
         zarr_store,
         group=f"{leaf_data_prefix(rel, stamp)}/{group}",
         consolidated=False,
         zarr_format=3,
         **(xr_kwargs or {}),
     )
+    if "morton" in ds.variables:
+        return ds
+    shard, window = split_leaf_name(rel.rsplit("/", 1)[-1])
+    if window is None:
+        raise ValueError(
+            f"leaf {rel} stores no 'morton' coordinate array: only a windowed leaf "
+            f"({{id}}_{{window}}.zarr) may omit it — there the cell words are derived "
+            f"from the id — and on an unwindowed leaf its absence is corruption "
+            f"(zagg spec §1.5)"
+        )
+    if not derive:
+        return ds
+    words = leaf_cell_words(shard, int(group))
+    dim = (ds.attrs.get("dggs") or {}).get("spatial_dimension", "cells")
+    if ds.sizes.get(dim) != words.size:
+        raise ValueError(
+            f"leaf {rel} has {ds.sizes.get(dim)} cells on its {dim!r} axis, not the "
+            f"{words.size} order-{group} cells of shard {shard}: a leaf's cells axis is "
+            f"exactly its shard's subtree, so no cell coordinate can be derived for it "
+            f"(zagg spec §1.5)"
+        )
+    return ds.assign_coords(morton=(dim, words))
 
 
 def _check_composition_fill(ds, rel: str) -> None:
@@ -615,7 +650,11 @@ def open_hive(
         (it is core, xarray-only); ``decode=True`` additionally wraps it for
         the ``ds.dggs`` accessor. Requiring ``decode`` here would chain the
         core lazy index to the xdggs extra, against the ratified placement.
-        ``"pandas"`` materializes instead: the stored coordinate is read
+        ``"pandas"`` materializes instead: the stored coordinate is read —
+        or, on a windowed leaf that stores none, derived from the leaf's id
+        (zagg spec §1.5; :func:`moczarr.convention.leaf_cell_words`), the
+        same Dataset shape either way, except that a derived coordinate is
+        full where a stored one holds its ``0`` fill over unwritten chunks —
         and, with ``decode=True``, indexed through a ``PandasIndex`` — use
         it when a workflow needs what the interval index cannot represent
         (notably ``xr.concat`` of overlapping or out-of-order domains; the
@@ -670,7 +709,9 @@ def open_hive(
         contract, pinned in ``tests/test_open.py``).
 
         Raises ``ValueError`` when the root is not a hive store (no
-        manifest), and :class:`moczarr.NoCoverageError` — a ``ValueError``
+        manifest) or an UNWINDOWED leaf stores no ``morton`` array (only a
+        windowed leaf may omit it, zagg spec §1.5 — on either index kind),
+        and :class:`moczarr.NoCoverageError` — a ``ValueError``
         subclass — when the store has no stamped coverage anywhere: with
         zero committed leaves there is no schema source at all, whatever
         the query.
@@ -769,7 +810,9 @@ def open_hive(
                 if leaf_domain.size == 0:
                     continue  # same skip the pandas path's empty aoi_mask takes
         try:
-            ds = _open_leaf_group(rel, stamp, group, zarr_store, xr_kwargs)
+            ds = _open_leaf_group(
+                rel, stamp, group, zarr_store, xr_kwargs, derive=index_kind != "moc"
+            )
         except FileNotFoundError:
             # Zagg spec §1.5's corrupted leaf: a pointer naming a version that
             # is missing or unstamped is debris. This path detects a MISSING
@@ -870,7 +913,9 @@ def open_hive(
             UserWarning,
             stacklevel=2,
         )
-        ds = _open_leaf_group(schema_rel, schema_stamp, group, zarr_store, xr_kwargs)
+        ds = _open_leaf_group(
+            schema_rel, schema_stamp, group, zarr_store, xr_kwargs, derive=index_kind != "moc"
+        )
         _check_composition_fill(ds, schema_rel)
         coords = [name for name in ("morton", "cell_ids") if name in ds]
         ds = ds.set_coords(coords)

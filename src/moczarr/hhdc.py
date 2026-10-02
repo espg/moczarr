@@ -601,6 +601,29 @@ def _load_occupancy(store: Store, arr, words: np.ndarray, field: str) -> tuple |
     return "bitmap", decode_bitmap(payload, shard, cell_order)
 
 
+def _chunk_written(
+    store: Store, arr, words: np.ndarray, field: str, stored_span: tuple[int, int], start: int
+) -> bool:
+    """Whether a read chunk holds data — asked of the data, not the coordinate.
+
+    The occupancy question a stored ``morton`` coordinate answers with its
+    fill, for a leaf whose coordinate is DERIVED and so cannot (zagg spec
+    §1.5: "a reader of a derived coordinate MUST take occupancy from the
+    payload arrays (or the stamp's coverage), never from the coordinate").
+    The stamp's exact coverage is preferred: it is the leaf's own record of
+    which cells were written, in any field — the same thing a stored
+    coordinate's written chunks record — and costs no digest bytes. Without
+    it (a box-only stamp, a missing sidecar) the chunk is read: written
+    means this field holds a payload there.
+    """
+    occupancy = _load_occupancy(store, arr, words, field)
+    if occupancy is None:
+        chunk = (start, start + len(words))
+        return next(iter_populated_chunks(arr, span=chunk, spans=[stored_span]), None) is not None
+    kind, occupied = occupancy
+    return kind == "full" or bool(np.isin(words, occupied).any())
+
+
 def _block_mask(words: np.ndarray, occupancy: tuple | None, block_depth: int) -> np.ndarray:
     """The block's ``(side, side)`` uint8 occupancy base (values 0/1).
 
@@ -818,7 +841,8 @@ def read_tensors(
     ValueError
         On an unknown ``dtype``/``fit``, the strict ragged attrs gate, an
         integer ``dtype`` over a §2.0 flux payload, a
-        missing ``morton`` sibling, an out-of-range ``block_order``, a block
+        missing ``morton`` sibling on anything but a windowed leaf (zagg
+        spec §1.5), an out-of-range ``block_order``, a block
         tensor over ``max_block_bytes``, a corrupt/misaligned occupancy
         sidecar, a ``subtree`` finer than the read chunks (or malformed /
         too-deep), or (with ``fit="raise"``) a window overflow. With
@@ -1023,6 +1047,14 @@ def cell_index(
     readers visit), one small slice of the ``morton`` coordinate per span —
     never the whole axis, and no digest bytes.
 
+    A chunk "carries" an id when it was WRITTEN. A stored coordinate records
+    that itself (it holds its ``0`` fill across an unwritten inner chunk);
+    a windowed leaf's coordinate is derived (zagg spec §1.5) and full by
+    construction, so there the same question is put to the data instead —
+    the stamp's exact coverage (one sidecar GET, still no digest bytes),
+    or, where the stamp carries none, the matching read chunk of the
+    payload itself.
+
     Raises
     ------
     ValueError
@@ -1045,6 +1077,14 @@ def cell_index(
             words = span_words[offset : offset + cells_per_chunk]
             start = span_start + offset
             if not np.any(words) or _chunk_word(words, field, start) != target:
+                continue
+            # A stored coordinate answers "was this chunk written?" by its
+            # fill (the np.any above). A DERIVED one — a windowed leaf, zagg
+            # spec §1.5 — is full by construction and names every chunk of
+            # the span, so there the answer has to come from the data.
+            if isinstance(morton, np.ndarray) and not _chunk_written(
+                store, arr, words, field, (span_start, span_stop), start
+            ):
                 continue
             return start + rank
     raise ValueError(

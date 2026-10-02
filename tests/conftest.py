@@ -152,6 +152,28 @@ def version_leaf(
     return version
 
 
+def strip_morton(leaf_dir, group, *, window=None):
+    """Remove a COPIED leaf's stored per-cell ``morton`` array, in place.
+
+    The shape zagg writes a windowed leaf in (spec §1.5, "The cell
+    coordinate"): the cell-order group keeps its payload arrays and stores
+    no coordinate, which the reader derives from the leaf's id. ``window``
+    additionally restamps the leaf as that window's (``morton-hive/2`` plus
+    ``window``) — for a store-rooted reader, which holds no leaf name and
+    takes "windowed" from the stamp; the on-disk name is left alone.
+    """
+    import shutil
+
+    leaf_dir = Path(leaf_dir)
+    shutil.rmtree(leaf_dir / str(group) / "morton")
+    if window is not None:
+        meta = json.loads((leaf_dir / "zarr.json").read_text())
+        meta["attributes"][convention.COMMIT_ATTR].update(
+            spec=convention.HIVE_SPEC_V2, window=window
+        )
+        (leaf_dir / "zarr.json").write_text(json.dumps(meta))
+
+
 def build_many_leaf_store(root, shards, *, cell_order=8, shard_order=6):
     """A synthetic hive store with one real (openable) zarr leaf per shard.
 

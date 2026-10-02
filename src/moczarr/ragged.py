@@ -87,7 +87,9 @@ element declaration (a t-digest's ``float32 (n, 2)``, a locations sibling's
 ``uint64 (n,)``, or anything else a future writer declares) and never
 imports zagg. The genericity is over the ELEMENT, and the scope is bounded
 on the indexing side: :func:`read_ragged` and the profiles read a 1-D cells
-axis with a sibling ``morton`` coordinate — every conforming ragged field of
+axis with a per-cell ``morton`` coordinate — the sibling array, or on a
+windowed leaf, which stores none, the words derived from the leaf's id (zagg
+spec §1.5; :func:`_morton_words` is the seam) — every conforming ragged field of
 a **morton-hive (HEALPix) product**, which is moczarr's whole domain. zagg's
 rectilinear grid writes ``kind: ragged`` fields too, but on a 2-D ``(y, x)``
 cell grid with no per-cell morton coordinate (its shard keys are packed
@@ -141,11 +143,14 @@ import zarr
 from zarr.abc.store import Store
 
 from moczarr.convention import (
+    COMMIT_ATTR,
     decimal_order,
+    leaf_cell_words,
     morton_decimal,
     normalize_subtree,
     subtree_cell_span,
 )
+from moczarr.coverage import box_words, parse_leaf_coverage
 
 __all__ = [
     "LOCATED_ATTR",
@@ -704,18 +709,63 @@ def _refuse_sub_chunk(span, subtree, field: str, cells_per_chunk: int) -> None:
         )
 
 
-def _open_morton(store: Store, field: str, zarr_format: Literal[2, 3]) -> zarr.Array:
-    """The sibling per-cell ``morton`` coordinate array (cell identity source)."""
-    parent, _, _name = field.rpartition("/")
-    path = f"{parent}/morton" if parent else "morton"
+def _derived_morton(store: Store, field: str, zarr_format: Literal[2, 3]) -> np.ndarray | None:
+    """The cell words of a WINDOWED leaf that stores none, or ``None``.
+
+    Zagg spec §1.5 ("The cell coordinate"): a windowed leaf — a stamp naming
+    ``window`` — stores no per-cell ``morton`` array; the words are the
+    shard's children at the cell order (:func:`moczarr.convention.
+    leaf_cell_words`). A store-rooted reader holds no leaf path to take the
+    shard id from, so it recovers it from the leaf's own stamp (§1.5's
+    informative note): every member of the tier-0 coverage box is the shard
+    or a descendant of it, and the cells axis is exactly one shard subtree,
+    so a box member's ancestor at ``cell_order - log4(n_cells)`` IS the
+    shard.
+
+    ``None`` is "this is not a windowed leaf's cells axis" — an unwindowed
+    leaf (whose missing array is corruption, §1.5), a §4 artifact (a column
+    or overview carries ``role`` and stores its coordinate at every
+    revision), or a group that is not the stamp's ``{cell_order}`` group —
+    and the caller's missing-sibling error stands. A windowed leaf whose
+    stamp cannot identify its shard raises: there the array is legitimately
+    absent and there is nothing to derive it from.
+    """
+    from mortie import clip2order
+
+    group, _, _name = field.rpartition("/")
+    leaf, _, group_name = group.rpartition("/")
     try:
-        return zarr.open_array(store, path=path, mode="r", zarr_format=zarr_format)
-    except (FileNotFoundError, KeyError) as exc:
+        attrs = zarr.open_group(store, path=leaf, mode="r", zarr_format=zarr_format).attrs
+    except (FileNotFoundError, KeyError):
+        return None
+    stamp = attrs.get(COMMIT_ATTR)
+    if "role" in attrs or not isinstance(stamp, Mapping) or stamp.get("window") is None:
+        return None
+    coverage = parse_leaf_coverage(dict(stamp))
+    if coverage is not None and group_name != str(coverage.get("cell_order")):
+        return None
+    n_cells = int(zarr.open_array(store, path=field, mode="r", zarr_format=zarr_format).shape[0])
+    depth = (n_cells.bit_length() - 1) // 2
+    members = box_words(coverage) if coverage and coverage.get("box") else np.empty(0, np.uint64)
+    if 4**depth != n_cells or not members.size:
         raise ValueError(
-            f"{field!r} has no sibling 'morton' coordinate array at {path!r}; the "
-            f"ragged readers derive cell identity from the per-cell morton "
-            f"coordinate (spec §1.1)"
-        ) from exc
+            f"{field!r} is on a windowed leaf (window {stamp['window']!r}) that stores no "
+            f"'morton' coordinate, and its stamp cannot identify the shard to derive one "
+            f"from: {n_cells} cells and a {members.size}-member coverage box, where a "
+            f"leaf's cells axis is one power-of-four shard subtree named by a box member "
+            f"(zagg spec §1.5)"
+        )
+    assert coverage is not None  # a non-empty box came from it
+    cell_order = int(coverage["cell_order"])
+    member = morton_decimal(int(members[0]))
+    if decimal_order(member) < cell_order - depth:
+        raise ValueError(
+            f"{field!r}: coverage box member {member} is coarser than the "
+            f"order-{cell_order - depth} shard a {n_cells}-cell order-{cell_order} axis "
+            f"implies, so it does not name the leaf's shard (zagg spec §1.5)"
+        )
+    shard = int(clip2order(cell_order - depth, members[:1])[0])
+    return leaf_cell_words(shard, cell_order)
 
 
 class _MortonWords:
@@ -750,9 +800,34 @@ class _MortonWords:
         return self._window[start - self._lo : stop - self._lo]
 
 
-def _morton_words(store: Store, field: str, zarr_format: Literal[2, 3]) -> _MortonWords:
-    """The field's sibling ``morton`` coordinate, as a span-cached reader."""
-    return _MortonWords(_open_morton(store, field, zarr_format))
+def _morton_words(
+    store: Store, field: str, zarr_format: Literal[2, 3]
+) -> _MortonWords | np.ndarray:
+    """The field's per-cell ``morton`` coordinate, sliceable by cell span.
+
+    The one rule of zagg spec §1.5: the stored sibling array where the leaf
+    has it (a span-cached reader), the DERIVED words where a windowed leaf
+    does not (:func:`_derived_morton`) — so every reader above this seam
+    reads cell identity the same way. The two differ in exactly one respect
+    a caller may lean on: a stored coordinate holds the ``0`` fill across
+    unwritten inner chunks, and a derived one is full by construction, so
+    it says nothing about what was written — occupancy is the payload's.
+    A missing sibling anywhere else is the spec §1.1 error it always was.
+    """
+    parent, _, _name = field.rpartition("/")
+    path = f"{parent}/morton" if parent else "morton"
+    try:
+        return _MortonWords(zarr.open_array(store, path=path, mode="r", zarr_format=zarr_format))
+    except (FileNotFoundError, KeyError) as exc:
+        words = _derived_morton(store, field, zarr_format)
+        if words is None:
+            raise ValueError(
+                f"{field!r} has no sibling 'morton' coordinate array at {path!r}; the "
+                f"ragged readers take cell identity from the per-cell morton "
+                f"coordinate (spec §1.1), and only a windowed leaf may omit the "
+                f"array — there it is derived from the leaf's id (spec §1.5)"
+            ) from exc
+        return words
 
 
 def _sibling_path(field: str, sibling: str) -> str:
@@ -852,7 +927,8 @@ def read_ragged(
     values, time_words)`` with ``times=True``, and ``(morton_word, values,
     location_words, time_words)`` with both — where ``morton_word`` is the
     cell's own packed ``uint64`` coordinate from the sibling ``morton``
-    array and ``values`` is the cell's decoded ``(n, *inner_shape)``
+    array (derived where a windowed leaf stores none — zagg spec §1.5,
+    same words) and ``values`` is the cell's decoded ``(n, *inner_shape)``
     payload. What a weight column in ``values`` MEANS is the payload's
     §2.0 declaration (issue #43), surfaced as :attr:`RaggedElement.weights`
     by :func:`open_ragged`: under ``"flux"`` a weight sum estimates
@@ -914,7 +990,9 @@ def read_ragged(
         On the strict attrs gate (:func:`parse_ragged_attrs` — the §1.2
         element declaration and the §2.0 weights declaration both ride
         it), a missing
-        ``morton`` sibling, a populated cell with no written morton word, a
+        ``morton`` sibling on anything but a windowed leaf (or a windowed
+        leaf whose stamp cannot name its shard), a populated cell with no
+        written morton word, a
         companion sibling whose element is not one ``uint64`` word per row
         (the §1.1/§8.3 element MUST, checked before any word is decoded),
         whose shape or read-chunk geometry disagrees with the payload
