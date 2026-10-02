@@ -49,9 +49,12 @@ englacial/zagg#585 on). The root stamp then carries one more key,
 
 The reader carries one rule — open the root; if its stamp names `current`
 the arrays are under `{leaf}/{current}/`, else under `{leaf}/` — and
-`moczarr.store.leaf_data_prefix` is the one place that applies it. Because
-the stamp is the object every open reads anyway, following the pointer
-costs no request. A stamp **without** `current` is a legacy leaf (every
+`moczarr.store.leaf_data_prefix` is the one place that applies it. On
+`open_hive` (and `open_level`, which rides it) the stamp is the object the
+open reads anyway, so following the pointer costs no request. `open_leaf`
+and `read_coverage_bitmap` read the root stamp themselves — one GET —
+unless an already-read stamp is threaded with `stamp=` (e.g. from one
+batched `read_commits`). A stamp **without** `current` is a legacy leaf (every
 store written before the revision), so nothing needs migrating and one
 store may hold both kinds. A replacement writes a new version and swaps
 the pointer; a superseded version stays at its keys until zagg's collector
