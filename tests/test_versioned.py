@@ -418,6 +418,23 @@ class TestVerify:
         assert set(hash_arrays(str(root), rel)) == {"5/morton", "5/count"}
         assert verify_arrays(str(root), "4111")["match"] is True
 
+    def test_an_unswapped_version_under_a_legacy_root_is_out_of_scope(self, tmp_path):
+        # §1.5 write order: the version lands (1)-(2) before the pointer swap
+        # (4), so a legacy root can hold a stamped ``run-…`` sibling of its
+        # cell-order group — an attempt in flight, or one that died before
+        # the swap. The path reader still sees the legacy leaf, unchanged.
+        root = tmp_path / "atl06"
+        shutil.copytree(ATL06, root)
+        rel = convention.leaf_path("4111")
+        legacy = hash_arrays(str(root), rel)
+        version = root / rel / "run-deadbeef-00000000"
+        shutil.copytree(root / rel / "5", version / "5")
+        shutil.copy2(root / rel / "zarr.json", version / "zarr.json")
+        assert "current" not in store.read_commit(str(root), rel)
+        assert hash_arrays(str(root), rel) == legacy
+        assert set(legacy) == {"5/morton", "5/count"}
+        assert verify_arrays(str(root), "4111")["match"] is True
+
     def test_windowed_leaf(self, tmp_path):
         root = tmp_path / "windows"
         shutil.copytree(WINDOWS, root)

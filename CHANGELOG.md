@@ -12,7 +12,8 @@
   keeps addressing `{cell_order}/{name}`), `read_coverage_bitmap` /
   `bitmap_and` / the two-store intersection, and the O11 verifier
   (`hash_arrays`, `verify_arrays` — hashes keyed relative to the version
-  root, superseded versions out of scope) all resolve it through one new
+  root, superseded and not-yet-swapped `run-…` versions out of scope, also
+  under a legacy root) all resolve it through one new
   helper, `moczarr.store.leaf_data_prefix(leaf, stamp)`. The stamp is the
   object every open already reads, so following the pointer adds **no
   request**; a stamp without `current` is a legacy leaf and reads exactly

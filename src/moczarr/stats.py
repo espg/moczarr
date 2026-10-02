@@ -50,6 +50,7 @@ from moczarr.convention import (
     HIVE_SPEC,
     HIVE_SPEC_V2,
     HIVE_SPEC_V3,
+    LEAF_VERSION_PREFIX,
     decimal_base,
     group_digits,
     leaf_path,
@@ -510,7 +511,11 @@ def hash_arrays(
     unstamped version is a corrupted leaf, read as debris: ``{}``, the same
     answer as a leaf that is not there. A prefix whose root carries no
     ``current`` — a legacy leaf, an overview, a column, a version addressed
-    directly — hashes in place, as before.
+    directly — hashes in place, as before, minus any ``run-…`` child: on a
+    legacy root that is a version whose pointer swap has not landed (a write
+    in flight, or one that died before it), which §1.5 makes invisible to a
+    path reader until the swap — and §4.2 tells it from a cell-order group
+    by name.
     """
     import zarr
     from zarr.core.sync import sync
@@ -537,7 +542,11 @@ def hash_arrays(
     # is read twice — once here, once by ``zarr.open_array`` — which is the
     # price of the tolerant ``node_type`` probe: opening first would raise on
     # a metadata object that is not a node at all.
-    keys = sync(_metadata_keys(zstore.list_prefix(f"{prefix}/")))
+    keys = [
+        key
+        for key in sync(_metadata_keys(zstore.list_prefix(f"{prefix}/")))
+        if not key[len(prefix) + 1 :].startswith(LEAF_VERSION_PREFIX)
+    ]
     hashes = {}
     for meta_key in sorted(keys):
         node_path = meta_key[: -len("/zarr.json")]
