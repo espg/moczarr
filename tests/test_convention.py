@@ -5,10 +5,15 @@ Golden vectors are pinned against zagg's writer (``zagg.hive`` /
 mortie#62 convention cannot drift silently.
 """
 
+import json
+from pathlib import Path
+
 import numpy as np
 import pytest
 
 from moczarr import convention
+
+SPEC = Path(__file__).parent / "data" / "spec"
 
 # Order-6 southern shard used across zagg's hive tests (and its northern
 # mirror: the string arithmetic is sign-dependent, so both hemispheres run).
@@ -551,11 +556,28 @@ class TestLeafCellWords:
     order in canonical nested order, and cell ``j`` carries the ``j``-th
     child's packed word. Pinned here against string arithmetic on the id —
     the D1 digit tail of rank ``j`` — which shares no code with mortie's
-    children kernel; the zagg-written golden words are in
-    ``test_spec_conformance.py``."""
+    children kernel; the zagg-written golden words are the vendored spec
+    fixtures' stored arrays (:meth:`test_matches_the_zagg_written_array`)."""
 
     #: One order-9 shard per hemisphere — the instance the spec pins.
     ORDER9 = ("3232131144", "-5112333142")
+
+    @pytest.mark.parametrize("name", ["minimal", "kitchen_sink", "temporal", "flux", "versioned"])
+    def test_matches_the_zagg_written_array(self, name):
+        """The writer's own words: a stored coordinate holds the derived
+        words on its written chunks and the ``0`` fill on the unwritten ones
+        (zagg spec §1.5), so the two differ exactly where the store is 0."""
+        import zarr
+
+        expected = json.loads((SPEC / f"{name}.expected.json").read_text())
+        stored = zarr.open_array(
+            SPEC / name / expected["leaf"] / expected["group"] / "morton", mode="r"
+        )[:]
+        derived = convention.leaf_cell_words(expected["shard"], expected["cell_order"])
+        written = stored != 0
+        assert 0 < written.sum() < stored.size  # fill on the empty chunk
+        np.testing.assert_array_equal(derived[written], stored[written])
+        assert np.array_equal(derived != stored, ~written)
 
     def test_cell_j_is_the_jth_child(self, shard):
         words = convention.leaf_cell_words(shard, 8)
