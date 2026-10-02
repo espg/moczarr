@@ -129,13 +129,16 @@ class TestOpenHive:
     @pytest.mark.parametrize("index_kind", ["moc", "pandas"])
     def test_an_unwindowed_leaf_without_the_array_is_refused(self, tmp_path, index_kind):
         # §1.5: "Absence on an unwindowed leaf is corruption, not a licence
-        # to derive, and MUST be refused" — on the lazy path too, which
-        # never reads the array and would otherwise not notice.
+        # to derive, and MUST be refused" — on either index kind, with or
+        # without an aoi: before #71 the lazy path never read the array, and
+        # the eager one opened without a coordinate and ignored the aoi.
         root = tmp_path / "serc"
         shutil.copytree(SERC, root)
         strip_morton(root / convention.leaf_path("4331422"), 8)
         with pytest.raises(ValueError, match="only a windowed leaf"):
             open_hive(str(root), index_kind=index_kind)
+        with pytest.raises(ValueError, match="only a windowed leaf"):
+            open_hive(str(root), aoi=[convention.morton_word("4331422")], index_kind=index_kind)
 
     @pytest.mark.parametrize("drop", [["morton"], "morton"])
     @pytest.mark.parametrize("index_kind", ["moc", "pandas"])

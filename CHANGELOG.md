@@ -20,12 +20,14 @@
   AOI row subset, the NESTED `cell_ids` fabrication, the xdggs index, the
   joins — sees the same Dataset as before. A leaf that stores the array
   reads exactly as it did, and an **unwindowed** leaf without one is
-  refused (`ValueError`; `open_hive` on the lazy path previously opened
-  such a leaf without noticing). A derived coordinate is full by
-  construction, so occupancy never comes from it: `cell_index` asks the
-  leaf's stamp's exact coverage (or, without one, the cell-order group's
-  payload arrays over that chunk, any field's) whether a read chunk was
-  written, where a stored coordinate answers with its `0` fill. zagg's `windowed/` conformance fixture is vendored from the
+  refused (`ValueError`; `open_hive` previously opened such a leaf without
+  noticing, on either `index_kind` — and the eager path returned a Dataset
+  with no cell coordinate and applied no `aoi=` row subset). A derived
+  coordinate is full by construction, so occupancy never comes from it:
+  `cell_index` asks the leaf's stamp's exact coverage (or, without one,
+  the cell-order group's payload arrays over that chunk, any field's)
+  whether a read chunk was written, where a stored coordinate answers with
+  its `0` fill. zagg's `windowed/` conformance fixture is vendored from the
   unmerged englacial/zagg#587 branch (sha `5848c2f4`) and runs the
   leaf-shaped gates plus §1.5's containment check on its location words.
 - Versioned leaves ([#70](https://github.com/espg/moczarr/issues/70)): the
