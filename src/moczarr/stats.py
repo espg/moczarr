@@ -61,7 +61,15 @@ from moczarr.convention import (
 )
 from moczarr.coverage import ranges_words
 from moczarr.pyramid import overview_nodes
-from moczarr.store import _resolve_store, load_root_coverage, read_json, read_manifest
+from moczarr.store import (
+    _dangling_pointer,
+    _resolve_store,
+    leaf_data_prefix,
+    load_root_coverage,
+    read_commit,
+    read_json,
+    read_manifest,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -491,6 +499,18 @@ def hash_arrays(
     zagg has **no O11 writer yet**, so this recipe (and the committed
     fixture's golden) is the only artifact of the choice: zagg's writer must
     adopt it verbatim when it lands (spec home: englacial/zagg#340).
+
+    **Versioned leaves** (zagg spec §1.5). ``leaf`` is resolved through its
+    root stamp first (:func:`moczarr.store.leaf_data_prefix`): on a pointer
+    root the arrays hashed are the CURRENT version's, keyed relative to the
+    version (``"8/morton"``, never ``"run-…/8/morton"``) — the form §5.3
+    records, identical to a legacy leaf's. Without that, the walk below
+    would sweep every retained version, and a converted legacy leaf's
+    superseded root arrays, into one mapping. A pointer naming a missing or
+    unstamped version is a corrupted leaf, read as debris: ``{}``, the same
+    answer as a leaf that is not there. A prefix whose root carries no
+    ``current`` — a legacy leaf, an overview, a column, a version addressed
+    directly — hashes in place, as before.
     """
     import zarr
     from zarr.core.sync import sync
@@ -503,7 +523,10 @@ def hash_arrays(
 
     handle = _resolve_store(store_root, store, store_kwargs)
     zstore = ObjectStore(handle, read_only=True)
-    prefix = leaf.strip("/")
+    stamp = read_commit(store_root, leaf, store=handle)
+    if _dangling_pointer(store_root, leaf, stamp, handle):
+        return {}  # a pointer over a missing/unstamped version: debris (§1.5)
+    prefix = leaf_data_prefix(leaf, stamp)
     # Walk the leaf by its ``zarr.json`` keys rather than ``Group.members``:
     # a zagg leaf carries non-zarr sidecar objects (the in-leaf
     # ``coverage.moc`` occupancy bitmap), which the recursive member probe

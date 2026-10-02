@@ -115,6 +115,7 @@ from moczarr.stats import (
 # and the index reaches most users through open_hive(index_kind="moc").
 from moczarr.store import (
     bitmap_and,
+    leaf_data_prefix,
     load_root_coverage,
     open_object_store,
     read_commit,
@@ -200,6 +201,7 @@ __all__ = [
     "iter_occupancy_and",
     "join_coarse",
     "lane_presence",
+    "leaf_data_prefix",
     "leaf_path",
     "level_demotions",
     "list_products",

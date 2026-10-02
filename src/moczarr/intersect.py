@@ -253,7 +253,7 @@ def _leaf_occupancy(
     if coverage.get("encoding") == "full":
         return _Occupancy(_FULL, None)
     if coverage.get("encoding") == "bitmap":
-        cells = read_coverage_bitmap(side.root, rel, coverage=coverage, store=side.handle)
+        cells = read_coverage_bitmap(side.root, rel, stamp=stamp, store=side.handle)
         if cells is not None:
             env_order = int(coverage["cell_order"])
             if env_order >= out_order:

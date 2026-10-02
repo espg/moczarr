@@ -30,6 +30,7 @@ import numpy as np
 
 from moczarr.convention import (
     HIVE_SPEC_V2,
+    LEAF_CURRENT_KEY,
     decimal_order,
     is_point_word,
     leaf_path,
@@ -54,10 +55,13 @@ from moczarr.exceptions import NoCoverageError
 from moczarr.fabricate import fabricate_cell_ids as _fabricate_cell_ids
 from moczarr.products import is_product_name, list_products, validate_product_name
 from moczarr.store import (
+    _dangling_pointer,
     _resolve_store,
     _stamp_from_meta,
+    leaf_data_prefix,
     load_root_coverage,
     open_object_store,
+    read_commit,
     read_commits,
     read_leaf_metas,
     read_manifest,
@@ -433,7 +437,7 @@ def _schema_leaf(
     store: Any = None,
     concurrency: int | None = None,
     path_grouping: int = 1,
-) -> str | None:
+) -> tuple[str, dict] | None:
     """One commit-stamped leaf anywhere in the store, or ``None`` (issue #4).
 
     The empty-AOI return needs a schema source — data-variable names,
@@ -442,8 +446,10 @@ def _schema_leaf(
     given), the walk otherwise. A leaf from another window still serves —
     the schema is store-uniform (one manifest, one writer). Runs only on
     the already-exceptional empty path, so the extra stamp GETs (some
-    repeating the caller's) stay off the hot path. ``None`` means the store
-    has no stamped coverage at all — the caller's ``NoCoverageError`` case.
+    repeating the caller's) stay off the hot path. Returned as ``(rel,
+    stamp)`` — the stamp is what says where that leaf's arrays are
+    (:func:`moczarr.store.leaf_data_prefix`). ``None`` means the store has
+    no stamped coverage at all — the caller's ``NoCoverageError`` case.
     """
     envelope = load_root_coverage(store_root, store=store)
     if envelope is not None:
@@ -452,9 +458,9 @@ def _schema_leaf(
             for w in np.sort(ranges_words(envelope))
         ]
         stamps = read_commits(store_root, candidates, store=store, concurrency=concurrency)
-        rel = next((r for r, s in zip(candidates, stamps) if s is not None), None)
-        if rel is not None:
-            return rel
+        found = _first_readable(store_root, candidates, stamps, store)
+        if found is not None:
+            return found
     leaves = sorted(
         rel
         for rel in walk_leaves(
@@ -463,7 +469,40 @@ def _schema_leaf(
         if _shard_leaf_name(rel) is not None  # overview objects serve no leaf schema
     )
     stamps = read_commits(store_root, leaves, store=store, concurrency=concurrency)
-    return next((r for r, s in zip(leaves, stamps) if s is not None), None)
+    return _first_readable(store_root, leaves, stamps, store)
+
+
+def _first_readable(store_root: str, rels, stamps, store) -> tuple[str, dict] | None:
+    """The first ``(rel, stamp)`` that is stamped and not a pointer over nothing.
+
+    The schema source must be a leaf whose arrays are actually there, so a
+    §1.5 corrupted leaf (:func:`moczarr.store._dangling_pointer`) is passed
+    over like any other debris. That check is one GET per versioned leaf
+    examined — paid here because this runs on the empty path only.
+    """
+    for rel, stamp in zip(rels, stamps):
+        if stamp is not None and not _dangling_pointer(store_root, rel, stamp, store):
+            return rel, stamp
+    return None
+
+
+def _open_leaf_group(rel: str, stamp: dict, group: str, zarr_store, xr_kwargs: dict | None):
+    """One stamped leaf's cell-order group as a lazy Dataset.
+
+    Addressed under the leaf's data prefix — the version its root stamp
+    names, or the root itself on a legacy leaf (zagg spec §1.5,
+    :func:`moczarr.store.leaf_data_prefix`) — so following the pointer adds
+    no request to the open.
+    """
+    import xarray as xr
+
+    return xr.open_zarr(
+        zarr_store,
+        group=f"{leaf_data_prefix(rel, stamp)}/{group}",
+        consolidated=False,
+        zarr_format=3,
+        **(xr_kwargs or {}),
+    )
 
 
 def _check_composition_fill(ds, rel: str) -> None:
@@ -726,13 +765,29 @@ def open_hive(
                 leaf_domain = leaf_domain.intersect(aoi_words)
                 if leaf_domain.size == 0:
                     continue  # same skip the pandas path's empty aoi_mask takes
-        ds = xr.open_zarr(
-            zarr_store,
-            group=f"{rel}/{group}",
-            consolidated=False,
-            zarr_format=3,
-            **(xr_kwargs or {}),
-        )
+        try:
+            ds = _open_leaf_group(rel, stamp, group, zarr_store, xr_kwargs)
+        except FileNotFoundError:
+            # Zagg spec §1.5's corrupted leaf: a pointer naming a version that
+            # is missing or unstamped is debris. Confirmed with one GET on
+            # this error path only (the working open pays nothing), and it
+            # WARNS — unlike ordinary debris, a write that never finished, a
+            # stamped pointer over nothing means committed data was removed
+            # out of band. Any other miss raises as it always has: a legacy
+            # leaf, or a stamped version, without the manifest's cell-order
+            # group is a malformed leaf, not debris.
+            if not _dangling_pointer(store_root, rel, stamp, obstore_store):
+                raise
+            warnings.warn(
+                f"leaf {rel} at {store_root} points at version "
+                f"{stamp[LEAF_CURRENT_KEY]!r}, which is missing or unstamped — a "
+                f"corrupted leaf, read as debris (zagg spec §1.5: the pointer is "
+                f"written only after its version is stamped, so the version was "
+                f"removed out of band)",
+                UserWarning,
+                stacklevel=2,
+            )
+            continue
         _check_composition_fill(ds, rel)
         coords = [name for name in ("morton", "cell_ids") if name in ds]
         ds = ds.set_coords(coords)
@@ -758,10 +813,10 @@ def open_hive(
         # candidate when one exists, else _schema_leaf's store-wide search);
         # only a store with no stamped leaf anywhere has no schema to serve
         # and raises NoCoverageError.
-        schema_rel = next((r for r, s in zip(candidates, stamps) if s is not None), None)
+        schema = _first_readable(store_root, candidates, stamps, obstore_store)
         schema_from_walk = False
-        if schema_rel is None:
-            schema_rel = _schema_leaf(
+        if schema is None:
+            schema = _schema_leaf(
                 store_root,
                 window,
                 store=obstore_store,
@@ -769,11 +824,12 @@ def open_hive(
                 path_grouping=manifest_path_grouping(manifest),
             )
             schema_from_walk = True
-        if schema_rel is None:
+        if schema is None:
             raise NoCoverageError(
                 f"nothing to open at {store_root}: the store has no stamped coverage "
                 f"anywhere (no committed leaf exists to define a schema)"
             )
+        schema_rel, schema_stamp = schema
         scope = [
             part
             for part, active in (
@@ -807,13 +863,7 @@ def open_hive(
             UserWarning,
             stacklevel=2,
         )
-        ds = xr.open_zarr(
-            zarr_store,
-            group=f"{schema_rel}/{group}",
-            consolidated=False,
-            zarr_format=3,
-            **(xr_kwargs or {}),
-        )
+        ds = _open_leaf_group(schema_rel, schema_stamp, group, zarr_store, xr_kwargs)
         _check_composition_fill(ds, schema_rel)
         coords = [name for name in ("morton", "cell_ids") if name in ds]
         ds = ds.set_coords(coords)
@@ -885,6 +935,13 @@ def open_leaf(
     ``zarr.storage.ObjectStore`` read-only wrapper the readers take. No
     external path arithmetic, no bare-obstore incantation.
 
+    It also follows the versioned-leaf pointer (zagg spec §1.5): ONE GET of
+    the leaf's root ``zarr.json``, and when that stamp names ``current`` the
+    returned store is rooted at the version subgroup holding the arrays
+    (:func:`moczarr.store.leaf_data_prefix`) — a legacy leaf, and an
+    unstamped or absent one, root at the stable prefix as before. Either
+    way the readers address ``{cell_order}/{name}`` unchanged.
+
     Parameters
     ----------
     store_root : str
@@ -908,10 +965,10 @@ def open_leaf(
     anonymous : bool
         Skip request signing (public buckets).
     store : obstore store, optional
-        A shared handle for the manifest GET (issue #5), rooted at the
-        subtree this call opens — the PRODUCT subtree when ``product`` is
-        given. The returned leaf store is always a fresh, leaf-rooted open;
-        only the manifest read can share a handle.
+        A shared handle for the manifest and root-stamp GETs (issue #5),
+        rooted at the subtree this call opens — the PRODUCT subtree when
+        ``product`` is given. The returned leaf store is always a fresh,
+        leaf-rooted open; only those metadata reads can share a handle.
     **store_kwargs
         Forwarded to :func:`moczarr.store.open_object_store`
         (``region=...``, explicit keys, ...).
@@ -919,7 +976,8 @@ def open_leaf(
     Returns
     -------
     zarr.storage.ObjectStore
-        Read-only store rooted at the leaf; pass it with a field path like
+        Read-only store rooted at the leaf's arrays (the current version
+        of a versioned leaf); pass it with a field path like
         ``"{cell_order}/{name}"`` to the per-leaf readers. Deliberately bare
         — it carries no manifest — so a caller that needs ``cell_order`` for
         those paths takes it from ``manifest=`` (the one it threaded) or
@@ -931,8 +989,9 @@ def open_leaf(
         When ``store_root`` (or the product subtree) has no manifest — the
         path grammar (``path_grouping``) is manifest-declared, so a leaf
         path cannot be derived without one — when ``window`` disagrees with
-        the manifest's spec, and when ``shard`` is not at the manifest's
-        ``shard_order`` (a cell id where a shard id belongs).
+        the manifest's spec, when ``shard`` is not at the manifest's
+        ``shard_order`` (a cell id where a shard id belongs), and when the
+        leaf's stamp names a ``current`` that is not a version name.
     """
     from zarr.storage import ObjectStore
 
@@ -947,13 +1006,17 @@ def open_leaf(
         # The same window seam every non-overview entry point runs through;
         # it is also what refuses the reserved all-time token (#30).
         validate_window(window, where=store_root)
+    handle = store
     if manifest is None:
-        manifest = read_manifest(store_root, store=store, **store_kwargs)
+        # ONE subtree-rooted handle for this call's metadata reads: the
+        # manifest here and the leaf's root stamp below.
+        handle = _resolve_store(store_root, store, store_kwargs)
+        manifest = read_manifest(store_root, store=handle)
         if manifest is None:
             if product is None:
                 # A multi-product root has no root manifest by design (§6.5);
                 # probe so the error is pointed, exactly as open_hive's is.
-                names = [p["name"] for p in list_products(store_root, store=store, **store_kwargs)]
+                names = [p["name"] for p in list_products(store_root, store=handle)]
                 if names:
                     raise ValueError(
                         f"{store_root} is a multi-product store root (products: {names}); "
@@ -983,7 +1046,13 @@ def open_leaf(
             f"{manifest['shard_order']} — leaves are named by SHARD id (a cell id "
             f"names no leaf)"
         )
-    leaf_root = f"{store_root.rstrip('/')}/{rel}"
+    # The returned store is rooted where the arrays ARE (zagg spec §1.5): the
+    # version a versioned leaf's root stamp names, else the root itself — so
+    # every per-leaf reader keeps addressing ``{cell_order}/{name}`` and finds
+    # the version's own stamp and ``coverage.moc`` beside the arrays.
+    stamp = read_commit(store_root, rel, store=handle, **store_kwargs)
+    prefix = leaf_data_prefix(rel, stamp)
+    leaf_root = f"{store_root.rstrip('/')}/{prefix}"
     return ObjectStore(open_object_store(leaf_root, **store_kwargs), read_only=True)
 
 
