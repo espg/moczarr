@@ -683,8 +683,9 @@ class TestFillGateJudgesItsOwnObject:
 
     Covered: ``open_hive`` and ``open_overview_order``, main loop and schema
     branch each, and ``open_column_order``'s main loop. Its schema branch is
-    not: there the schema object is the last one its probe loop named, so no
-    second path exists to tell apart.
+    not: on these fixtures an AOI that opens no column leaves the schema to
+    the fallback probe, whose loop stops on the object it picks, so the last
+    path named and the schema object are the same one.
     """
 
     HIVE_SHARDS = ("-5112333", "-5112334")
