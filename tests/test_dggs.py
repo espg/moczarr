@@ -289,6 +289,16 @@ class TestMortonIndex:
         with pytest.raises(ValueError, match="order 8, not the declared level 7"):
             dggs.decode(open_hive(serc), level=7, index_kind="moc")
 
+    def test_name_and_size_on_both_kinds(self, serc):
+        # xdggs 0.7's DGGSIndex reads name/size off a PandasIndex, and its sel
+        # calls self.name; the moc kind wraps a MortonMocIndex instead (issue #74).
+        word = _occupied_cell(serc)
+        for kind in ("pandas", "moc"):
+            ds = dggs.decode(open_hive(serc), index_kind=kind)
+            index = ds.xindexes["morton"]
+            assert (index.name, index.size) == ("morton", ds.sizes["cells"])
+            assert np.uint64(ds.sel(morton=word)["morton"].values) == word
+
     def test_isel_keeps_index(self, serc):
         ds = open_hive(serc, decode=True).isel(cells=[0, 1])
         assert isinstance(ds.xindexes["morton"], dggs.MortonIndex)
