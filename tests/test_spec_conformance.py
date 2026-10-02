@@ -69,12 +69,12 @@ back through a zagg reader), so the reader is pinned, not self-certified:
   (a newer writer than the legacy fixtures'), and its manifest records the
   §4.9 ``multiscales`` mirror.
 - ``tests/data/spec/windowed`` — the §1.5 **derived-coordinate** surface
-  (englacial/zagg#586, PR englacial/zagg#587 — **unmerged** when vendored;
-  adopted here for issue #71), vendored whole-tree byte-identical from the
-  branch ``claude/586-windowed-emit`` at ``5848c2f4`` (extracted with
-  ``git archive`` from that sha, re-verified ``diff -r``; the fixture's own
-  commit there is ``168729a9``), so it MUST be re-vendored if it changes
-  before that PR merges: ``minimal``'s geometry and cell plan with one
+  (englacial/zagg#586, PR englacial/zagg#587; adopted here for issue #71),
+  vendored whole-tree byte-identical from englacial/zagg ``main`` at
+  ``6c69c8ce``, the merge of that PR, released in zagg 0.56.0 (first
+  extracted with ``git archive`` from the PR branch at ``5848c2f4``, and
+  re-verified ``diff -r`` against ``main`` after the merge; the fixture's
+  own commit there is ``168729a9``): ``minimal``'s geometry and cell plan with one
   located digest field (``h_tdigest`` + ``h_tdigest_locations``) and
   ``count``, written as one WINDOWED leaf (``11213_2019.zarr``, a
   ``morton-hive/2`` stamp naming ``window``). It is the one fixture leaf

@@ -161,7 +161,7 @@ class TestDeclarationBinding:
     )
     def test_vendored_v2_block_reads_as_no_family(self, fixture):
         # The vendored §7 fixtures (zagg main d52e3063; versioned/ 2664e742; windowed/
-        # branch sha 5848c2f4) all declare
+        # 6c69c8ce) all declare
         # `zagg-pyramid/2`: §4.5's default flip (englacial/zagg#384) moved the
         # schedule to the block-level `overviews`, so the `overview` family
         # dict carries no legacy `orders`. This /1 order-node reader binds

@@ -4,7 +4,7 @@
 
 - Derived cell coordinate ([#71](https://github.com/espg/moczarr/issues/71)):
   a windowed leaf (`{id}_{window}.zarr`) written by zagg from
-  englacial/zagg#587 on stores no per-cell `{cell_order}/morton` array —
+  englacial/zagg#587 (zagg 0.56.0) on stores no per-cell `{cell_order}/morton` array —
   the word is a pure function of the leaf's id and the rank (zagg spec
   §1.5, "The cell coordinate") — and the reader now derives it. One helper,
   `moczarr.convention.leaf_cell_words(shard, cell_order)`, states the law
@@ -27,9 +27,10 @@
   `cell_index` asks the leaf's stamp's exact coverage (or, without one,
   the cell-order group's payload arrays over that chunk, any field's)
   whether a read chunk was written, where a stored coordinate answers with
-  its `0` fill. zagg's `windowed/` conformance fixture is vendored from the
-  unmerged englacial/zagg#587 branch (sha `5848c2f4`) and runs the
-  leaf-shaped gates plus §1.5's containment check on its location words.
+  its `0` fill. zagg's `windowed/` conformance fixture is vendored from
+  englacial/zagg `main` (sha `6c69c8ce`, the englacial/zagg#587 merge) and
+  runs the leaf-shaped gates plus §1.5's containment check on its location
+  words.
 - Versioned leaves ([#70](https://github.com/espg/moczarr/issues/70)): the
   reader follows the zagg spec §1.5 pointer. A leaf's stable `{id}.zarr/`
   prefix may now be a **pointer root** — its commit stamp names `current`,

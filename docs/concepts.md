@@ -87,8 +87,8 @@ the leaf's id and the rank, and it comes in two forms:
 - An **unwindowed** leaf (`{id}.zarr`) stores it, as `{cell_order}/morton`.
   The stored array holds the words on the inner chunks that were written
   and its `0` fill on the ones that were not.
-- A **windowed** leaf (`{id}_{window}.zarr`) written by zagg from
-  englacial/zagg#587 on stores **no** such array — every window of a shard
+- A **windowed** leaf (`{id}_{window}.zarr`) written by zagg 0.56.0 or
+  later (englacial/zagg#587) stores **no** such array — every window of a shard
   would repeat the same 8 bytes per cell — and the reader derives it:
   `moczarr.convention.leaf_cell_words(shard, cell_order)`. For a cell order
   up to 27 that is one arithmetic progression across the shard, in both
