@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- The declared xarray floor is honoured again
+  ([#76](https://github.com/espg/moczarr/issues/76)): on xarray older than
+  2026.7.0 — the declared `xarray>=2026.01.0` floor included — every store
+  carrying a `zagg-composition/1` array was refused at open with "this
+  array declares None", because the §3 `fill_value: 0` gate read the fill
+  from the xarray variable encoding, and xarray only began copying a zarr
+  v3 `fill_value` there in 2026.7.0. The gate now falls back to the array's
+  own zarr metadata when the encoding lacks the fill (one metadata read per
+  composition array per opened object, on those older xarray releases
+  only); the value judged and the refusal are unchanged. No dependency
+  bound moves.
 - Dependency drift ([#74](https://github.com/espg/moczarr/issues/74)):
   `moczarr.dggs` works on both xdggs lines — the healpix helpers
   (`center_around_prime_meridian`, `polygons_shapely`, `polygons_geoarrow`)

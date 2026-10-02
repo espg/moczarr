@@ -971,7 +971,7 @@ def open_overview_order(
             zarr_format=3,
             **(xr_kwargs or {}),
         )
-        _check_composition_fill(ds, rel)
+        _check_composition_fill(ds, rel, zarr_store, f"{rel}/{target_order}")
         coords = [name for name in ("morton", "cell_ids") if name in ds]
         ds = ds.set_coords(coords)
         if index_kind == "moc":
@@ -1018,7 +1018,7 @@ def open_overview_order(
             zarr_format=3,
             **(xr_kwargs or {}),
         )
-        _check_composition_fill(ds, schema_rel)
+        _check_composition_fill(ds, schema_rel, zarr_store, f"{schema_rel}/{target_order}")
         coords = [name for name in ("morton", "cell_ids") if name in ds]
         ds = ds.set_coords(coords)
         empty_dim = ds["morton"].dims[0] if "morton" in ds.coords else "cells"

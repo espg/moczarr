@@ -358,7 +358,7 @@ def open_column_order(
             zarr_format=3,
             **(xr_kwargs or {}),
         )
-        _check_composition_fill(ds, rel)
+        _check_composition_fill(ds, rel, zarr_store, f"{rel}/{r}")
         coords = [name for name in ("morton", "cell_ids") if name in ds]
         return ds.set_coords(coords), coords
 
