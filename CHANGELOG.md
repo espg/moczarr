@@ -2,6 +2,32 @@
 
 ## Unreleased
 
+- Derived cell coordinate ([#71](https://github.com/espg/moczarr/issues/71)):
+  a windowed leaf (`{id}_{window}.zarr`) written by zagg from
+  englacial/zagg#587 on stores no per-cell `{cell_order}/morton` array —
+  the word is a pure function of the leaf's id and the rank (zagg spec
+  §1.5, "The cell coordinate") — and the reader now derives it. One helper,
+  `moczarr.convention.leaf_cell_words(shard, cell_order)`, states the law
+  in mortie's terms (the shard's children at the cell order, in nested
+  order; for a cell order up to 27 the progression
+  `word[0] + j * 2**(60 - 2*c)`, 4,194,304 per cell at order 19, in both
+  hemispheres), and the leaf-open seams apply the rule "stored where the
+  leaf has it, derived where a windowed leaf does not": `open_hive` on
+  either `index_kind` (the shard from the leaf's name) and the store-rooted
+  readers — `read_ragged`, `read_tensors`, `cell_index` — through
+  `open_leaf` or any leaf-rooted store (the shard from the leaf's own
+  stamp, whose coverage box names it). Everything downstream — the exact
+  AOI row subset, the NESTED `cell_ids` fabrication, the xdggs index, the
+  joins — sees the same Dataset as before. A leaf that stores the array
+  reads exactly as it did, and an **unwindowed** leaf without one is
+  refused (`ValueError`; `open_hive` on the lazy path previously opened
+  such a leaf without noticing). A derived coordinate is full by
+  construction, so occupancy never comes from it: `cell_index` asks the
+  stamp's exact coverage (or, without one, the payload chunk) whether a
+  read chunk was written, where a stored coordinate answers with its `0`
+  fill. zagg's `windowed/` conformance fixture is vendored from the
+  unmerged englacial/zagg#587 branch (sha `5848c2f4`) and runs the
+  leaf-shaped gates plus §1.5's containment check on its location words.
 - Versioned leaves ([#70](https://github.com/espg/moczarr/issues/70)): the
   reader follows the zagg spec §1.5 pointer. A leaf's stable `{id}.zarr/`
   prefix may now be a **pointer root** — its commit stamp names `current`,
