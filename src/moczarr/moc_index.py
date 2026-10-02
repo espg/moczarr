@@ -16,7 +16,9 @@ extra), which wraps this index behind ``index_kind="moc"`` the way upstream
 
 Mixing with the pandas-backed index raises pointedly: an interval set and a
 hash table have no shared alignment currency, so both sides of an
-align/join must be opened with the same ``index_kind``.
+align/join must be opened with the same ``index_kind``. From xarray 2026.9 a
+mixed moc/pandas pair over an identical domain passes through alignment
+unchanged (there is nothing to reindex); differing domains are still refused.
 """
 
 from __future__ import annotations

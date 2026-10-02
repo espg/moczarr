@@ -15,6 +15,7 @@ import numpy as np
 import pytest
 import xarray as xr
 from conftest import FakeMoc
+from packaging.version import Version
 
 from moczarr import convention, open_hive, store
 from moczarr.moc_index import MortonMocIndex, _normalize_chunks
@@ -338,7 +339,29 @@ class TestMixedPairing:
             moc_index.reindex_like(pandas_index)
 
     def test_dataset_level_alignment_raises(self, ds_moc, ds_pandas):
-        # xarray's aligner rejects the conflicting index pair before our
-        # pointed TypeError can surface; the error still names both indexes.
-        with pytest.raises(Exception, match="MortonMocIndex"):
-            xr.align(ds_moc, ds_pandas, join="inner")
+        # Mixed kinds over DIFFERENT domains: xarray's aligner rejects the
+        # conflicting index pair before our pointed TypeError can surface;
+        # the error still names both indexes. Every join, both orders, on
+        # every xarray line — mixed kinds never silently misalign.
+        moc = ds_moc.isel(cells=slice(0, 32))
+        for other in (ds_pandas.isel(cells=slice(16, 48)), ds_pandas.isel(cells=slice(0, 48))):
+            for pair in ((moc, other), (other, moc)):
+                for join in ("inner", "outer", "exact"):
+                    with pytest.raises(xr.AlignmentError, match="MortonMocIndex"):
+                        xr.align(*pair, join=join)
+
+    def test_identical_domain_alignment_is_never_a_reindex(self, ds_moc, ds_pandas):
+        # Over the SAME domain there is nothing to reindex. xarray 2026.9.0
+        # compares a mixed-type index pair's coordinate values before
+        # refusing (alignment.py -> indexes_all_equal), so it now passes
+        # both objects through unchanged; earlier lines refused (issue #74).
+        if Version(xr.__version__) < Version("2026.9.0"):
+            with pytest.raises(xr.AlignmentError, match="MortonMocIndex"):
+                xr.align(ds_moc, ds_pandas, join="inner")
+            return
+        for join in ("inner", "outer", "exact"):
+            a, b = xr.align(ds_moc, ds_pandas, join=join)
+            xr.testing.assert_identical(a, ds_moc)
+            xr.testing.assert_identical(b, ds_pandas)
+            assert type(a.xindexes["morton"]) is MortonMocIndex
+            assert type(b.xindexes["morton"]) is type(ds_pandas.xindexes["morton"])
