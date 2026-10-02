@@ -255,7 +255,10 @@ def candidate_shards(
     one-extra-GET cost are on :func:`candidate_leaves`'s docstring), the
     whole selection is one call — and the manifest it fetched is worth
     reading once for the loop, since ``open_leaf(manifest=...)`` skips its
-    own GET::
+    own manifest GET (each open still GETs its leaf's root stamp — the
+    versioned-leaf pointer, zagg spec §1.5 — unless ``stamp=`` is threaded
+    from one batched :func:`moczarr.store.read_commits` over the paired
+    :func:`candidate_leaves`)::
 
         shards = candidate_shards(root, aoi=q, anonymous=True)
         manifest = read_manifest(root, anonymous=True)  # once, not per leaf
@@ -924,6 +927,7 @@ def open_leaf(
     window: str | None = None,
     product: str | None = None,
     manifest: dict | None = None,
+    stamp: dict | None = None,
     anonymous: bool = False,
     store: Any = None,
     **store_kwargs: Any,
@@ -940,7 +944,8 @@ def open_leaf(
     external path arithmetic, no bare-obstore incantation.
 
     It also follows the versioned-leaf pointer (zagg spec §1.5): ONE GET of
-    the leaf's root ``zarr.json``, and when that stamp names ``current`` the
+    the leaf's root ``zarr.json`` (none when ``stamp=`` is threaded), and
+    when that stamp names ``current`` the
     returned store is rooted at the version subgroup holding the arrays
     (:func:`moczarr.store.leaf_data_prefix`) — a legacy leaf, and an
     unstamped or absent one, root at the stable prefix as before. Either
@@ -966,6 +971,11 @@ def open_leaf(
         Passing it skips this call's manifest GET (the iterate-many-leaves
         case reads it once and threads it here) and is validated through
         :func:`moczarr.convention.parse_manifest` like any read one.
+    stamp : dict, optional
+        The leaf's already-read ROOT commit stamp — e.g. from
+        :func:`moczarr.store.read_commits` over :func:`candidate_leaves`.
+        Passing it skips the stamp GET, so with ``manifest=`` too the open
+        issues no request; ``None`` (also debris's answer) reads it.
     anonymous : bool
         Skip request signing (public buckets).
     store : obstore store, optional
@@ -1054,7 +1064,8 @@ def open_leaf(
     # version a versioned leaf's root stamp names, else the root itself — so
     # every per-leaf reader keeps addressing ``{cell_order}/{name}`` and finds
     # the version's own stamp and ``coverage.moc`` beside the arrays.
-    stamp = read_commit(store_root, rel, store=handle, **store_kwargs)
+    if stamp is None:
+        stamp = read_commit(store_root, rel, store=handle, **store_kwargs)
     prefix = leaf_data_prefix(rel, stamp)
     leaf_root = f"{store_root.rstrip('/')}/{prefix}"
     return ObjectStore(open_object_store(leaf_root, **store_kwargs), read_only=True)

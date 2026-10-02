@@ -356,6 +356,27 @@ class TestOpenLeaf:
         opened = open_leaf(versioned_serc, SERC_SHARD, manifest=manifest, store=handle)
         assert zarr.open_array(opened, path="8/count", mode="r").shape == (16,)
 
+    @pytest.mark.parametrize("versioned", [False, True])
+    def test_threaded_stamp_makes_the_open_request_free(self, versioned, request, monkeypatch):
+        # Legacy and versioned alike: 1 GET (the root stamp) with only the
+        # manifest threaded, 0 with the stamp threaded too — and the store
+        # opened is the same either way.
+        root = request.getfixturevalue("versioned_serc") if versioned else str(SERC)
+        rel = convention.leaf_path(SERC_SHARD)
+        manifest = store.read_manifest(root)
+        stamp = store.read_commits(root, [rel])[0]
+        opened = {}
+
+        def call(**kwargs):
+            def run():
+                opened[bool(kwargs)] = open_leaf(root, SERC_SHARD, manifest=manifest, **kwargs)
+
+            return run
+
+        assert _requests(monkeypatch, call()) == [("get", f"{rel}/zarr.json")]
+        assert _requests(monkeypatch, call(stamp=stamp)) == []
+        assert str(opened[True].store) == str(opened[False].store)
+
 
 class TestCoverageSidecar:
     def test_bitmap_is_read_under_the_version(self, versioned_serc):

@@ -22,9 +22,11 @@
   is a corrupted leaf, read as debris (`open_hive` skips a missing one with
   a `UserWarning`, but serves an unstamped one whose arrays survive — it
   never reads the version's stamp, which would cost a GET per leaf; the
-  verifier reports it as debris). `open_leaf` now reads the leaf's root stamp (one GET it
-  did not make before), and `read_coverage_bitmap` takes `stamp=` — the
-  already-read stamp that skips its GET; `coverage=` alone no longer does,
+  verifier reports it as debris). `open_leaf` now reads the leaf's root
+  stamp (one GET it did not make before) unless the new `stamp=` threads
+  an already-read one (e.g. from `read_commits`), and `read_coverage_bitmap`
+  takes `stamp=` likewise — the already-read stamp that skips its GET;
+  `coverage=` alone no longer does,
   because the envelope does not carry the pointer. zagg's `versioned/`
   conformance fixture is vendored and runs the leaf-shaped gates.
 - Reader independence ([#64](https://github.com/espg/moczarr/issues/64)):
