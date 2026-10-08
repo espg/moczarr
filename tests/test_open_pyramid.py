@@ -59,7 +59,7 @@ class TestAssemblyV2:
         for r in (6, 5, 4):
             with warnings.catch_warnings():
                 warnings.simplefilter("ignore", UserWarning)
-                want = open_level(swept, r)
+                want = open_level(swept, cells=r)
             xr.testing.assert_identical(tree[f"o{r}"].to_dataset(), want)
             assert tree[f"o{r}"].ds.attrs[LEVEL_ATTR]["cell_order"] == r
 
@@ -91,7 +91,10 @@ class TestAssemblyV2:
         assert list(tree.children) == ["o6", "o5"]
 
     def test_levels_selector_refuses_a_non_level(self, swept):
-        with pytest.raises(ValueError, match=r"levels are \[6, 5, 4, 3, 2, 1\]"):
+        with pytest.raises(
+            ValueError,
+            match=r"levels are cell orders \[6, 5, 4, 3, 2, 1\] at node orders \[4, 4, 3, 2, 1, 0\]",
+        ):
             open_pyramid(swept, levels=[7])
 
     def test_empty_levels_selector_raises(self, swept):
@@ -125,7 +128,7 @@ class TestAssemblyV1:
         tree = open_pyramid(self.ATL06)
         assert list(tree.children) == ["o8", "o6", "o4"]
         for r in (8, 6, 4):
-            xr.testing.assert_identical(tree[f"o{r}"].to_dataset(), open_level(self.ATL06, r))
+            xr.testing.assert_identical(tree[f"o{r}"].to_dataset(), open_level(self.ATL06, cells=r))
         assert tree.attrs["zagg_pyramid"]["spec"] == "zagg-pyramid/1"
         assert tree.attrs["morton_hive"]["cell_order"] == 8
         # The point of the oN grammar (espg review ruling on the PR):
@@ -146,7 +149,7 @@ class TestAssemblyV1:
         tree = open_pyramid(str(SERC))
         assert list(tree.children) == ["o8"]
         assert "zagg_pyramid" not in tree.attrs
-        xr.testing.assert_identical(tree["o8"].to_dataset(), open_level(str(SERC), 8))
+        xr.testing.assert_identical(tree["o8"].to_dataset(), open_level(str(SERC), cells=8))
 
     def test_multi_product_root(self):
         tree = open_pyramid(str(OVERVIEW), product="atl06")
@@ -212,7 +215,7 @@ class TestAssemblyV1:
         assert [k for k in via_tree if "/morton/c" in k or "/cell_ids/c" in k] == []
         keys.clear()
         for r in (8, 6, 4):
-            open_level(self.ATL06, r)
+            open_level(self.ATL06, cells=r)
         assert via_tree == chunk_reads()
 
     def test_manifest_and_store_thread_every_level(self):
@@ -248,9 +251,10 @@ class TestAllTime:
     def test_all_time_values_are_the_cross_window_fold(self):
         # The fixture's all.zarr folds are zagg-written: the exact-class
         # count at the fold level sums every window's own level.
-        ds_all = open_level(self.WINDOWS, 6, all_time=True)
+        ds_all = open_level(self.WINDOWS, cells=6, all_time=True)
         per_window = [
-            int(open_level(self.WINDOWS, 6, window=w)["count"].sum()) for w in ("2019", "2020")
+            int(open_level(self.WINDOWS, cells=6, window=w)["count"].sum())
+            for w in ("2019", "2020")
         ]
         assert int(ds_all["count"].sum()) == sum(per_window)
         assert ds_all.attrs["morton_hive"]["cell_order"] == 6
@@ -258,7 +262,7 @@ class TestAllTime:
     def test_all_time_roster_records_the_reserved_token(self):
         # The roster's window identity is the fold artifact's own §4.3
         # record — the reserved token, not a label and not None.
-        ds = open_level(self.WINDOWS, 6, all_time=True)
+        ds = open_level(self.WINDOWS, cells=6, all_time=True)
         assert {e["window"] for e in ds.attrs["zagg_objects"]} == {"all"}
         for entry in ds.attrs["zagg_objects"]:
             assert entry["zagg_overview"]["window"] == "all"
@@ -289,10 +293,10 @@ class TestAllTime:
 
         manifest = read_manifest(self.WINDOWS)
         manifest["pyramid"]["overview"]["all_time"] = False
-        declared = open_level(self.WINDOWS, 6, all_time=True)
+        declared = open_level(self.WINDOWS, cells=6, all_time=True)
         with warnings.catch_warnings():
             warnings.simplefilter("error")  # no warning either, just the folds
-            ds = open_level(self.WINDOWS, 6, all_time=True, manifest=manifest)
+            ds = open_level(self.WINDOWS, cells=6, all_time=True, manifest=manifest)
             direct = open_overview_order(self.WINDOWS, manifest, 4, all_time=True)
         assert int(ds["count"].sum()) == int(declared["count"].sum())
         assert {e["window"] for e in ds.attrs["zagg_objects"]} == {"all"}
@@ -302,7 +306,7 @@ class TestAllTime:
 
     def test_open_level_all_time_on_a_source_level_raises(self):
         with pytest.raises(ValueError, match="overview levels"):
-            open_level(self.WINDOWS, 8, all_time=True)
+            open_level(self.WINDOWS, cells=8, all_time=True)
 
     def test_explicit_levels_naming_source_raises_not_drops(self):
         # levels= naming the source level under all_time is a caller error,
@@ -338,7 +342,7 @@ class TestOpenStoreV2:
             warnings.simplefilter("ignore", UserWarning)
             tree = open_store(swept)
             for r in (6, 5, 4):
-                want = open_level(swept, r)
+                want = open_level(swept, cells=r)
                 xr.testing.assert_identical(tree["spec_fixture"][f"o{r}"].to_dataset(), want)
 
     def test_decode_refused_on_a_v2_product(self, swept):

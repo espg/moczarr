@@ -489,7 +489,7 @@ class TestOpenLevel:
     def test_native_level_is_open_hive_plus_roster(self):
         from moczarr import LEVEL_ATTR
 
-        ds = open_level(self.ATL06, 8)
+        ds = open_level(self.ATL06, cells=8)
         native = open_hive(self.ATL06)
         assert dict(ds.sizes) == dict(native.sizes)
         assert set(ds.data_vars) == set(native.data_vars)
@@ -503,7 +503,7 @@ class TestOpenLevel:
     def test_v1_overview_level(self):
         from moczarr import LEVEL_ATTR
 
-        ds = open_level(self.ATL06, 6)
+        ds = open_level(self.ATL06, cells=6)
         assert ds.attrs["morton_hive"]["cell_order"] == 6
         rec = ds.attrs[LEVEL_ATTR]
         assert rec == {
@@ -523,7 +523,7 @@ class TestOpenLevel:
     def test_v2_column_level(self):
         from moczarr import LEVEL_ATTR
 
-        ds = open_level(TEMPORAL, 5)
+        ds = open_level(TEMPORAL, cells=5)
         rec = ds.attrs[LEVEL_ATTR]
         assert rec["artifact"] == "column"
         assert rec["spec"] == "zagg-pyramid/2"
@@ -534,14 +534,16 @@ class TestOpenLevel:
         from moczarr import LEVEL_ATTR
 
         root = str(Path(__file__).parent / "data" / "serc_hive")
-        ds = open_level(root, 8)
+        ds = open_level(root, cells=8)
         rec = ds.attrs[LEVEL_ATTR]
         assert rec["artifact"] == "source"
         assert rec["spec"] is None and rec["fields"] is None and rec["fold_source"] is None
 
     def test_unknown_level_raises_with_the_table(self):
-        with pytest.raises(ValueError, match=r"levels are \[8, 6, 4\]"):
-            open_level(self.ATL06, 7)
+        with pytest.raises(
+            ValueError, match=r"levels are cell orders \[8, 6, 4\] at node orders \[6, 4, 2\]"
+        ):
+            open_level(self.ATL06, cells=7)
 
     def test_shard_order_names_the_partial_tier_hint(self):
         # cell_order == shard_order on a /2 store is the §4.6 node-order
@@ -552,21 +554,21 @@ class TestOpenLevel:
         manifest = read_manifest(TEMPORAL)
         manifest["pyramid"]["overviews"] = [{"node": 4, "cells": [5]}]
         with pytest.raises(ValueError, match="open_column_order"):
-            open_level(TEMPORAL, 4, manifest=manifest)
+            open_level(TEMPORAL, cells=4, manifest=manifest)
 
     def test_multi_product_root(self):
         root = str(OVERVIEW)
-        ds = open_level(root, 6, product="atl06")
+        ds = open_level(root, cells=6, product="atl06")
         assert ds.attrs["morton_hive"]["cell_order"] == 6
         with pytest.raises(ValueError, match="multi-product store root"):
-            open_level(root, 6)
+            open_level(root, cells=6)
 
     def test_windowed_product_scopes_by_window(self):
         root = str(OVERVIEW / "atl06_windows")
-        ds = open_level(root, 6, window="2019")
+        ds = open_level(root, cells=6, window="2019")
         assert ds.attrs["morton_hive"]["cell_order"] == 6
         with pytest.raises(ValueError, match="pass window="):
-            open_level(root, 6)
+            open_level(root, cells=6)
 
     def test_every_arm_honors_the_threaded_store_handle(self):
         # issue #5, uniformly: one handle serves every level of a product,
@@ -577,8 +579,8 @@ class TestOpenLevel:
         from moczarr import open_object_store
 
         handle = open_object_store(TEMPORAL)
-        native = open_level("/nonexistent/root", 6, store=handle)
-        column = open_level("/nonexistent/root", 5, store=handle)
+        native = open_level("/nonexistent/root", cells=6, store=handle)
+        column = open_level("/nonexistent/root", cells=5, store=handle)
         assert dict(native.sizes) == dict(open_hive(TEMPORAL).sizes)
         assert dict(column.sizes) == {"cells": 4}
 
@@ -589,13 +591,13 @@ class TestOpenLevel:
         manifest = read_manifest(TEMPORAL)
         manifest["dataset"] = {"short_name": "THREADED"}
         for r in (6, 5):
-            ds = open_level(TEMPORAL, r, manifest=manifest)
+            ds = open_level(TEMPORAL, cells=r, manifest=manifest)
             assert ds.attrs["morton_hive"]["dataset"] == {"short_name": "THREADED"}
 
     def test_aoi_passes_through(self):
-        full = open_level(self.ATL06, 6)
+        full = open_level(self.ATL06, cells=6)
         word = np.uint64(full["morton"].values[0])
-        cut = open_level(self.ATL06, 6, aoi=np.array([word], dtype=np.uint64))
+        cut = open_level(self.ATL06, cells=6, aoi=np.array([word], dtype=np.uint64))
         assert dict(cut.sizes) == {"cells": 1}
         assert int(cut["morton"].values[0]) == int(word)
 
@@ -696,7 +698,7 @@ class TestV2AncestorArm:
     def test_rung_opens_by_resolution(self, swept):
         from moczarr import LEVEL_ATTR
 
-        ds = open_level(swept, 4)
+        ds = open_level(swept, cells=4)
         assert dict(ds.sizes) == {"cells": 4}
         assert [morton_decimal(int(w)) for w in ds["morton"].values] == [
             "11211",
@@ -715,7 +717,7 @@ class TestV2AncestorArm:
         }
 
     def test_v2_provenance_rides_verbatim(self, swept):
-        ds = open_level(swept, 4)
+        ds = open_level(swept, cells=4)
         (entry,) = ds.attrs[OBJECTS_ATTR]
         assert entry["role"] == "overview"
         block = entry["zagg_overview"]
@@ -728,7 +730,7 @@ class TestV2AncestorArm:
         # The rung's bytes ARE the leaf partial's, placed at the leaf's
         # nested rank: exact class equal, digest bytes decode identical.
         manifest = read_manifest(swept)
-        rung = open_level(swept, 4)
+        rung = open_level(swept, cells=4)
         partial = open_column_order(swept, manifest, 4)
         assert int(rung["count"].values.sum()) == int(partial["count"].values.sum())
         element = parse_ragged_attrs(rung["h_tdigest"].attrs, field="h_tdigest")
@@ -740,9 +742,9 @@ class TestV2AncestorArm:
 
     def test_shape_consistent_across_all_three_kinds(self, swept):
         # The model's one law, all three artifact kinds on one store.
-        native = open_level(swept, 6)
-        column = open_level(swept, 5)
-        rung = open_level(swept, 4)
+        native = open_level(swept, cells=6)
+        column = open_level(swept, cells=5)
+        rung = open_level(swept, cells=4)
         for ds in (native, column, rung):
             assert list(ds.sizes) == ["cells"]
             assert set(ds.coords) == {"morton", "cell_ids"}
@@ -766,7 +768,7 @@ class TestV2AncestorArm:
         meta["attributes"]["zagg_overview"]["cell_order"] = 5
         path.write_text(json.dumps(meta))
         with pytest.raises(ValueError, match="mis-rank"):
-            open_level(swept, 4)
+            open_level(swept, cells=4)
 
     def test_v1_default_path_degrades_on_a_conformant_v2_store(self, swept):
         # The pre-existing /1 entry point, called with no cell_order= on a
@@ -802,7 +804,7 @@ class TestV2AncestorArm:
         # Declared-but-unmaterialized is a legal recorded state: the rung
         # at cells 3 (node 2) has no artifact on the unswept fixture.
         with pytest.warns(UserWarning, match="no stamped overview object"):
-            assert open_level(TEMPORAL, 3) is None
+            assert open_level(TEMPORAL, cells=3) is None
 
     def test_demotions_ride_and_flatten(self, tmp_path):
         # `demotions` is PRE-SPEC (englacial/zagg#557, open + waiting): the
@@ -824,7 +826,7 @@ class TestV2AncestorArm:
             }
         ]
         _write_stage_artifact(root, demotions=recorded)
-        ds = open_level(str(root), 4)
+        ds = open_level(str(root), cells=4)
         (entry,) = ds.attrs[OBJECTS_ATTR]
         assert entry["zagg_overview"]["demotions"] == recorded
         assert level_demotions(ds) == [{"node": "1121", "window": None, **recorded[0]}]
@@ -832,8 +834,8 @@ class TestV2AncestorArm:
     def test_clean_level_has_no_demotions(self, swept):
         from moczarr import level_demotions
 
-        assert level_demotions(open_level(swept, 4)) == []
-        assert level_demotions(open_level(swept, 5)) == []
+        assert level_demotions(open_level(swept, cells=4)) == []
+        assert level_demotions(open_level(swept, cells=5)) == []
 
     def test_column_blocks_are_not_a_demotions_source(self, tmp_path):
         # The key is read from the sweep-written zagg_overview block ONLY.
@@ -850,7 +852,51 @@ class TestV2AncestorArm:
         planted = [{"field": "composition", "class": "packed", "reason": "divisor-missing"}]
         meta["attributes"]["zagg_column"]["demotions"] = planted
         path.write_text(json.dumps(meta))
-        ds = open_level(str(root), 5)
+        ds = open_level(str(root), cells=5)
         (entry,) = ds.attrs[OBJECTS_ATTR]
         assert entry["zagg_column"]["demotions"] == planted
         assert level_demotions(ds) == []
+
+
+class TestLevelAddressing:
+    """The issue #68 seam: the level is keyword-only, in either spelling."""
+
+    ATL06 = str(OVERVIEW / "atl06")
+    SERC = str(Path(__file__).parent / "data" / "serc_hive")
+
+    def test_positional_level_is_refused(self):
+        # Cell order and node order differ by the store's depth d, so a bare
+        # int is never guessed at — the error names both spellings.
+        with pytest.raises(TypeError, match=r"cells=<cell order>.*node=<node order>.*off-by-d"):
+            open_level(self.ATL06, 8)
+
+    @pytest.mark.parametrize(
+        "root, cells, node", [("SERC", 8, 6), ("ATL06", 6, 4), ("ATL06", 4, 2)]
+    )
+    def test_cells_and_node_select_the_same_level(self, root, cells, node):
+        # Declared-off (one level, cells 8 @ node 6) and the /1 ladder alike:
+        # the two spellings of one level open the identical Dataset.
+        store = getattr(self, root)
+        xr.testing.assert_identical(open_level(store, cells=cells), open_level(store, node=node))
+
+    def test_both_or_neither_raises(self):
+        with pytest.raises(TypeError, match="exactly one of cells="):
+            open_level(self.ATL06, cells=8, node=6)
+        with pytest.raises(TypeError, match="exactly one of cells="):
+            open_level(self.ATL06)
+
+    def test_unknown_node_lists_both_spellings(self):
+        with pytest.raises(
+            ValueError, match=r"node order 5 .*cell orders \[8, 6, 4\] at node orders \[6, 4, 2\]"
+        ):
+            open_level(self.ATL06, node=5)
+
+    def test_v2_ladder_resolves_node_and_refuses_the_leaf_node(self):
+        # d == 1 on the temporal fixture: node 3 is the (unswept) rung at
+        # cells 4, while node 4 — the shard order — carries the base data
+        # (cells 6) beside its §4.6 column (cells 5): only cells= can tell
+        # those two apart.
+        with pytest.warns(UserWarning, match="no stamped"):
+            assert open_level(TEMPORAL, node=3) is None
+        with pytest.raises(ValueError, match=r"node order 4 carries cell orders \[6, 5\].*cells="):
+            open_level(TEMPORAL, node=4)

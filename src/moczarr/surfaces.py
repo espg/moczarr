@@ -58,7 +58,7 @@ from moczarr.convention import (
     validate_window,
 )
 from moczarr.coverage import ranges_words
-from moczarr.level import LEVEL_ATTR, _resolve_target, open_level, pyramid_levels
+from moczarr.level import LEVEL_ATTR, _level_key, _resolve_target, open_level, pyramid_levels
 from moczarr.pyramid import OBJECTS_ATTR, OrderPresence, pyramid_declaration, read_pyramid
 from moczarr.store import _stamp_from_meta, load_root_coverage, read_leaf_metas
 
@@ -329,9 +329,10 @@ def quantile_surface(
 
 def open_surface(
     store_root: str,
-    cell_order: int,
     field,
-    *,
+    *_positional: Any,
+    cells: int | None = None,
+    node: int | None = None,
     quantiles=DEFAULT_QUANTILES,
     fill: float = np.nan,
     carry=(),
@@ -353,7 +354,10 @@ def open_surface(
 
     :func:`moczarr.level.open_level` then :func:`quantile_surface`, with
     ``open_level``'s whole signature threaded through verbatim (defaults
-    unchanged): ``aoi`` scopes rows exactly as the level model does (an
+    unchanged): the level is keyword-only, ``cells=`` (cell order) or
+    ``node=`` (node order), exactly one, a positional int refused as
+    ``open_level`` refuses it (issue #68 — ``field`` is the second
+    positional); ``aoi`` scopes rows exactly as the level model does (an
     out-of-coverage AOI yields the schema-correct EMPTY surface,
     ``(len(quantiles), 0)``), ``window`` follows the D23 dialect (required
     on a windowed store, refused on an unwindowed one, the reserved
@@ -368,9 +372,13 @@ def open_surface(
     Surface arguments (``quantiles``/``fill``/``carry``/``name``, ``field``
     string / sequence / ``None``) follow :func:`quantile_surface`.
     """
+    if isinstance(field, (int, np.integer)):  # open_surface(root, 6, "h") binds the int here
+        _positional = (field, *_positional)
+    _level_key("open_surface", _positional, cells, node)
     ds = open_level(
         store_root,
-        cell_order,
+        cells=cells,
+        node=node,
         product=product,
         manifest=manifest,
         aoi=aoi,

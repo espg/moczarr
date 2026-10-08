@@ -470,6 +470,21 @@ and a `/2` store adds the column-carried leaf resolutions and the fixed
 every-order ladder. `open_level` deliberately exposes no `decode=` (new
 pyramid surfaces are native moczarr only — the englacial/zagg#550 ruling).
 
+The level is named by keyword, never positionally
+([issue #68](https://github.com/espg/moczarr/issues/68)):
+`open_level(root, cells=13)` addresses by **cell order** (the resolution —
+`pyramid_levels`' key, the `o13` group), `open_level(root, node=9)` by
+**node order** (the hive-tree node zagg's sweep vocabulary counts in,
+`"orders [8, 7, 6]"`), resolved through the ladder. The two differ by the
+store's depth `d` (on a `d = 4` store node 8 carries cells 12), which is why
+a bare `open_level(root, 13)` is refused rather than guessed.
+`read_pyramid(root).cell_order(node)` / `.node_order(cells)` translate
+between them (`.levels` is the whole `{cell order: node order}` ladder,
+source level included), raising with both spellings for an order the store
+lacks; a `/2` leaf node carries the base data beside its column tier, so
+`node=` there is ambiguous and raises, asking for `cells=`. `open_surface`
+takes the same keywords, after its `field`.
+
 ### The multi-order assembly: `open_pyramid`
 
 > **Status: implemented**

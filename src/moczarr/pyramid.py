@@ -53,7 +53,7 @@ arithmetic), never a tree node.
 from __future__ import annotations
 
 import warnings
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 import numpy as np
@@ -339,6 +339,37 @@ def pyramid_declaration(manifest: dict) -> dict | None:
     }
 
 
+def _levels_text(levels: dict[int, int]) -> str:
+    """Both spellings of a ``{cell order: node order}`` ladder, for error messages."""
+    return f"cell orders {list(levels)} at node orders {list(levels.values())}"
+
+
+def _cell_order_of(levels: dict[int, int], node: int) -> int:
+    """The one cell order node order ``node`` carries in ``levels``, or raise."""
+    hits = [r for r, k in levels.items() if k == int(node)]
+    if len(hits) == 1:
+        return hits[0]
+    if not hits:
+        raise ValueError(
+            f"node order {node} carries no level of this store: its levels are "
+            f"{_levels_text(levels)} (finest first)"
+        )
+    raise ValueError(
+        f"node order {node} carries cell orders {hits} (a /2 leaf node holds the base "
+        f"data beside its §4.6 column tier): name the level with cells= (issue #68)"
+    )
+
+
+def _node_order_of(levels: dict[int, int], cells: int) -> int:
+    """The node order whose artifact carries cell order ``cells`` in ``levels``, or raise."""
+    if int(cells) not in levels:
+        raise ValueError(
+            f"cell order {cells} is not a level of this store: its levels are "
+            f"{_levels_text(levels)} (finest first)"
+        )
+    return levels[int(cells)]
+
+
 @dataclass(frozen=True)
 class OrderPresence:
     """One declared ancestor order's existence probe (D4 stamps only).
@@ -379,10 +410,18 @@ class PyramidInfo:
     presence : dict of int to OrderPresence, or None
         Per declared ancestor order; ``None`` when probes cannot be named or
         ``probe=False``.
+    levels : dict of int to int
+        ``{cell order: node order}`` for EVERY level of the store, finest
+        first, the source level included — :func:`moczarr.level.pyramid_levels`'
+        table reduced to the two orders viewer code confuses (issue #68:
+        zagg's sweep vocabulary counts node orders, ``open_level`` is keyed
+        by cell order, and the two differ by the store's depth ``d``).
+        :meth:`cell_order` / :meth:`node_order` translate between them.
     """
 
     declaration: dict
     presence: dict[int, OrderPresence] | None
+    levels: dict[int, int] = field(default_factory=dict)
 
     # Both fields are dicts, so the ``frozen=True`` generated ``__hash__``
     # would advertise hashable and then raise TypeError on the contained dict
@@ -391,6 +430,24 @@ class PyramidInfo:
     # equality untouched. :class:`OrderPresence` (all-int fields) is
     # genuinely hashable and keeps its generated hash.
     __hash__ = None  # type: ignore[assignment]
+
+    def cell_order(self, node: int) -> int:
+        """The cell order the level at node order ``node`` stores (``node=`` → ``cells=``).
+
+        Raises, naming both spellings of the ladder, for a node order the
+        store has no level at — and for one that carries SEVERAL cell orders
+        (a ``/2`` leaf node holds the base data beside its §4.6 column
+        tier), which only ``cells=`` can name.
+        """
+        return _cell_order_of(self.levels, node)
+
+    def node_order(self, cells: int) -> int:
+        """The node order whose artifact carries cell order ``cells`` (``cells=`` → ``node=``).
+
+        Raises, naming both spellings of the ladder, for a cell order that
+        is not a level of the store.
+        """
+        return _node_order_of(self.levels, cells)
 
 
 def read_pyramid(
@@ -496,6 +553,9 @@ def read_pyramid(
     declaration = pyramid_declaration(manifest)
     if declaration is None:
         return None
+    from moczarr.level import _level_orders, pyramid_levels  # level imports this module
+
+    levels = _level_orders(pyramid_levels(manifest))
     windowed = manifest["spec"] == HIVE_SPEC_V2
     # ABOVE the `probe=False` return, for the reason `open_overview_order`
     # keeps its own `validate_window` above the windowed branch: a `window=`
@@ -512,7 +572,7 @@ def read_pyramid(
             f"have no window leaves (schedule: none)"
         )
     if not probe:
-        return PyramidInfo(declaration, None)
+        return PyramidInfo(declaration, None, levels)
     # Genuinely probe-scoped: this one is about NAMING objects, and
     # `probe=False` names none.
     if windowed and window is None:
@@ -537,7 +597,7 @@ def read_pyramid(
             UserWarning,
             stacklevel=2,
         )
-        return PyramidInfo(declaration, None)
+        return PyramidInfo(declaration, None, levels)
     envelope = load_root_coverage(store_root, store=handle)
     if envelope is None:
         warnings.warn(
@@ -547,7 +607,7 @@ def read_pyramid(
             UserWarning,
             stacklevel=2,
         )
-        return PyramidInfo(declaration, None)
+        return PyramidInfo(declaration, None, levels)
     words = ranges_words(envelope)
     basename = f"{window}.zarr" if windowed else f"{ALL_TOKEN}.zarr"
     per_order = [(k, overview_nodes(manifest, words, k)) for k in probe_orders]
@@ -562,7 +622,7 @@ def read_pyramid(
             nodes=len(decs),
             stamped=sum(1 for meta in chunk if _stamp_from_meta(meta) is not None),
         )
-    return PyramidInfo(declaration, presence)
+    return PyramidInfo(declaration, presence, levels)
 
 
 def _ancestor_order(manifest: dict, order: int) -> int:

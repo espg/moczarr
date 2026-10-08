@@ -67,7 +67,7 @@ from moczarr.convention import (
     validate_window,
 )
 from moczarr.coverage import ranges_words, root_coverage_and
-from moczarr.pyramid import ROLE_ATTR, _skip, pyramid_declaration
+from moczarr.pyramid import ROLE_ATTR, _cell_order_of, _levels_text, _skip, pyramid_declaration
 from moczarr.ranges import MortonRanges
 from moczarr.store import _stamp_from_meta, load_root_coverage, read_leaf_metas
 
@@ -130,6 +130,36 @@ def pyramid_levels(manifest: dict) -> dict[int, dict]:
                 )
             levels[int(r)] = {"cell_order": int(r), "order": int(k), "artifact": "overview"}
     return dict(sorted(levels.items(), reverse=True))
+
+
+def _level_orders(levels: dict[int, dict]) -> dict[int, int]:
+    """:func:`pyramid_levels`' table reduced to ``{cell order: node order}``."""
+    return {r: rec["order"] for r, rec in levels.items()}
+
+
+def _level_key(fn: str, positional: tuple, cells: int | None, node: int | None) -> tuple[str, int]:
+    """``("cells", r)`` or ``("node", k)`` — the one level spelling the caller used.
+
+    The issue #68 seam, checked before any I/O: the level is keyword-only
+    because cell order (``pyramid_levels``' key, the ``o{cells}`` group) and
+    node order (the hive-tree node zagg's sweep vocabulary counts in) differ
+    by the store's depth ``d``, so a bare int was silently off by ``d``.
+    """
+    if positional:
+        raise TypeError(
+            f"{fn}() takes the level by keyword only: cells=<cell order> (the resolution — "
+            f"the o{{cells}} group, pyramid_levels' key) or node=<node order> (the hive-tree "
+            f"node zagg's sweep vocabulary counts in, 'orders [8, 7, 6]'). The two differ by "
+            f"the store's depth d, so a bare {positional[0]!r} is an off-by-d trap (issue #68)"
+        )
+    if cells is not None and node is None:
+        return "cells", int(cells)
+    if node is not None and cells is None:
+        return "node", int(node)
+    raise TypeError(
+        f"{fn}() takes exactly one of cells= (a cell order) or node= (a node order); "
+        f"got cells={cells!r}, node={node!r}"
+    )
 
 
 def _column_entry(attrs: dict, decimal: str, window: str | None, shard_order: int) -> dict | None:
@@ -548,8 +578,9 @@ def _resolve_target(
 
 def open_level(
     store_root: str,
-    cell_order: int,
-    *,
+    *_positional: Any,
+    cells: int | None = None,
+    node: int | None = None,
     product: str | None = None,
     manifest: dict | None = None,
     aoi=None,
@@ -566,10 +597,16 @@ def open_level(
 ):
     """Open ONE resolution level of a pyramid store as one Dataset, or ``None``.
 
-    The #37 entry point: ``cell_order`` addresses a level of
-    :func:`pyramid_levels`' table — resolution is the reader-facing axis,
-    and which artifact kind materializes it is this function's dispatch,
-    not the caller's:
+    The #37 entry point. The level is named by keyword, exactly one of
+    ``cells=`` — a CELL ORDER, :func:`pyramid_levels`' key and the
+    ``o{cells}`` group of :func:`open_pyramid` — or ``node=`` — a NODE
+    ORDER, the hive-tree node zagg's sweep vocabulary counts in
+    (``"orders [8, 7, 6]"``), resolved to its cell order through the
+    ladder. The two differ by the store's depth ``d`` (on a ``d = 4``
+    store node 8 carries cells 12), so a positional int is refused rather
+    than guessed (issue #68). Resolution is the reader-facing axis, and
+    which artifact kind materializes it is this function's dispatch, not
+    the caller's:
 
     - the **native** order opens through :func:`moczarr.open.open_hive`
       (the same lazy Dataset, plus the per-object roster under
@@ -585,10 +622,12 @@ def open_level(
     with a warning when a declared level has no stamped artifact (or the
     root MOC is unusable), the issue-#4 schema-correct empty dataset under
     an AOI that misses the coverage, and the shared ``window=`` seam. An
-    undeclared ``cell_order`` raises, listing the store's levels — the
-    §4.6 node-order member (``cell_order == shard_order``) is a recorded
-    partial tier rather than a level, reachable explicitly through
-    :func:`open_column_order`.
+    undeclared cell order raises, listing the store's levels in both
+    spellings — the §4.6 node-order member (``cell_order == shard_order``)
+    is a recorded partial tier rather than a level, reachable explicitly
+    through :func:`open_column_order` — and so does a ``node=`` that
+    carries SEVERAL cell orders (a ``/2`` leaf node holds the base data
+    beside its §4.6 column tier), which only ``cells=`` can name.
 
     On top of the arm's own attrs the result carries :data:`LEVEL_ATTR`
     (``zagg_level``) — the level's record from the table plus the
@@ -638,6 +677,7 @@ def open_level(
     """
     from moczarr.pyramid import OBJECTS_ATTR, open_overview_order
 
+    kind, order = _level_key("open_level", _positional, cells, node)
     if anonymous:
         store_kwargs.setdefault("anonymous", True)
     store_root, handle, manifest = _resolve_target(
@@ -645,7 +685,9 @@ def open_level(
     )
     levels = pyramid_levels(manifest)
     decl = pyramid_declaration(manifest)
-    record = levels.get(int(cell_order))
+    orders = _level_orders(levels)
+    cell_order = order if kind == "cells" else _cell_order_of(orders, order)
+    record = levels.get(cell_order)
     if record is None:
         from moczarr.pyramid import PYRAMID_SPEC_V2
 
@@ -654,17 +696,17 @@ def open_level(
             "with open_column_order)"
             if decl is not None
             and decl["spec"] == PYRAMID_SPEC_V2
-            and int(cell_order) == int(manifest["shard_order"])
+            and cell_order == int(manifest["shard_order"])
             else ""
         )
         raise ValueError(
             f"cell order {cell_order} is not a level of {store_root}: this store's "
-            f"levels are {list(levels)} (finest first; see pyramid_levels){hint}"
+            f"levels are {_levels_text(orders)} (finest first; see pyramid_levels){hint}"
         )
     if all_time and record["artifact"] != "overview":
         raise ValueError(
             f"all_time=True reads the §4.5 cross-window FOLDS, which exist only at "
-            f"overview levels: level {cell_order} is {record['artifact']!r} (a windowed "
+            f"overview levels: cell order {cell_order} is {record['artifact']!r} (a windowed "
             f"store has no all-time source leaf and no all-time column — issue #31, "
             f"zagg spec §4.5/§4.6)"
         )
@@ -843,7 +885,7 @@ def open_pyramid(
         if bad:
             raise ValueError(
                 f"cell orders {bad} are not levels of {store_root}: this store's "
-                f"levels are {list(table)} (finest first; see pyramid_levels)"
+                f"levels are {_levels_text(_level_orders(table))} (finest first; see pyramid_levels)"
             )
         table = {r: table[r] for r in table if r in set(wanted)}
     if all_time:
@@ -886,7 +928,7 @@ def open_pyramid(
     for r in table:
         ds = open_level(
             store_root,
-            r,
+            cells=r,
             manifest=manifest,
             aoi=aoi,
             window=window,

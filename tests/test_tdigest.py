@@ -366,8 +366,8 @@ class TestReaderWithoutZagg:
             import moczarr
             from zarr.storage import LocalStore
 
-            surf = moczarr.open_surface({str(kitchen)!r}, 6,
-                                        ("h_tdigest_signal", "h_tdigest_noise"))
+            surf = moczarr.open_surface({str(kitchen)!r},
+                                        ("h_tdigest_signal", "h_tdigest_noise"), cells=6)
             vals = surf["h_tdigest"].values
             assert vals.shape[0] == 5 and vals.shape[1] > 0
             assert np.isfinite(vals).any()

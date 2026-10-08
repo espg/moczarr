@@ -1221,7 +1221,7 @@ concurrency, xr_kwargs, **store_kwargs
             for r in pyramid_levels(manifest_rec):
                 child = open_level(
                     product_root,
-                    r,
+                    cells=r,
                     manifest=manifest_rec,
                     aoi=aoi,
                     window=node_window,

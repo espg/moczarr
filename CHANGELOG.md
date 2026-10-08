@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Level addressing by keyword ([#68](https://github.com/espg/moczarr/issues/68)):
+  `open_level` and `open_surface` take the level **only** as `cells=` (cell
+  order — `pyramid_levels`' key, the `o{cells}` group) or `node=` (node order
+  — the hive-tree node zagg's sweep vocabulary counts in), exactly one of
+  them; a positional int is refused with an error naming both spellings,
+  because the two conventions differ by the store's depth `d` (on a `d = 4`
+  store node 8 is cells 12) and a bare int was an off-by-d trap for viewer
+  code. `PyramidInfo` grows `levels` (`{cell order: node order}`, every
+  level, source included) with `cell_order(node)` / `node_order(cells)`
+  translating between them — raising with both spellings of the ladder for
+  an order the store lacks, and for a `/2` leaf node, which carries the base
+  data beside its §4.6 column tier (ambiguous: use `cells=`). Errors that
+  list a store's levels now read "cell orders [...] at node orders [...]".
+  **Breaking:** `open_level(root, 13)` / `open_surface(root, 13, field)`
+  become `open_level(root, cells=13)` / `open_surface(root, field, cells=13)`.
 - Reader independence ([#64](https://github.com/espg/moczarr/issues/64)):
   the t-digest algebra is now moczarr's own — `moczarr.tdigest`, pure numpy
   (`cdf_from_tdigest`, `quantile_from_tdigest`, and the order-independent

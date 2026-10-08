@@ -100,7 +100,7 @@ class TestQuantileSurface:
         # The issue #21 acceptance: dense output matches quantile_from_tdigest
         # per cell on a shared fixture — here the temporal store's native
         # level, whose digests are real writer bytes.
-        ds = open_level(TEMPORAL, 6)
+        ds = open_level(TEMPORAL, cells=6)
         surf = quantile_surface(ds, "h_tdigest")
         element = parse_ragged_attrs(ds["h_tdigest"].attrs, field="h_tdigest")
         raw = ds["h_tdigest"].values
@@ -231,7 +231,7 @@ class TestQuantileSurface:
         # single-field calls, and the merged total brackets them — its
         # extremes are the strata extremes, and its total span covers each
         # stratum's (the union holds every centroid of both).
-        ds = open_level(KITCHEN, 6)
+        ds = open_level(KITCHEN, cells=6)
         signal = quantile_surface(ds, "h_tdigest_signal", [0.0, 0.5, 1.0])
         noise = quantile_surface(ds, "h_tdigest_noise", [0.0, 0.5, 1.0])
         merged = quantile_surface(ds, ("h_tdigest_signal", "h_tdigest_noise"), [0.0, 0.5, 1.0])
@@ -310,7 +310,7 @@ class TestQuantileSurface:
     def test_companion_sibling_is_not_a_digest(self):
         # A locations/times sibling is ragged but (n,) uint64 — evaluating it
         # as (mean, weight) centroids would be a silent wrong answer.
-        ds = open_level(TEMPORAL, 6)
+        ds = open_level(TEMPORAL, cells=6)
         with pytest.raises(ValueError, match="not the t-digest"):
             quantile_surface(ds, "h_tdigest_locations")
 
@@ -319,8 +319,8 @@ class TestOpenSurface:
     def test_column_level_end_to_end(self):
         # The one-call feeder on the /2 column tier: same values as opening
         # the level and materializing in two steps.
-        two_step = quantile_surface(open_level(TEMPORAL, 5), "h_tdigest", carry=("count",))
-        one_call = open_surface(TEMPORAL, 5, "h_tdigest", carry=("count",))
+        two_step = quantile_surface(open_level(TEMPORAL, cells=5), "h_tdigest", carry=("count",))
+        one_call = open_surface(TEMPORAL, "h_tdigest", cells=5, carry=("count",))
         xr.testing.assert_identical(one_call, two_step)
         assert one_call["h_tdigest"].dims == ("quantile", "cells")
         assert one_call.attrs["zagg_level"]["artifact"] == "column"
@@ -330,7 +330,7 @@ class TestOpenSurface:
         # unmaterialized at ancestor nodes) — open_level's degrade posture
         # passes through: None, never an empty surface.
         with pytest.warns(UserWarning, match="no stamped"):
-            assert open_surface(TEMPORAL, 4, "h_tdigest") is None
+            assert open_surface(TEMPORAL, "h_tdigest", cells=4) is None
 
     def test_disjoint_aoi_is_the_schema_correct_empty_surface(self):
         # AOI scoping is the level model's: rows only, never the schema. A
@@ -339,7 +339,7 @@ class TestOpenSurface:
 
         away = np.array([morton_word("21213")], dtype=np.uint64)  # a disjoint shard subtree
         with pytest.warns(UserWarning):
-            surf = open_surface(TEMPORAL, 6, "h_tdigest", aoi=away)
+            surf = open_surface(TEMPORAL, "h_tdigest", cells=6, aoi=away)
         assert surf is not None
         assert surf["h_tdigest"].shape == (len(DEFAULT_QUANTILES), 0)
         assert surf["morton"].size == 0
@@ -347,14 +347,14 @@ class TestOpenSurface:
     def test_windowed_store_follows_the_d23_seam(self):
         # window= reaches the arm untouched: the windowed store serves its
         # per-window artifacts, and the reserved token is refused.
-        surf = open_surface(WINDOWED, 6, None, window="2019", carry=("count", "h_max"))
+        surf = open_surface(WINDOWED, None, cells=6, window="2019", carry=("count", "h_max"))
         assert set(surf.data_vars) == {"count", "h_max"}
         assert surf.attrs["morton_hive"]["spec"] == "morton-hive/2"
         with pytest.raises(ValueError, match="reserved all-time token"):
-            open_surface(WINDOWED, 6, None, window="all", carry=("count",))
+            open_surface(WINDOWED, None, cells=6, window="all", carry=("count",))
 
     def test_all_time_reads_the_cross_window_folds(self):
-        surf = open_surface(WINDOWED, 6, None, all_time=True, carry=("count",))
+        surf = open_surface(WINDOWED, None, cells=6, all_time=True, carry=("count",))
         assert surf.attrs["zagg_objects"][0]["window"] == "all"
 
     def test_level_model_knobs_thread_through(self):
@@ -363,25 +363,48 @@ class TestOpenSurface:
         # the surface has a cell_ids coordinate at all, index_kind selects
         # the level's index, and xr_kwargs reaches xr.open_zarr (the read,
         # which is the wall at viewer scales).
-        assert "cell_ids" in open_surface(TEMPORAL, 6, "h_tdigest").coords
-        bare = open_surface(TEMPORAL, 6, "h_tdigest", fabricate_cell_ids=False)
+        assert "cell_ids" in open_surface(TEMPORAL, "h_tdigest", cells=6).coords
+        bare = open_surface(TEMPORAL, "h_tdigest", cells=6, fabricate_cell_ids=False)
         assert "cell_ids" not in bare.coords
         pandas_index = open_surface(
-            TEMPORAL, 6, "h_tdigest", index_kind="pandas", fabricate_cell_ids=False
+            TEMPORAL, "h_tdigest", cells=6, index_kind="pandas", fabricate_cell_ids=False
         )
         assert pandas_index["h_tdigest"].shape == bare["h_tdigest"].shape
         with pytest.raises(ValueError, match="index_kind='bogus'"):  # the level model's own refusal
-            open_surface(TEMPORAL, 6, "h_tdigest", index_kind="bogus", fabricate_cell_ids=False)
+            open_surface(
+                TEMPORAL, "h_tdigest", cells=6, index_kind="bogus", fabricate_cell_ids=False
+            )
         with pytest.raises(TypeError, match="open_zarr"):  # unfiltered, all the way down
-            open_surface(TEMPORAL, 6, "h_tdigest", xr_kwargs={"not_an_open_zarr_kwarg": 1})
+            open_surface(TEMPORAL, "h_tdigest", cells=6, xr_kwargs={"not_an_open_zarr_kwarg": 1})
 
     def test_strata_store_native_level(self):
         # kitchen_sink through the store-addressed arm: the merged total at
         # the native order, count riding along.
-        surf = open_surface(KITCHEN, 6, ("h_tdigest_signal", "h_tdigest_noise"), carry=("count",))
+        surf = open_surface(
+            KITCHEN, ("h_tdigest_signal", "h_tdigest_noise"), cells=6, carry=("count",)
+        )
         assert surf["h_tdigest"].dims == ("quantile", "cells")
         populated = ~np.isnan(surf["h_tdigest"].values[0])
         np.testing.assert_array_equal(populated, surf["count"].values > 0)
+
+    def test_positional_level_is_refused(self):
+        # issue #68: the level is keyword-only in both spellings; field stays
+        # the second positional, so a bare int lands there — still refused.
+        with pytest.raises(TypeError, match=r"open_surface\(\) takes the level by keyword only"):
+            open_surface(TEMPORAL, 6, "h_tdigest")
+        with pytest.raises(TypeError, match="keyword only"):
+            open_surface(TEMPORAL, "h_tdigest", 6)
+        with pytest.raises(TypeError, match="exactly one of cells="):
+            open_surface(TEMPORAL, "h_tdigest", cells=6, node=4)
+        with pytest.raises(TypeError, match="exactly one of cells="):
+            open_surface(TEMPORAL, "h_tdigest")
+
+    def test_cells_and_node_select_the_same_level(self):
+        # The /1 overview at cells 6 is node 4's artifact (exact fields only,
+        # so the surface is the carried count alone).
+        by_cells = open_surface(OVERVIEW, None, cells=6, carry=("count",))
+        by_node = open_surface(OVERVIEW, None, node=4, carry=("count",))
+        xr.testing.assert_identical(by_cells, by_node)
 
 
 class TestReadLadder:
@@ -439,7 +462,7 @@ class TestReadLadder:
         assert ladder.materialized == ()
         # The surface behind that rung is exactly the empty the probe predicts.
         with pytest.warns(UserWarning, match="intersects no coverage"):
-            assert open_level(WINDOWED, 8, window="1975").sizes["cells"] == 0
+            assert open_level(WINDOWED, cells=8, window="1975").sizes["cells"] == 0
         # An unwindowed store's source level is still True unprobed — its
         # leaves really are the store, and no window can make them absent.
         source = next(lvl for lvl in read_ladder(OVERVIEW).levels if lvl.artifact == "source")
@@ -521,7 +544,7 @@ class TestReadLadder:
         assert ladder.materialized == (6,)  # the source rung still answers
         # …and the strict severity is untouched where a read is about to happen.
         with pytest.raises(ValueError, match="under the wrong node"):
-            open_level(str(root), 5)
+            open_level(str(root), cells=5)
 
     def test_declared_off_store_is_the_one_level_ladder(self):
         ladder = read_ladder(SERC)
@@ -589,7 +612,7 @@ class TestZaggSurfaceParity:
 
     @pytest.mark.parametrize("field", ["h_tdigest_signal", "h_tdigest_noise"])
     def test_kitchen_sink_per_stratum_surface_matches_zagg(self, field):
-        ds = open_level(KITCHEN, 6)
+        ds = open_level(KITCHEN, cells=6)
         surf = quantile_surface(ds, field)
         np.testing.assert_array_equal(
             surf[field].values, self._expected(ds, [field], DEFAULT_QUANTILES)
@@ -597,15 +620,15 @@ class TestZaggSurfaceParity:
 
     def test_kitchen_sink_merged_surface_matches_zagg(self):
         fields = ("h_tdigest_signal", "h_tdigest_noise")
-        surf = open_surface(KITCHEN, 6, fields)
-        ds = open_level(KITCHEN, 6)
+        surf = open_surface(KITCHEN, fields, cells=6)
+        ds = open_level(KITCHEN, cells=6)
         np.testing.assert_array_equal(
             surf["h_tdigest"].values, self._expected(ds, fields, DEFAULT_QUANTILES)
         )
 
     def test_temporal_surface_matches_zagg(self):
         qs = [0.0, 0.25, 0.5, 0.75, 1.0]
-        ds = open_level(TEMPORAL, 6)
+        ds = open_level(TEMPORAL, cells=6)
         surf = quantile_surface(ds, "h_tdigest", qs)
         np.testing.assert_array_equal(
             surf["h_tdigest"].values, self._expected(ds, ["h_tdigest"], qs)

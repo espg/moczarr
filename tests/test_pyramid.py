@@ -1209,3 +1209,37 @@ class TestRecordSemantics:
             rp.presence = None
         rp.declaration["orders"] = [4]
         assert rp.declaration["orders"] == [4]
+
+
+class TestLevelOrders:
+    """The issue #68 translation helper: node order <-> cell order, both grammars."""
+
+    def test_v1_ladder_round_trips(self):
+        info = read_pyramid(str(FIXTURE / "atl06"), probe=False)
+        assert info.levels == {8: 6, 6: 4, 4: 2}
+        for cells, node in info.levels.items():
+            assert info.cell_order(node) == cells
+            assert info.node_order(cells) == node
+
+    def test_unknown_orders_name_both_spellings(self):
+        info = read_pyramid(str(FIXTURE / "atl06"), probe=False)
+        ladder = r"cell orders \[8, 6, 4\] at node orders \[6, 4, 2\]"
+        with pytest.raises(ValueError, match=r"node order 5 .*" + ladder):
+            info.cell_order(5)
+        with pytest.raises(ValueError, match=r"cell order 7 .*" + ladder):
+            info.node_order(7)
+
+    def test_v2_leaf_node_is_ambiguous(self):
+        # The temporal fixture's shard order 4 carries the base data (cells 6)
+        # and its §4.6 column (cells 5): node -> cells has no single answer
+        # there, cells -> node always does.
+        info = read_pyramid(str(Path(__file__).parent / "data" / "spec" / "temporal"), probe=False)
+        assert info.levels == {6: 4, 5: 4, 4: 3, 3: 2, 2: 1, 1: 0}
+        assert info.node_order(6) == 4 and info.node_order(5) == 4
+        assert info.cell_order(3) == 4
+        with pytest.raises(ValueError, match=r"carries cell orders \[6, 5\].*cells="):
+            info.cell_order(4)
+
+    def test_hand_built_record_defaults_to_no_ladder(self):
+        with pytest.raises(ValueError, match=r"cell orders \[\] at node orders \[\]"):
+            PyramidInfo({"orders": [2]}, None).cell_order(2)
