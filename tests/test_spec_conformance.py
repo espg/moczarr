@@ -75,12 +75,14 @@ back through a zagg reader), so the reader is pinned, not self-certified:
   goldens live in ``tests/data/strata_goldens`` (consumed by
   ``test_hhdc.py``).
 
-The ``dggs`` block of every ``zarr.json`` above (and of the other vendored
-hives) was resynced for issue #79 from englacial/zagg#619 (branch
-``claude/616-ellipsoid-key``, unmerged at the time): ``ellipsoid.semimajor_axis``
-became ``semi_major_axis`` (the dggs v1 schema spelling) and the spec trees
-gained the §1 ``latitude`` token where zagg's copy has it. "Byte-identical"
-above reads modulo those two lines; ``TestDggsEllipsoid`` pins them.
+The spec trees' ``dggs`` blocks were re-vendored for issue #79 verbatim
+from englacial/zagg#619 (branch ``claude/616-ellipsoid-key``, head
+``b1a222cd``, unmerged at the time), which renamed ``ellipsoid.semimajor_axis``
+to ``semi_major_axis`` (the dggs v1 schema spelling) and added the §1
+``latitude`` token where it was missing. ``strata_hive`` and the other
+vendored hives (``overview_hive``, ``serc_hive``) got the key rename only,
+applied in place. "Byte-identical" above reads modulo those lines;
+``TestDggsEllipsoid`` pins them.
 
 Everything here runs **without zagg installed**: decoding is
 :mod:`moczarr.ragged` only, and the O11 cross-check is moczarr's own
