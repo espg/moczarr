@@ -592,14 +592,17 @@ class TestDggsEllipsoid:
 
     def test_every_vendored_block_spells_the_v1_ellipsoid(self):
         blocks = dict(self._dggs_blocks(DATA))
-        for root, _ in FIXTURES.values():
-            assert any(path.is_relative_to(root) for path in blocks), root
+        trees = [root for root, _ in FIXTURES.values()]
+        for tree in (*trees, DATA / "overview_hive", DATA / "serc_hive"):
+            assert any(path.is_relative_to(tree) for path in blocks), tree
         for path, dggs in blocks.items():
             assert dggs["ellipsoid"] == self.WGS84, path
 
     def test_spec_trees_carry_the_latitude_token(self):
         blocks = dict(self._dggs_blocks(DATA / "spec"))
-        assert blocks
+        for root, _ in FIXTURES.values():
+            if root.is_relative_to(DATA / "spec"):
+                assert any(path.is_relative_to(root) for path in blocks), root
         for path, dggs in blocks.items():
             assert dggs["latitude"] == "authalic-wgs84", path
 
