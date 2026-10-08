@@ -515,8 +515,9 @@ class TestVersionedLeaf:
     def test_open_hive_reads_the_same_dataset_as_the_legacy_twin(self, index_kind):
         """The store-level door. ``versioned/`` and ``minimal/`` hold the
         same array bytes, so they open to the same Dataset — every variable,
-        coordinate, value and attribute (issue #79 resynced both ``dggs``
-        blocks from the same writer)."""
+        coordinate, value and attribute: issue #79 resynced both ``dggs``
+        blocks from the same zagg ref (englacial/zagg#619), which gave
+        ``minimal`` the §1 ``latitude`` token ``versioned`` already carried."""
         root, expected = self._fixture()
         # fabricate_cell_ids=False: the fixture's sparse stored ``morton``
         # (fill 0 on unwritten cells) is refused by the NESTED fabrication
